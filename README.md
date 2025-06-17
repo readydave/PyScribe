@@ -34,8 +34,8 @@ python pyscribe.py
 ```
 
 1. Click **Browse** to select a video file.
-2. Click **Transcribe** to start the transcription. A progress bar will appear while the audio is processed.
-3. Once complete, the transcription text will be displayed. Click **Save Transcription** to store the text in a file of your choice.
+2. Click **Transcribe** to start the transcription. The progress bar displays an estimated percentage as the audio is processed.
+3. Once complete, the transcription text will be displayed. Click **Save Transcription** to store the text. The default filename uses the original video name with a `.txt` extension so transcripts stay next to their videos.
 
 ## Notes
 

@@ -43,12 +43,20 @@ class PyScribeApp(tk.Tk):
         status_label.pack(fill=tk.X, padx=10)
 
         # Progress bar
-        self.progress = ttk.Progressbar(self, mode="indeterminate")
+        self.progress = ttk.Progressbar(self, mode="determinate", maximum=100)
         self.progress.pack(fill=tk.X, padx=10)
 
         # Text area for transcription
         self.text_area = scrolledtext.ScrolledText(self, wrap=tk.WORD)
         self.text_area.pack(expand=True, fill=tk.BOTH, padx=10, pady=5)
+
+    def update_progress(self, percent):
+        """Safely update the progress bar from a worker thread."""
+        def _update():
+            self.progress['value'] = percent
+            self.status_var.set(f"Transcribing... {percent}%")
+
+        self.after(0, _update)
 
     def browse_file(self):
         """Open a file dialog to select a video file."""
@@ -66,7 +74,7 @@ class PyScribeApp(tk.Tk):
         if not self.video_path:
             messagebox.showerror("Error", "Please select a video file first.")
             return
-        self.progress.start()
+        self.progress['value'] = 0
         self.status_var.set("Transcribing...")
         thread = threading.Thread(target=self.transcribe_video)
         thread.start()
@@ -76,21 +84,39 @@ class PyScribeApp(tk.Tk):
         try:
             audio_file = self.extract_audio(self.video_path)
             model = whisper.load_model("base")
-            result = model.transcribe(audio_file)
-            self.transcription = result.get("text", "")
+
+            audio = whisper.audio.load_audio(audio_file)
+            total_seconds = audio.shape[0] / whisper.audio.SAMPLE_RATE
+            segment_length = 30  # seconds
+            step = int(segment_length * whisper.audio.SAMPLE_RATE)
+
+            texts = []
+            for i in range(0, len(audio), step):
+                chunk = audio[i : i + step]
+                result = model.transcribe(chunk, fp16=False)
+                texts.append(result.get("text", ""))
+
+                progress = min(100, int(((i + step) / len(audio)) * 100))
+                self.update_progress(progress)
+
+            self.transcription = "\n".join(texts).strip()
             self._update_text_area(self.transcription)
+            self.update_progress(100)
             self.status_var.set("Transcription complete.")
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
             self.status_var.set("An error occurred during transcription.")
         finally:
-            self.progress.stop()
+            self.progress['value'] = 0
             if os.path.exists(audio_file):
                 os.remove(audio_file)
 
     def _update_text_area(self, text):
-        self.text_area.delete(1.0, tk.END)
-        self.text_area.insert(tk.END, text)
+        def _update():
+            self.text_area.delete(1.0, tk.END)
+            self.text_area.insert(tk.END, text)
+
+        self.after(0, _update)
 
     def extract_audio(self, video_path):
         """Use ffmpeg to extract audio from the video file."""
@@ -118,7 +144,13 @@ class PyScribeApp(tk.Tk):
         if not self.transcription:
             messagebox.showwarning("Warning", "No transcription to save.")
             return
-        path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+        default_name = "transcript.txt"
+        if self.video_path:
+            base = os.path.splitext(os.path.basename(self.video_path))[0]
+            default_name = base + ".txt"
+        path = filedialog.asksaveasfilename(defaultextension=".txt",
+                                            initialfile=default_name,
+                                            filetypes=[("Text files", "*.txt")])
         if path:
             try:
                 with open(path, "w", encoding="utf-8") as f:

@@ -1,0 +1,15 @@
+# For GPU support, it is highly recommended to install PyTorch manually first
+# using the --index-url that matches your system's CUDA toolkit.
+# Example for CUDA 12.1:
+# pip install torch==2.5.1 torchvision==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
+# Core dependencies
+torch==2.5.1
+torchvision==2.5.1
+torchaudio==2.5.1
+faster-whisper==1.2.0
+ffmpeg-python==0.2.0
+numpy==2.3.2
+
+# Optional dependency for GUI theme
+ttkthemes==3.2.2

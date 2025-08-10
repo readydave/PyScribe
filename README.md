@@ -2,8 +2,6 @@
 
 PyScribe is a modern, Windows-friendly GUI application for fast, local audio/video transcription using the powerful `faster-whisper` library. It's designed to provide a seamless and efficient transcription workflow, running entirely on your own hardware for maximum privacy and performance.
 
-*(You can replace this with a real screenshot of your app)*
-
 ---
 
 ## Key Features

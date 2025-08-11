@@ -28,7 +28,7 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 
 ## Requirements
 
-- Python 3.9+
+- **Python 3.11 (Recommended):** While it may work on other versions, 3.11 is confirmed to be compatible with the required libraries, including the GPU-enabled version of PyTorch.
 - **NVIDIA GPU (Recommended):** For significantly faster performance.
 - **FFmpeg:** Must be installed and available in your system's PATH. You can install it easily on Windows with `winget install Gyan.FFmpeg`.
 
@@ -42,7 +42,8 @@ Follow these steps to set up the application for the first time.
 
 2.  **Create Virtual Environment:** Open a terminal (PowerShell or Command Prompt) inside the project folder and run the following command. **Using the name `.venv` is required for the `launch.bat` shortcut to work.**
     ```bash
-    python -m venv .venv
+    # If you have multiple Python versions, specify 3.11
+    py -3.11 -m venv .venv
     ```
 
 3.  **Activate the Environment:**
@@ -51,11 +52,12 @@ Follow these steps to set up the application for the first time.
     ```
 
 4.  **Install Dependencies:** Now, install the required packages.
-    * **(Recommended for NVIDIA GPUs)** First, install the correct PyTorch version:
+    * **(Recommended for NVIDIA GPUs)** First, install the correct PyTorch version for your system by visiting the [PyTorch website](https://pytorch.org/get-started/locally/) and running the command they provide. The command for CUDA 12.1 is:
         ```bash
-        pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
+        pip3 install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
         ```
-    * Then, install the rest of the packages from the requirements file:
+    * **(For CPU-only)** If you don't have an NVIDIA GPU, you can skip the step above.
+    * Finally, install the rest of the packages from the requirements file:
         ```bash
         pip install -r requirements.txt
         ```
@@ -66,6 +68,18 @@ Follow these steps to set up the application for the first time.
 
 -   **For Regular Use:** Simply double-click the **`launch.bat`** file in the project folder.
 -   **For Development:** Activate your virtual environment (`.\.venv\Scripts\activate`) and run `python main.py` from the terminal.
+
+---
+
+## Troubleshooting
+
+-   **`ModuleNotFoundError` on launch:** This means the required packages were not installed correctly. Make sure you have activated your virtual environment (`.\.venv\Scripts\activate`) before running `pip install -r requirements.txt`.
+-   **App runs in "CPU Mode" on an NVIDIA system:** This happens when the CPU-only version of PyTorch is installed. To fix it, activate your virtual environment and run the two-step process to replace it with the GPU version:
+    ```bash
+    pip uninstall torch
+    pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
+    ```
+-   **`pip` commands fail with a "file not found" error pointing to an old path:** This indicates your virtual environment is corrupted. To fix it, delete the `.venv` folder and recreate it by following the installation steps again.
 
 ---
 

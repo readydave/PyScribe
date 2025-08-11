@@ -4,9 +4,9 @@
 # pip install torch==2.5.1 torchvision==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 
 # Core dependencies
-torch==2.5.1
-torchvision==2.5.1
-torchaudio==2.5.1
+torch
+torchvision
+torchaudio
 faster-whisper==1.2.0
 ffmpeg-python==0.2.0
 numpy==2.3.2

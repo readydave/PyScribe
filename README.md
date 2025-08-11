@@ -2,6 +2,10 @@
 
 PyScribe is a modern, Windows-friendly GUI application for fast, local audio/video transcription using the powerful `faster-whisper` library. It's designed to provide a seamless and efficient transcription workflow, running entirely on your own hardware for maximum privacy and performance.
 
+![PyScribe Main Interface](./images/2025-08-11_09-36-47.png)
+![PyScribe Main Interface](./images/2025-08-11_09-37-06.png)
+*Users can choose between standard multilingual models or specialized English-only models from Hugging Face.*
+
 ---
 
 ## Key Features
@@ -9,6 +13,7 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 - **High-Speed Transcription:** Powered by `faster-whisper` for significant speed improvements over the original Whisper, especially on GPUs.
 - **Hardware-Aware:** Automatically detects your GPU (NVIDIA/CUDA) or CPU and recommends the optimal model size for your hardware.
 - **Live Progress & Transcription:** Watch the transcription appear in real-time and monitor progress with a live percentage bar.
+- **Audio Playback & Cancellation:** Preview your audio files with a built-in player (Play/Stop) and cancel a transcription mid-process if it's taking too long.
 - **Automatic Language Detection:** Detects the language of the audio and offers to translate to English if a non-English language is found.
 - **Flexible Model Selection:**
     - Choose from standard Whisper models (`tiny`, `base`, `small`, `medium`, `large-v3`).
@@ -59,11 +64,13 @@ python main.py
 ```
 
 1.  **Browse File:** Click to select an audio or video file.
-2.  **Select a Model:**
+2.  **Preview Audio (Optional):** Click the **▶ Play** button to listen to the selected file to ensure it's the correct one. Click **■ Stop** to halt playback.
+3.  **Select a Model:**
     - Choose a standard model from the first dropdown (recommended for your hardware).
+    ![Standard Model Selection](./images/2025-08-11_09-37-06.png)
     - *or* select a specialized, fine-tuned model from the Hugging Face (HF) dropdown.
-3.  **Transcribe:** Click the "Transcribe" button to begin.
-4.  **Save/Copy:** Once complete, use the "Save Transcript" or "Copy" buttons.
+4.  **Transcribe:** Click the **Transcribe** button to begin. The button will change to **Cancel** while processing.
+5.  **Save/Copy:** Once complete, use the "Save Transcript" or "Copy" buttons.
 
 ---
 

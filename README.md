@@ -3,7 +3,7 @@
 PyScribe is a modern, Windows-friendly GUI application for fast, local audio/video transcription using the powerful `faster-whisper` library. It's designed to provide a seamless and efficient transcription workflow, running entirely on your own hardware for maximum privacy and performance.
 
 ![PyScribe Main Interface](./images/2025-08-11_09-36-47.png)
-![PyScribe Main Interface](./images/2025-08-11_09-37-06.png)
+![Standard Model Selection](./images/2025-08-11_09-37-06.png)
 
 *Users can choose between standard multilingual models or specialized English-only models from Hugging Face.*
 
@@ -34,44 +34,38 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 
 ---
 
-## Installation
+## Installation (One-Time Setup)
 
-For the best performance, it is highly recommended to follow this two-step installation process.
+Follow these steps to set up the application for the first time.
 
-**Step 1: Install GPU-Accelerated PyTorch (Recommended)**
+1.  **Download and Extract:** Download the project ZIP from GitHub and extract it to a folder on your computer.
 
-First, uninstall any existing versions of PyTorch to avoid conflicts. Then, open a terminal and install the version that matches your system's CUDA toolkit. This command is for CUDA 12.1, which is standard for modern NVIDIA drivers.
+2.  **Create Virtual Environment:** Open a terminal (PowerShell or Command Prompt) inside the project folder and run the following command. **Using the name `.venv` is required for the `launch.bat` shortcut to work.**
+    ```bash
+    python -m venv .venv
+    ```
 
-```bash
-pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
-```
+3.  **Activate the Environment:**
+    ```bash
+    .\.venv\Scripts\activate
+    ```
 
-**Step 2: Install Project Dependencies**
-
-Navigate to the project directory and install the remaining packages using the `requirements.txt` file.
-
-```bash
-pip install -r requirements.txt
-```
+4.  **Install Dependencies:** Now, install the required packages.
+    * **(Recommended for NVIDIA GPUs)** First, install the correct PyTorch version:
+        ```bash
+        pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
+        ```
+    * Then, install the rest of the packages from the requirements file:
+        ```bash
+        pip install -r requirements.txt
+        ```
 
 ---
 
 ## Usage
 
-Run the application from the project's root directory:
-
-```bash
-python main.py
-```
-
-1.  **Browse File:** Click to select an audio or video file.
-2.  **Preview Audio (Optional):** Click the **▶ Play** button to listen to the selected file to ensure it's the correct one. Click **■ Stop** to halt playback.
-3.  **Select a Model:**
-    - Choose a standard model from the first dropdown (recommended for your hardware).
-    ![Standard Model Selection](./images/2025-08-11_09-37-06.png)
-    - *or* select a specialized, fine-tuned model from the Hugging Face (HF) dropdown.
-4.  **Transcribe:** Click the **Transcribe** button to begin. The button will change to **Cancel** while processing.
-5.  **Save/Copy:** Once complete, use the "Save Transcript" or "Copy" buttons.
+-   **For Regular Use:** Simply double-click the **`launch.bat`** file in the project folder.
+-   **For Development:** Activate your virtual environment (`.\.venv\Scripts\activate`) and run `python main.py` from the terminal.
 
 ---
 

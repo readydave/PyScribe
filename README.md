@@ -4,6 +4,7 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 
 ![PyScribe Main Interface](./images/2025-08-11_09-36-47.png)
 ![PyScribe Main Interface](./images/2025-08-11_09-37-06.png)
+
 *Users can choose between standard multilingual models or specialized English-only models from Hugging Face.*
 
 ---

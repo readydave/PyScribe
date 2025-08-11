@@ -1,20 +1,20 @@
 # ui.py
-# The user interface for the PyScribe application.
-
-"""
-This module provides various utility functions for the PyScribe application,
-including dependency checking, FFmpeg integration, and audio processing."""
+# This module contains the user interface for the PyScribe application,
+# built with tkinter. It handles window creation, widget layout, and user events.
 
 import os
 import sys
 import threading
 import datetime
+import tempfile
+import time
+import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 import torch
-from utils import get_available_hf_models
-# The line "from transcriber import run_transcription" is removed from here.
+from utils import get_available_hf_models, get_ffmpeg_cmd, convert_to_16k_mono
+from transcriber import run_transcription
 
 # --- Dynamic Base Class for Theming ---
 try:
@@ -25,11 +25,19 @@ except ImportError:
 
 # --- Constants ---
 MODEL_CHOICES = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma"}
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".flv"}
+ALL_EXTS = AUDIO_EXTS | VIDEO_EXTS
+
 
 class PyScribeApp(BaseAppClass):
-    """Tkinter GUI app for transcription using faster-whisper."""
+    """
+    The main application class for the PyScribe GUI.
+    This class encapsulates all the UI elements and application state.
+    """
 
     def __init__(self):
+        """Initializes the main application window and its state."""
         if issubclass(BaseAppClass, tk.Tk) and BaseAppClass != tk.Tk:
             super().__init__(theme="arc")
         else:
@@ -38,16 +46,22 @@ class PyScribeApp(BaseAppClass):
         self.title("PyScribe - Faster-Whisper GUI")
         self.geometry("900x650")
 
-        # --- App State ---
+        # --- Application State Variables ---
         self.media_path: str | None = None
+        self.prepared_audio_path: str | None = None
+        self.temp_dir = None # Will hold the TemporaryDirectory object
         self.transcription: str | None = None
         self.model = None
         self.current_model_name: str | None = None
+        self.playback_process = None # Will hold the ffplay subprocess
+        
+        # --- Threading and Synchronization Events ---
         self.is_waiting_for_user = False
         self.choice_event = threading.Event()
         self.user_task_choice: str | None = None
+        self.cancel_event = threading.Event()
 
-        # --- Hardware Info ---
+        # --- Hardware Information ---
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.gpu_name = torch.cuda.get_device_name(0) if self.device == "cuda" else "N/A"
         self.vram_gb = 0
@@ -60,13 +74,13 @@ class PyScribeApp(BaseAppClass):
         self.cpu_count = os.cpu_count() or 1
         self.recommended_model = self._recommend_model()
 
-        # --- UI Setup ---
+        # --- UI Initialization ---
         self._create_widgets()
         self._show_startup_status()
         self.protocol("WM_DELETE_WINDOW", self.on_exit)
 
     def _create_widgets(self):
-        """Creates and lays out all the GUI widgets."""
+        """Creates and arranges all the GUI widgets in the main window."""
         top_frame = tk.Frame(self)
         top_frame.pack(fill=tk.X, padx=10, pady=6)
 
@@ -102,6 +116,9 @@ class PyScribeApp(BaseAppClass):
 
         self.open_btn = tk.Button(second_frame, text="Open Save Folder", command=self.open_transcriptions_folder, state=tk.NORMAL)
         self.open_btn.pack(side=tk.LEFT, padx=6)
+
+        self.play_btn = tk.Button(second_frame, text="▶ Play", command=self.play_audio, state=tk.DISABLED)
+        self.play_btn.pack(side=tk.LEFT, padx=6)
         
         tk.Button(top_frame, text="Exit", command=self.on_exit).pack(side=tk.RIGHT)
 
@@ -114,12 +131,12 @@ class PyScribeApp(BaseAppClass):
         self.text_area.pack(expand=True, fill=tk.BOTH, padx=10, pady=(0, 8))
 
     def _show_startup_status(self):
-        """Displays hardware info and recommended model on startup."""
+        """Displays hardware info and recommended model in the status bar on startup."""
         info = f"GPU: {self.gpu_name} ({self.vram_gb} GB VRAM)" if self.device == "cuda" else f"CPU Mode ({self.cpu_count} cores)"
         self.status_var.set(f"{info} | Recommended model: {self.recommended_model}")
 
     def _recommend_model(self) -> str:
-        """Recommends a Whisper model based on available hardware."""
+        """Recommends a Whisper model size based on available hardware."""
         if self.device == "cuda":
             if self.vram_gb >= 10: return "large-v3"
             if self.vram_gb >= 8: return "large-v2"
@@ -131,10 +148,7 @@ class PyScribeApp(BaseAppClass):
         return "tiny"
 
     def start_transcription(self):
-        """Validates inputs and starts the transcription thread."""
-        # --- FIX: Import locally to prevent circular dependency ---
-        from transcriber import run_transcription
-
+        """Validates user inputs and starts the transcription in a new thread."""
         if self.is_waiting_for_user:
             messagebox.showinfo("Info", "Please respond to the language prompt first.")
             return
@@ -158,11 +172,11 @@ class PyScribeApp(BaseAppClass):
                 pass 
 
         self._toggle_busy(True)
-        # The UI thread starts the transcriber logic in a separate thread
-        thread = threading.Thread(target=run_transcription, args=(self, model_to_use, self.media_path), daemon=True)
+        self.cancel_event.clear()
+        thread = threading.Thread(target=run_transcription, args=(self, model_to_use), daemon=True)
         thread.start()
 
-    # --- Callbacks for Transcriber ---
+    # --- Callbacks for Transcriber Thread ---
     def set_status(self, msg: str):
         self.after(0, lambda: self.status_var.set(msg))
         
@@ -190,7 +204,7 @@ class PyScribeApp(BaseAppClass):
         self.choice_event.clear()
         self.after(0, self._ask_translation_prompt, lang_code)
         self._toggle_busy(False, keep_progress=True)
-        self.choice_event.wait() # Wait for user to make a choice
+        self.choice_event.wait()
         self._toggle_busy(True)
 
     def _ask_translation_prompt(self, lang_code: str):
@@ -204,13 +218,21 @@ class PyScribeApp(BaseAppClass):
 
     # --- UI Event Handlers ---
     def browse_file(self):
-        filetypes = [("Audio/Video", " ".join(f"*{ext}" for ext in sorted(list(MODEL_CHOICES))))]
+        """Handles the 'Browse File' button click."""
+        self.stop_audio() # Stop any current playback
+        self._cleanup_temp_dir() # Clean up previous temp file if it exists
+        filetypes = [
+            ("Audio/Video Files", " ".join(f"*{ext}" for ext in sorted(list(ALL_EXTS)))),
+            ("All files", "*.*")
+        ]
         path = filedialog.askopenfilename(title="Select Media File", filetypes=filetypes)
         if path:
             self.media_path = path
+            self.prepared_audio_path = None
             self.status_var.set(f"Selected: {os.path.basename(path)}")
             self.save_btn.config(state=tk.DISABLED)
             self.copy_btn.config(state=tk.DISABLED)
+            self.play_btn.config(state=tk.NORMAL)
             self.text_area.delete(1.0, tk.END)
             self.transcription = None
 
@@ -246,6 +268,113 @@ class PyScribeApp(BaseAppClass):
         except Exception as e:
             self.show_error(f"Could not open folder:\n\n{e}")
 
+    def ensure_audio_is_prepared(self):
+        """
+        Creates the temporary WAV file for playback/transcription if it doesn't exist.
+        This allows playback before transcription.
+        """
+        if self.prepared_audio_path and os.path.exists(self.prepared_audio_path):
+            return
+
+        if not self.media_path:
+            return
+
+        try:
+            self.set_status("Preparing audio for playback...")
+            self.temp_dir = tempfile.TemporaryDirectory()
+            ffmpeg_cmd = get_ffmpeg_cmd(tool="ffmpeg")
+            if not ffmpeg_cmd:
+                raise FileNotFoundError("ffmpeg not found.")
+            self.prepared_audio_path = convert_to_16k_mono(self.media_path, self.temp_dir.name, ffmpeg_cmd)
+            self.set_status("Audio ready.")
+        except Exception as e:
+            self.show_error(f"Could not prepare audio:\n\n{e}")
+            self._cleanup_temp_dir()
+
+    def play_audio(self):
+        """
+        Handles the 'Play' button click. Starts audio playback using ffplay
+        in a separate, monitored thread.
+        """
+        self.stop_audio()
+        self.ensure_audio_is_prepared()
+        if not self.prepared_audio_path:
+            return
+        
+        def _play_monitor():
+            """
+            This function runs in a background thread and does two things:
+            1. Starts the ffplay process to play the audio.
+            2. Waits for the ffplay process to finish.
+            This prevents the GUI from freezing and allows us to know when
+            playback has finished naturally.
+            """
+            ffplay_cmd = get_ffmpeg_cmd(tool="ffplay")
+            if not ffplay_cmd:
+                self.show_error("ffplay not found. Please ensure ffmpeg is fully installed and in your PATH.")
+                return
+
+            try:
+                self.after(0, self._set_play_button_state, True)
+                self.set_status("Playing audio...")
+                
+                # --- CRASH FIX: Use subprocess.Popen with ffplay ---
+                # This is a much more stable method for audio playback.
+                # It runs ffplay as a completely separate process, avoiding the
+                # C-level crashes associated with the simpleaudio library.
+                # -nodisp: Hides the ffplay GUI window.
+                # -autoexit: Closes ffplay when playback is finished.
+                self.playback_process = subprocess.Popen(
+                    [ffplay_cmd, "-nodisp", "-autoexit", self.prepared_audio_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                
+                # Wait for the process to terminate. This will block the background
+                # thread until the audio is done or the process is stopped.
+                self.playback_process.wait()
+
+                # If the process finished on its own (wasn't stopped), update the status.
+                if self.playback_process:
+                    self.set_status("Playback finished.")
+            
+            except Exception as e:
+                self.show_error(f"Could not play audio:\n\n{e}")
+            finally:
+                # Reset the state and button regardless of how playback ended.
+                self.playback_process = None
+                if self.winfo_exists():
+                    self.after(0, self._set_play_button_state, False)
+
+        threading.Thread(target=_play_monitor, daemon=True).start()
+
+    def stop_audio(self):
+        """
+        Stops any active audio playback by terminating the ffplay process.
+        This is a thread-safe and crash-proof method.
+        """
+        if self.playback_process:
+            try:
+                self.playback_process.terminate() # Safely stop the ffplay process.
+                self.playback_process = None
+                self.set_status("Playback stopped.")
+            except Exception:
+                pass # Ignore errors if the process is already gone.
+
+    def _set_play_button_state(self, is_playing: bool):
+        """
+        Thread-safely updates the text and command of the play/stop button.
+        """
+        if is_playing:
+            self.play_btn.config(text="■ Stop", command=self.stop_audio)
+        else:
+            self.play_btn.config(text="▶ Play", command=self.play_audio)
+
+    def cancel_transcription(self):
+        """Handles the 'Cancel' button click."""
+        self.cancel_event.set()
+        self.set_status("Cancelling...")
+
     def _clear_hf_model(self, event=None):
         self.hf_model_var.set("")
 
@@ -253,9 +382,29 @@ class PyScribeApp(BaseAppClass):
         self.model_var.set("")
 
     def _toggle_busy(self, busy: bool, keep_progress: bool = False):
-        self.transcribe_btn.config(state=tk.DISABLED if busy else tk.NORMAL)
-        if not keep_progress:
-            self.progress.config(value=0)
+        if busy:
+            if not keep_progress:
+                self.progress.config(value=0)
+            self.transcribe_btn.config(text="Cancel", command=self.cancel_transcription, fg="red")
+        else:
+            if not keep_progress:
+                self.progress.config(value=0)
+            self.transcribe_btn.config(text="Transcribe", command=self.start_transcription, fg="black")
+            if not self.is_waiting_for_user:
+                self.transcribe_btn.config(state=tk.NORMAL)
+
+    def _cleanup_temp_dir(self):
+        """Safely cleans up the temporary directory if it exists."""
+        if self.temp_dir:
+            try:
+                self.temp_dir.cleanup()
+            except Exception:
+                pass
+            self.temp_dir = None
+            self.prepared_audio_path = None
 
     def on_exit(self):
+        """Handles the window close event."""
+        self.stop_audio()
+        self._cleanup_temp_dir()
         self.destroy()

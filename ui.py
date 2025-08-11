@@ -1,6 +1,10 @@
 # ui.py
 # The user interface for the PyScribe application.
 
+"""
+This module provides various utility functions for the PyScribe application,
+including dependency checking, FFmpeg integration, and audio processing."""
+
 import os
 import sys
 import threading

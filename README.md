@@ -25,6 +25,37 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 
 ---
 
+## Choosing a Model
+
+The application provides two types of models. Choosing the right one depends on your audio's language and your hardware.
+
+### Standard (Multilingual) Models
+
+These are the general-purpose models available in the first dropdown menu.
+
+-   **Use Case:** These models are trained on many different languages. **You should use these for any audio that is not in English**, or if you are unsure of the language. The application's language detector relies on these models.
+
+### Custom (English-Only) Models
+
+These specialized models are available in the "Custom Model (HF)" dropdown.
+
+-   **Use Case:** If you know your audio is **only in English**, using one of these models (e.g., `Systran/faster-whisper-small.en`) is often slightly **faster and more accurate**. They don't have the overhead of processing other languages.
+
+### Model Hardware Requirements
+
+Larger models are more accurate but require more GPU VRAM. Here are the recommended minimums for GPU users:
+
+| Model Size | Required VRAM | Speed     | Accuracy |
+| :--------- | :------------ | :-------- | :------- |
+| `tiny`     | ~1 GB         | Fastest   | Low      |
+| `base`     | ~1.5 GB       | Very Fast | Fair     |
+| `small`    | ~2.5 GB       | Fast      | Good     |
+| `medium`   | ~5 GB         | Medium    | High     |
+| `large-v2` | ~8 GB         | Slow      | Highest  |
+| `large-v3` | ~8 GB         | Slow      | Highest  |
+
+---
+
 ## Requirements
 
 - **Python 3.12 (Recommended):** This version is confirmed to be compatible with the required libraries.
@@ -34,72 +65,53 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 
 ## Installation (One-Time Setup for Windows)
 
-This guide explains how to set up the project using an external virtual environment, which is a best practice to keep dependencies separate from the source code.
+This guide explains how to set up the project using an external virtual environment.
 
-1.  **Install FFmpeg:** Open a terminal (PowerShell or Command Prompt) and run:
+1.  **Install FFmpeg:** Open a terminal and run: `winget install Gyan.FFmpeg`
+2.  **Download and Extract:** Download the project ZIP from GitHub and extract it to a folder (e.g., `C:\Code\PyScribe-main`).
+3.  **Create an Environments Folder:** Create a central folder for your virtual environments, for example, `C:\Code\_envs`.
+4.  **Create the Virtual Environment:** In a terminal, run the following command:
     ```bash
-    winget install Gyan.FFmpeg
-    ```
-
-2.  **Download and Extract:** Download the project ZIP from GitHub and extract the `PyScribe-main` folder to your desired location (e.g., `C:\Code\PyScribe-main`).
-
-3.  **Create an Environments Folder:** It's recommended to create a central folder to hold your virtual environments. For example, `C:\Code\_envs`.
-
-4.  **Create the Virtual Environment:** Open a terminal and run the following command to create a new virtual environment specifically for this project.
-    ```bash
-    # Replace the path with your chosen environments folder
     py -3.12 -m venv C:\Code\_envs\pyscribe
     ```
-
 5.  **Activate the Environment:**
     ```bash
     C:\Code\_envs\pyscribe\Scripts\activate
     ```
-
-6.  **Navigate to Project Folder:** In the same terminal, change to the directory where you extracted the project files.
+6.  **Navigate to Project Folder:** In the same terminal, change to your project directory.
     ```bash
     cd C:\Code\PyScribe-main
     ```
-
 7.  **Install Dependencies:** Choose one of the following two paths.
 
     ---
     ### For Users with NVIDIA GPUs (Recommended)
-
-    This two-step process ensures you get the best performance.
-
-    **A. Install GPU-Enabled PyTorch:** Run the official command to install PyTorch with CUDA support. This version is for CUDA 12.1.
+    **A. Install GPU-Enabled PyTorch:**
     ```bash
     pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
     ```
-
     **B. Install Remaining Packages:**
     ```bash
     pip install -r requirements.txt
     ```
-    *(Pip will see that PyTorch is already installed and will skip it.)*
-
     ---
     ### For Users without GPUs (CPU-Only)
-
-    If you do not have an NVIDIA GPU, you only need to run this single command.
     ```bash
     pip install -r requirements.txt
     ```
-    *(The application will automatically run in CPU mode.)*
 
 ---
 
 ## Usage
 
-Simply double-click the **`launch.bat`** file inside the project folder. It will automatically find the external virtual environment and start the application.
+Simply double-click the **`launch.bat`** file inside the project folder.
 
 ---
 
 ## Troubleshooting
 
--   **`ModuleNotFoundError` on launch:** This means the required packages were not installed correctly. Make sure you have activated your virtual environment before running `pip install -r requirements.txt`.
--   **App runs in "CPU Mode" on an NVIDIA system:** This happens when the CPU-only version of PyTorch is installed. To fix it, activate your virtual environment and run the two-step process to replace it with the GPU version:
+-   **`ModuleNotFoundError` on launch:** The required packages were not installed. Activate your virtual environment and run `pip install -r requirements.txt`.
+-   **App runs in "CPU Mode" on an NVIDIA system:** The CPU-only version of PyTorch is installed. To fix, activate your venv and run:
     ```bash
     pip uninstall torch
     pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)

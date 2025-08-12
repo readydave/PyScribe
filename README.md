@@ -27,36 +27,41 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 
 ## Requirements
 
-- **Python 3.12 (Recommended):** This version is confirmed to be compatible with the required libraries, including the GPU-enabled version of PyTorch.
+- **Python 3.12 (Recommended):** This version is confirmed to be compatible with the required libraries.
 - **FFmpeg:** Must be installed and available in your system's PATH. You can install it easily on Windows with `winget install Gyan.FFmpeg`.
 
 ---
 
-## Installation (One-Time Setup)
+## Installation (One-Time Setup for Windows)
 
 This guide explains how to set up the project using an external virtual environment, which is a best practice to keep dependencies separate from the source code.
 
-1.  **Download and Extract:** Download the project ZIP from GitHub and extract the `PyScribe-main` folder to your desired location (e.g., `C:\Code\PyScribe-main`).
+1.  **Install FFmpeg:** Open a terminal (PowerShell or Command Prompt) and run:
+    ```bash
+    winget install Gyan.FFmpeg
+    ```
 
-2.  **Create an Environments Folder:** It's recommended to create a central folder to hold your virtual environments. For example, `C:\Code\_envs`.
+2.  **Download and Extract:** Download the project ZIP from GitHub and extract the `PyScribe-main` folder to your desired location (e.g., `C:\Code\PyScribe-main`).
 
-3.  **Create the Virtual Environment:** Open a terminal and run the following command to create a new virtual environment specifically for this project.
+3.  **Create an Environments Folder:** It's recommended to create a central folder to hold your virtual environments. For example, `C:\Code\_envs`.
+
+4.  **Create the Virtual Environment:** Open a terminal and run the following command to create a new virtual environment specifically for this project.
     ```bash
     # Replace the path with your chosen environments folder
     py -3.12 -m venv C:\Code\_envs\pyscribe
     ```
 
-4.  **Activate the Environment:**
+5.  **Activate the Environment:**
     ```bash
     C:\Code\_envs\pyscribe\Scripts\activate
     ```
 
-5.  **Navigate to Project Folder:** In the same terminal, change to the directory where you extracted the project files.
+6.  **Navigate to Project Folder:** In the same terminal, change to the directory where you extracted the project files.
     ```bash
     cd C:\Code\PyScribe-main
     ```
 
-6.  **Install Dependencies:** Choose one of the following two paths.
+7.  **Install Dependencies:** Choose one of the following two paths.
 
     ---
     ### For Users with NVIDIA GPUs (Recommended)

@@ -3,9 +3,11 @@
 # It is designed to be run in a separate thread to keep the GUI responsive.
 
 import time
+import datetime # For formatting the elapsed time
+import tempfile
 import ffmpeg
 from faster_whisper import WhisperModel
-from utils import load_audio_waveform
+from utils import get_ffmpeg_cmd, convert_to_16k_mono, load_audio_waveform
 
 def run_transcription(app_instance, model_name: str):
     """
@@ -18,17 +20,40 @@ def run_transcription(app_instance, model_name: str):
         app_instance: The instance of the PyScribeApp class. Used to update the UI.
         model_name (str): The name/ID of the Whisper model to use for transcription.
     """
+    app_instance.start_hw_monitor()
     try:
         start_time = time.time()
 
-        # --- Step 1: Ensure Audio is Prepared ---
-        # This call will create the temporary WAV file if it doesn't already exist.
+        # Step 1: Ensure Audio is Prepared
         app_instance.ensure_audio_is_prepared()
         wav_path = app_instance.prepared_audio_path
         if not wav_path:
             raise ValueError("Audio could not be prepared for transcription.")
 
-        # --- Step 2: Load Model (if needed) ---
+        audio_np = load_audio_waveform(wav_path)
+        app_instance.update_progress(0)
+
+        # Step 2: Language Detection and Model Validation
+        app_instance.set_status("Detecting language...")
+        
+        lang_detector_model = WhisperModel("tiny", device=app_instance.device, compute_type="int8")
+        detected_lang_code, lang_prob, *_ = lang_detector_model.detect_language(audio_np)
+        del lang_detector_model
+
+        is_english_only_model = ".en" in model_name.lower()
+        lang_to_transcribe_in = detected_lang_code
+
+        if is_english_only_model and detected_lang_code != 'en':
+            app_instance.prompt_for_english_override(detected_lang_code, model_name)
+            
+            if app_instance.user_override_choice:
+                lang_to_transcribe_in = 'en'
+                app_instance.set_status("User override: Forcing transcription in English.")
+            else:
+                app_instance.set_status("Transcription cancelled due to language/model mismatch.")
+                return
+
+        # Step 3: Load the User-Selected Model
         if app_instance.current_model_name != model_name:
             app_instance.set_status(f"Loading '{model_name}' model...")
             compute_type = "float16" if app_instance.device == "cuda" else "int8"
@@ -42,34 +67,13 @@ def run_transcription(app_instance, model_name: str):
             duration = float(probe['format']['duration'])
         except (ffmpeg.Error, KeyError):
             duration = 0
-        
-        audio_np = load_audio_waveform(wav_path)
-        app_instance.update_progress(0)
 
-        # --- Step 3: Detect Language ---
-        task = "transcribe"
-        lang_code = 'en'
-        is_english_only_model = ".en" in model_name.lower()
-        
-        if not is_english_only_model:
-            app_instance.set_status("Detecting language...")
-            detected_lang_code, lang_prob, *_ = app_instance.model.detect_language(audio_np)
-            
-            if detected_lang_code != 'en' and lang_prob > 0.6:
-                app_instance.prompt_for_translation(detected_lang_code)
-                task = app_instance.user_task_choice
-                lang_code = detected_lang_code if task == "transcribe" else 'en'
-            else:
-                lang_code = detected_lang_code
-        else:
-            app_instance.set_status("English-only model selected.")
-
-        # --- Step 4: Transcribe ---
-        status_msg = "Translating..." if task == "translate" else f"Transcribing in {lang_code}..."
+        # Step 4: Transcribe
+        status_msg = f"Transcribing in {lang_to_transcribe_in}..."
         app_instance.set_status(status_msg)
         
         segments_generator, _ = app_instance.model.transcribe(
-            audio_np, task=task, language=lang_code if task == "transcribe" else None, beam_size=5
+            audio_np, task="transcribe", language=lang_to_transcribe_in, beam_size=5
         )
         
         all_text_segments = []
@@ -89,7 +93,9 @@ def run_transcription(app_instance, model_name: str):
         app_instance.update_progress(100)
         
         elapsed_time = time.time() - start_time
-        final_status = f"Complete in {elapsed_time:.1f}s | Language: {lang_code} | Model: {model_name}"
+        # --- CHANGE: Format elapsed time to HH:MM:SS ---
+        formatted_time = str(datetime.timedelta(seconds=int(elapsed_time)))
+        final_status = f"Complete in {formatted_time} | Language: {lang_to_transcribe_in} | Model: {model_name}"
         app_instance.set_status(final_status)
         
         app_instance.enable_save_buttons()
@@ -99,6 +105,5 @@ def run_transcription(app_instance, model_name: str):
             app_instance.show_error(f"An error occurred during transcription:\n\n{e}")
             app_instance.set_status("An error occurred.")
     finally:
-        # The temporary directory is now managed by the UI, so it's not cleaned up here.
+        app_instance.stop_hw_monitor()
         app_instance.finish_transcription_flow()
-

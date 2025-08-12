@@ -14,14 +14,14 @@ import numpy as np
 
 def check_and_install_dependencies():
     """Checks for required packages and offers to install them via pip."""
-    # The dictionary key is the name you import (e.g., 'import ffmpeg')
-    # The dictionary value is the name you pip install (e.g., 'pip install ffmpeg-python')
     required_packages = {
         "numpy": "numpy",
         "faster_whisper": "faster-whisper",
         "torch": "torch",
         "ffmpeg": "ffmpeg-python",
-        "ttkthemes": "ttkthemes"
+        "ttkthemes": "ttkthemes",
+        "psutil": "psutil",
+        "pynvml": "pynvml"
     }
     
     missing_packages = []
@@ -82,14 +82,12 @@ def get_ffmpeg_cmd(tool: str = "ffmpeg") -> str | None:
     Args:
         tool (str): The name of the tool to find ('ffmpeg', 'ffprobe', 'ffplay').
     """
-    # Check for an environment variable pointing to the directory of ffmpeg tools
     env_dir = os.environ.get("FFMPEG_PATH")
     if env_dir and os.path.isdir(env_dir):
         tool_path = os.path.join(env_dir, f"{tool}.exe")
         if os.path.isfile(tool_path):
             return tool_path
             
-    # If not found in the environment variable, search the system's PATH
     return shutil.which(tool)
 
 def convert_to_16k_mono(src_path: str, tmpdir: str, ffmpeg_cmd: str) -> str:

@@ -11,5 +11,9 @@ faster-whisper==1.2.0
 ffmpeg-python==0.2.0
 numpy==2.3.2
 
+Hardware Monitoring
+psutil
+pynvml
+
 # Optional dependency for GUI theme
 ttkthemes==3.2.2

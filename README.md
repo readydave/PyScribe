@@ -17,6 +17,7 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 - **Audio Playback & Cancellation:** Preview your audio files with a built-in player (Play/Stop) and cancel a transcription mid-process if it's taking too long.
 - **Automatic Language Detection:** Transcribes audio in its detected language.
 - **English Override:** For multi-language audio, you can force transcription in English when using an English-only model.
+- **Built-in Benchmark Tool:** Test the performance of different models on your hardware using standardized audio files to find the best balance of speed and accuracy for your system.
 - **Flexible Model Selection:**
     - Choose from standard Whisper models (`tiny`, `base`, `small`, `medium`, `large-v3`).
     - Select from a curated list of fine-tuned, `faster-whisper`-compatible models from Hugging Face.
@@ -26,41 +27,53 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 
 ---
 
-## Requirements
+## How to Use (Easy Method)
+
+For most users, the easiest way to use PyScribe is to download the pre-packaged executable.
+
+1.  **Go to the [Releases Page](https://github.com/readydave/PyScribe/releases)** on GitHub.
+2.  Under the latest release, click on **`PyScribe.exe`** to download it.
+3.  Double-click the downloaded file to run the application.
+
+**Note on Windows Security:** The first time you run the application, Windows Defender SmartScreen may show a warning. This is normal for new, unsigned applications. To proceed, click **"More info"** and then **"Run anyway"**.
+
+---
+
+## Manual Installation (for Developers)
+
+### Requirements
 
 - **Python 3.12 (Recommended):** This version is confirmed to be compatible with the required libraries.
 - **FFmpeg:** Must be installed and available in your system's PATH. You can install it easily on Windows with `winget install Gyan.FFmpeg`.
 
----
+### Installation Steps
 
-## Installation (One-Time Setup for Windows)
+1.  **Download and Extract:** Download the project ZIP from GitHub and extract it to a folder (e.g., `C:\Code\PyScribe`).
 
-This guide explains how to set up the project using an external virtual environment, which is a best practice to keep dependencies separate from the source code.
+2.  **Create an Environments Folder:** It's recommended to create a central folder to hold your virtual environments, for example, `C:\Code\_envs`.
 
-1.  **Install FFmpeg:** Open a terminal and run: `winget install Gyan.FFmpeg`
-2.  **Download and Extract:** Download the project ZIP from GitHub and extract the `PyScribe-main` folder to your desired location (e.g., `C:\Code\PyScribe`).
-3.  **Create an Environments Folder:** It's recommended to create a central folder to hold your virtual environments, for example, `C:\Code\_envs`.
-4.  **Create the Virtual Environment:** Open a terminal and run the following command to create a new virtual environment specifically for this project.
+3.  **Create the Virtual Environment:** Open a terminal and run the following command:
     ```bash
     # Replace the path with your chosen environments folder
     py -3.12 -m venv C:\Code\_envs\pyscribe
     ```
-5.  **Activate the Environment:**
+
+4.  **Activate the Environment:**
     ```bash
     C:\Code\_envs\pyscribe\Scripts\activate
     ```
-6.  **Navigate to Project Folder:** In the same terminal, change to the directory where you extracted the project files.
+
+5.  **Navigate to Project Folder:** In the same terminal, change to your project directory.
     ```bash
     cd C:\Code\PyScribe
     ```
-7.  **Install Dependencies:** Choose one of the following two paths.
+
+6.  **Install Dependencies:** Choose one of the following two paths.
 
     ---
-    ### For Users with NVIDIA GPUs (Recommended)
+    #### For Users with NVIDIA GPUs (Recommended)
 
-    This two-step process ensures you get the best performance.
-
-    **A. Install GPU-Enabled PyTorch:** Run the official command to install PyTorch with CUDA support. This version is for CUDA 12.1.
+    **A. Install GPU-Enabled PyTorch:**
     ```bash
     pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
     ```
@@ -69,33 +82,17 @@ This guide explains how to set up the project using an external virtual environm
     ```bash
     pip install -r requirements.txt
     ```
-    *(Pip will see that PyTorch is already installed and will skip it.)*
-
     ---
-    ### For Users without GPUs (CPU-Only)
-
-    If you do not have an NVIDIA GPU, you only need to run this single command.
+    #### For Users without GPUs (CPU-Only)
     ```bash
     pip install -r requirements.txt
     ```
-    *(The application will automatically run in CPU mode.)*
 
 ---
 
-## Usage
+## Usage (from Source)
 
 Simply double-click the **`launch.bat`** file inside the project folder. It will automatically find the external virtual environment and start the application.
-
----
-
-## Troubleshooting
-
--   **`ModuleNotFoundError` on launch:** This means the required packages were not installed correctly. Make sure you have activated your virtual environment before running `pip install -r requirements.txt`.
--   **App runs in "CPU Mode" on an NVIDIA system:** This happens when the CPU-only version of PyTorch is installed. To fix this, activate your virtual environment and run the two-step process to replace it with the GPU version:
-    ```bash
-    pip uninstall torch
-    pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
-    ```
 
 ---
 

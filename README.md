@@ -27,7 +27,7 @@ PyScribe is a modern, Windows-friendly GUI application for fast, local audio/vid
 
 ## Requirements
 
-- **Python 3.11 (Recommended):** This version is confirmed to be compatible with the GPU-enabled version of PyTorch.
+- **Python 3.12 (Recommended):** This version is confirmed to be compatible with the required libraries, including the GPU-enabled version of PyTorch.
 - **FFmpeg:** Must be installed and available in your system's PATH. You can install it easily on Windows with `winget install Gyan.FFmpeg`.
 
 ---
@@ -43,7 +43,7 @@ This guide explains how to set up the project using an external virtual environm
 3.  **Create the Virtual Environment:** Open a terminal and run the following command to create a new virtual environment specifically for this project.
     ```bash
     # Replace the path with your chosen environments folder
-    py -3.11 -m venv C:\Code\_envs\pyscribe
+    py -3.12 -m venv C:\Code\_envs\pyscribe
     ```
 
 4.  **Activate the Environment:**
@@ -94,7 +94,7 @@ Simply double-click the **`launch.bat`** file inside the project folder. It will
 ## Troubleshooting
 
 -   **`ModuleNotFoundError` on launch:** This means the required packages were not installed correctly. Make sure you have activated your virtual environment before running `pip install -r requirements.txt`.
--   **App runs in "CPU Mode" on an NVIDIA system:** This happens when the CPU-only version of PyTorch is installed. To fix this, activate your virtual environment and run the two-step process to replace it with the GPU version:
+-   **App runs in "CPU Mode" on an NVIDIA system:** This happens when the CPU-only version of PyTorch is installed. To fix it, activate your virtual environment and run the two-step process to replace it with the GPU version:
     ```bash
     pip uninstall torch
     pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)

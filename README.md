@@ -2,15 +2,16 @@
 
 PyScribe is a modern, Windows-friendly GUI application for fast, local audio/video transcription using the powerful `faster-whisper` library. It's designed to provide a seamless and efficient transcription workflow, running entirely on your own hardware for maximum privacy and performance.
 
-Screenshot showing HF Model selection:
+**Screenshot showing HF Model selection:**
 
 ![PyScribe HF Model Selection](./images/2025-08-11_09-36-47.png)
 
-Screenshot showing Whisper model selection:
+**Screenshot showing Whisper model selection:**
 
 ![PyScribe Whisper Model Selection](./images/2025-08-11_09-37-06.png)
 
-Screenshot showing metrics during transcription:
+**Screenshot showing metrics during transcription:**
+
 ![PyScribe Main Interface](./images/2025-08-15_07-50-06.png)
 
 ---
@@ -38,7 +39,7 @@ Screenshot showing metrics during transcription:
 
 The application includes a powerful benchmark tool to test and compare the performance of different models on your specific hardware.
 
-Screenshot showing the benchmark tool:
+**Screenshot showing the benchmark tool:**
 
 ![PyScribe Benchmark Tool](./images/2025-08-15_07-50-43.png)
 

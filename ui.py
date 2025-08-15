@@ -85,7 +85,6 @@ class BenchmarkWindow(tk.Toplevel):
         self.start_btn = ttk.Button(control_frame, text="Start Benchmark", command=self.start_benchmark)
         self.start_btn.pack(side=tk.LEFT)
         
-        # --- FEATURE: Suppress Warning Checkbox ---
         self.suppress_warning_var = tk.BooleanVar(value=False)
         suppress_cb = ttk.Checkbutton(
             control_frame, text="Don't show download warning again", variable=self.suppress_warning_var
@@ -151,7 +150,6 @@ class BenchmarkWindow(tk.Toplevel):
             messagebox.showwarning("No Models Selected", "Please select at least one model to benchmark.", parent=self)
             return
 
-        # --- FEATURE: Suppress warning logic ---
         if not self.suppress_warning_var.get():
             proceed = messagebox.askokcancel(
                 "Confirm Benchmark",
@@ -181,9 +179,11 @@ class BenchmarkWindow(tk.Toplevel):
         thread.start()
 
     def cancel_benchmark(self):
-        """Signals the benchmark thread to stop."""
+        """Signals the benchmark thread to stop and provides immediate user feedback."""
         self.cancel_event.set()
-        self.status_var.set("Cancelling...")
+        self.status_var.set("Cancelling... waiting for current model to finish.")
+        self.start_btn.config(state=tk.DISABLED) # Prevent multiple clicks
+        self.stop_hw_monitor() # Stop the monitor immediately
 
     def export_results(self):
         """Saves the benchmark results to a text file."""
@@ -227,7 +227,7 @@ class BenchmarkWindow(tk.Toplevel):
 
     def enable_start_button(self):
         """Thread-safely re-enables the start button."""
-        self.after(0, lambda: self.start_btn.config(text="Start Benchmark", command=self.start_benchmark))
+        self.after(0, lambda: self.start_btn.config(text="Start Benchmark", command=self.start_benchmark, state=tk.NORMAL))
         self.after(0, lambda: self.export_btn.config(state=tk.NORMAL))
 
     def start_hw_monitor(self):

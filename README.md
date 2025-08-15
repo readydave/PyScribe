@@ -99,3 +99,9 @@ Simply double-click the **`launch.bat`** file inside the project folder. It will
 ## License
 
 This project is licensed under the terms of the GNU GPLv3.
+
+---
+
+## Acknowledgments
+
+The benchmark audio files used in this project are public domain recordings from [LibriVox](https://librivox.org/).

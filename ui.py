@@ -40,6 +40,7 @@ class BenchmarkWindow(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.title("PyScribe Benchmark")
+        # --- CHANGE: Increased default window size ---
         self.geometry("600x600")
         
         self.cancel_event = threading.Event()
@@ -94,11 +95,11 @@ class BenchmarkWindow(tk.Toplevel):
         self.status_var = tk.StringVar(value="Ready to start.")
         ttk.Label(control_frame, textvariable=self.status_var).pack(side=tk.LEFT, padx=10)
 
-        # --- Progress Bar ---
+        # --- FEATURE: Progress Bar ---
         self.progress = ttk.Progressbar(main_frame, mode="determinate", maximum=100)
         self.progress.pack(fill=tk.X, pady=(0, 5))
 
-        # --- Hardware Metrics Display ---
+        # --- FEATURE: Hardware Metrics Display ---
         self.hw_metrics_text = tk.Text(main_frame, height=1, relief="flat", background=self.cget('bg'))
         self.hw_metrics_text.pack(fill=tk.X, pady=(0, 5))
         self.hw_metrics_text.config(state=tk.DISABLED)
@@ -117,7 +118,7 @@ class BenchmarkWindow(tk.Toplevel):
         self.results_text.insert(tk.END, "Benchmark results will appear here.\n")
         self.results_text.config(state=tk.DISABLED)
 
-        # --- Export Button ---
+        # --- FEATURE: Export Button ---
         self.export_btn = ttk.Button(main_frame, text="Export Results", command=self.export_results, state=tk.DISABLED)
         self.export_btn.pack(pady=10)
 
@@ -249,6 +250,14 @@ class BenchmarkWindow(tk.Toplevel):
         import psutil
         import pynvml
 
+        gpu_handle = None
+        if self.parent.device == "cuda":
+            try:
+                pynvml.nvmlInit()
+                gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            except (ImportError, Exception):
+                pass
+
         while self.monitoring_active:
             try:
                 cpu_percent = psutil.cpu_percent()
@@ -259,9 +268,9 @@ class BenchmarkWindow(tk.Toplevel):
                     (f" | RAM: {ram_percent:.1f}%", "ram_color")
                 ]
                 
-                if self.parent.device == "cuda" and self.parent.gpu_handle:
-                    gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.parent.gpu_handle).gpu
-                    mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.parent.gpu_handle)
+                if gpu_handle:
+                    gpu_util = pynvml.nvmlDeviceGetUtilizationRates(gpu_handle).gpu
+                    mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu_handle)
                     vram_used_gb = mem_info.used / (1024**3)
                     vram_total_gb = mem_info.total / (1024**3)
                     metrics.append((f" | GPU: {gpu_util}%", "gpu_color"))
@@ -271,6 +280,12 @@ class BenchmarkWindow(tk.Toplevel):
                 time.sleep(1)
             except Exception:
                 self.monitoring_active = False
+        
+        if gpu_handle:
+            try:
+                pynvml.nvmlShutdown()
+            except (ImportError, Exception):
+                pass
     
     def _update_hw_metrics(self, metrics):
         """Thread-safely updates the hardware metrics Text widget with colors."""
@@ -315,7 +330,7 @@ class PyScribeApp(BaseAppClass):
 
         # --- Hardware Information ---
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.gpu_name = torch.cuda.get_device_name(0) if self.device == "cuda" else "N/A"
+        self.gpu_name = "N/A"
         self.vram_gb = 0
         self.gpu_handle = None
         if self.device == "cuda":
@@ -323,6 +338,7 @@ class PyScribeApp(BaseAppClass):
                 import pynvml
                 pynvml.nvmlInit()
                 self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                self.gpu_name = torch.cuda.get_device_name(0)
                 props = torch.cuda.get_device_properties(0)
                 self.vram_gb = round(props.total_memory / (1024 ** 3), 1)
             except (ImportError, Exception):
@@ -467,6 +483,14 @@ class PyScribeApp(BaseAppClass):
         import psutil
         import pynvml
 
+        gpu_handle = None
+        if self.device == "cuda":
+            try:
+                pynvml.nvmlInit()
+                gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            except (ImportError, Exception):
+                pass
+
         while self.monitoring_active:
             try:
                 cpu_percent = psutil.cpu_percent()
@@ -477,9 +501,9 @@ class PyScribeApp(BaseAppClass):
                     (f" | RAM: {ram_percent:.1f}%", "ram_color")
                 ]
                 
-                if self.device == "cuda" and self.gpu_handle:
-                    gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
-                    mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
+                if gpu_handle:
+                    gpu_util = pynvml.nvmlDeviceGetUtilizationRates(gpu_handle).gpu
+                    mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu_handle)
                     vram_used_gb = mem_info.used / (1024**3)
                     vram_total_gb = mem_info.total / (1024**3)
                     metrics.append((f" | GPU: {gpu_util}%", "gpu_color"))
@@ -489,6 +513,12 @@ class PyScribeApp(BaseAppClass):
                 time.sleep(1)
             except Exception:
                 self.monitoring_active = False
+        
+        if gpu_handle:
+            try:
+                pynvml.nvmlShutdown()
+            except (ImportError, Exception):
+                pass
     
     def _update_hw_metrics(self, metrics):
         """Thread-safely updates the hardware metrics Text widget with colors."""

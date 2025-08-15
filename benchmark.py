@@ -19,6 +19,7 @@ def run_benchmark(app_instance, benchmark_window, selected_models: list[str], au
         audio_language (str): The language of the audio file to use ('en' or 'es').
     """
     temp_dir = tempfile.TemporaryDirectory()
+    # --- FEATURE: Start hardware monitoring in the benchmark window ---
     benchmark_window.start_hw_monitor()
     try:
         # Define the paths to the benchmark audio files.
@@ -43,6 +44,7 @@ def run_benchmark(app_instance, benchmark_window, selected_models: list[str], au
         audio_np = load_audio_waveform(wav_path)
 
         # --- Run Benchmark Loop ---
+        results = {}
         for i, model_name in enumerate(selected_models):
             # Check for a cancellation signal from the UI.
             if benchmark_window.cancel_event.is_set():
@@ -73,22 +75,29 @@ def run_benchmark(app_instance, benchmark_window, selected_models: list[str], au
             # --- Format and Display Results ---
             result_line = f"\n- {model_name}: {elapsed_time:.2f} seconds"
             benchmark_window.update_results(result_line)
+            results[model_name] = elapsed_time
             
+            # --- CRASH FIX: Let Python's garbage collector handle memory management ---
             del model
 
         benchmark_window.update_progress(100) # Final progress update
 
         # --- Final Status ---
-        # The recommendation logic has been removed.
         if not benchmark_window.cancel_event.is_set():
             benchmark_window.update_status("Benchmark complete.")
         
         benchmark_window.enable_start_button()
 
     except Exception as e:
-        benchmark_window.show_error(f"An error occurred during benchmark:\n\n{e}")
-        benchmark_window.update_status("Benchmark failed.")
+        # --- CRASH FIX: Gracefully handle out-of-memory errors ---
+        if "out of memory" in str(e).lower():
+            result_line = f"\n- {model_name}: FAILED (Out of Memory)"
+            benchmark_window.update_results(result_line)
+        else:
+            benchmark_window.show_error(f"An error occurred during benchmark:\n\n{e}")
+            benchmark_window.update_status("Benchmark failed.")
     finally:
+        # --- FEATURE: Stop hardware monitoring in the benchmark window ---
         benchmark_window.stop_hw_monitor()
         try:
             temp_dir.cleanup()

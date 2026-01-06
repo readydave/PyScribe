@@ -10,13 +10,16 @@ torchaudio
 faster-whisper==1.2.1
 ffmpeg-python==0.2.0
 numpy==2.3.2
+pyperclip
 
-Hardware Monitoring
+# Hardware Monitoring
 psutil
 pynvml
 
 # Optional dependency for GUI theme
 ttkthemes==3.3.0
+gradio
+
 
 # Additional pinned packages added after environment sync
 # (these are required by the app at runtime or by faster-whisper/hf tooling)

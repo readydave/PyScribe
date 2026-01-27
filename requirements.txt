@@ -18,6 +18,7 @@ pynvml
 
 # Optional dependency for GUI theme
 ttkthemes==3.3.0
+tkinterdnd2
 gradio
 
 

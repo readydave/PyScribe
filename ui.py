@@ -11,6 +11,13 @@ import time
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    DND_AVAILABLE = True
+except ImportError:
+    DND_AVAILABLE = False
+    DND_FILES = None
+    TkinterDnD = None
 
 import torch
 # Imports for psutil and pynvml are moved to the functions that use them.
@@ -21,9 +28,16 @@ from benchmark_ui import BenchmarkWindow # Import the new benchmark window
 # --- Dynamic Base Class for Theming ---
 try:
     from ttkthemes import ThemedTk
-    BaseAppClass = ThemedTk
+    BaseTk = ThemedTk
 except ImportError:
-    BaseAppClass = tk.Tk
+    BaseTk = tk.Tk
+
+if DND_AVAILABLE:
+    BaseAppClass = TkinterDnD.Tk
+    USE_THEME = False
+else:
+    BaseAppClass = BaseTk
+    USE_THEME = BaseTk is not tk.Tk
 
 # --- Constants ---
 MODEL_CHOICES = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
@@ -40,7 +54,7 @@ class PyScribeApp(BaseAppClass):
 
     def __init__(self):
         """Initializes the main application window and its state."""
-        if issubclass(BaseAppClass, tk.Tk) and BaseAppClass != tk.Tk:
+        if USE_THEME:
             super().__init__(theme="arc")
         else:
             super().__init__()
@@ -97,6 +111,20 @@ class PyScribeApp(BaseAppClass):
         top_frame.pack(fill=tk.X, padx=10, pady=6)
 
         tk.Button(top_frame, text="Browse File", command=self.browse_file).pack(side=tk.LEFT, padx=(0, 10))
+        self.drop_label = tk.Label(
+            top_frame,
+            text="Drag & Drop audio/video here",
+            relief="groove",
+            bd=1,
+            width=28,
+            pady=4
+        )
+        self.drop_label.pack(side=tk.LEFT, padx=(0, 10))
+        if DND_AVAILABLE:
+            self.drop_label.drop_target_register(DND_FILES)
+            self.drop_label.dnd_bind("<<Drop>>", self._on_file_drop)
+            self.drop_label.dnd_bind("<<DragEnter>>", self._on_drag_enter)
+            self.drop_label.dnd_bind("<<DragLeave>>", self._on_drag_leave)
 
         ttk.Label(top_frame, text="Model:").pack(side=tk.LEFT, padx=(10, 2))
         self.model_var = tk.StringVar(value=self.recommended_model)
@@ -307,23 +335,57 @@ class PyScribeApp(BaseAppClass):
         self.override_event.set()
 
     # --- UI Event Handlers ---
-    def browse_file(self):
+    def _set_media_path(self, path: str):
+        """Validate and apply a newly selected/dropped media file."""
+        if not path:
+            return
         self.stop_audio()
         self._cleanup_temp_dir()
+        if not os.path.isfile(path):
+            messagebox.showerror("Error", "File not found.")
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in ALL_EXTS:
+            messagebox.showerror("Error", "Unsupported file type. Please use an audio/video file.")
+            return
+
+        self.media_path = path
+        self.prepared_audio_path = None
+        self.status_var.set(f"Selected: {os.path.basename(path)}")
+        self.save_btn.config(state=tk.DISABLED)
+        self.copy_btn.config(state=tk.DISABLED)
+        self.play_btn.config(state=tk.NORMAL)
+        self.text_area.delete(1.0, tk.END)
+        self.transcription = None
+
+    def browse_file(self):
         filetypes = [
             ("Audio/Video Files", " ".join(f"*{ext}" for ext in sorted(list(ALL_EXTS)))),
             ("All files", "*.*")
         ]
         path = filedialog.askopenfilename(title="Select Media File", filetypes=filetypes)
         if path:
-            self.media_path = path
-            self.prepared_audio_path = None
-            self.status_var.set(f"Selected: {os.path.basename(path)}")
-            self.save_btn.config(state=tk.DISABLED)
-            self.copy_btn.config(state=tk.DISABLED)
-            self.play_btn.config(state=tk.NORMAL)
-            self.text_area.delete(1.0, tk.END)
-            self.transcription = None
+            self._set_media_path(path)
+
+    def _on_drag_enter(self, event):
+        event.widget.config(relief="solid", bd=2)
+        return event.action
+
+    def _on_drag_leave(self, event):
+        event.widget.config(relief="groove", bd=1)
+        return event.action
+
+    def _on_file_drop(self, event):
+        try:
+            paths = self.tk.splitlist(event.data)
+            if not paths:
+                return
+            first = paths[0]
+            if first.startswith("{") and first.endswith("}"):
+                first = first[1:-1]
+            self._set_media_path(first)
+        finally:
+            self._on_drag_leave(event)
 
     def save_transcription(self):
         if not self.transcription or not self.media_path:

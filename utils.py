@@ -62,6 +62,10 @@ def get_available_hf_models() -> list[str]:
         "Systran/faster-whisper-small.en",
         "Systran/faster-whisper-medium.en",
         "Systran/faster-whisper-large-v3",
+        "deepdml/faster-whisper-large-v3-turbo-ct2",
+        "distil-whisper/distil-large-v3",
+        "guillaumekln/whisper-large-v2-ct2",
+        "guillaumekln/whisper-large-v3-ct2",
     ]
     
     local_models = []

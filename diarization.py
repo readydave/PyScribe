@@ -24,6 +24,7 @@ def run_diarization(
     audio_path: str,
     device: str = "cpu",
     max_speakers: Optional[int] = None,
+    progress_cb=None,
 ) -> List[Dict]:
     """
     Runs diarization on the provided audio file.
@@ -54,6 +55,11 @@ def run_diarization(
         pass
 
     diarization = pipeline(audio_path, num_speakers=max_speakers)
+    if progress_cb:
+        try:
+            progress_cb(95)
+        except Exception:
+            pass
     segments = []
     speaker_map = {}
     speaker_idx = 1

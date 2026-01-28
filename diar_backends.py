@@ -39,14 +39,16 @@ def run_nemo_sortformer(audio_path: str, device: str, max_speakers: Optional[int
         raise RuntimeError("NeMo Sortformer requires CUDA GPU.")
 
     _bump(progress_cb, 20)
-    # API guard: some NeMo versions expose SpeakerDiarizer, others use DiarizationModel
+    # API guard: NeMo releases use different class names
     if hasattr(nemo_asr.models.msdd_models, "SpeakerDiarizer"):
         diarizer = nemo_asr.models.msdd_models.SpeakerDiarizer.from_pretrained(model_name="diar_msdd_telephonic")
     elif hasattr(nemo_asr.models.msdd_models, "DiarizationModel"):
         diarizer = nemo_asr.models.msdd_models.DiarizationModel.from_pretrained(model_name="diar_msdd_telephonic")
+    elif hasattr(nemo_asr.models.msdd_models, "NeuralDiarizer"):
+        diarizer = nemo_asr.models.msdd_models.NeuralDiarizer.from_pretrained(model_name="diar_msdd_telephonic")
     else:
         raise RuntimeError(
-            "NeMo Sortformer backend unavailable: your nemo_toolkit version does not provide SpeakerDiarizer. "
+            "NeMo Sortformer backend unavailable: your nemo_toolkit version does not provide a known diarizer class. "
             "Try installing a compatible version, e.g.: pip install 'nemo_toolkit[asr]==1.23.0'"
         )
     diarizer.to(device)

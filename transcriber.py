@@ -8,6 +8,7 @@ import tempfile
 import ffmpeg
 from faster_whisper import WhisperModel
 from utils import get_ffmpeg_cmd, convert_to_16k_mono, load_audio_waveform
+from diarization import run_diarization, assign_speakers
 
 def run_transcription(app_instance, model_name: str):
     """
@@ -79,21 +80,59 @@ def run_transcription(app_instance, model_name: str):
         segments_generator, _ = app_instance.model.transcribe(
             audio_np, task="transcribe", language=lang_to_transcribe_in, beam_size=5
         )
+        # Reset diarization progress bar for this run.
+        app_instance.update_diar_progress(0)
         
         all_text_segments = []
+        all_segments_struct = []
         for segment in segments_generator:
             if app_instance.cancel_event.is_set():
                 app_instance.set_status("Transcription cancelled by user.")
                 return
 
             all_text_segments.append(segment.text.strip())
+            all_segments_struct.append(
+                {
+                    "start": segment.start,
+                    "end": segment.end,
+                    "text": segment.text.strip(),
+                }
+            )
             app_instance.update_text_area(" ".join(all_text_segments))
             if duration > 0:
                 progress = (segment.end / duration) * 100
                 app_instance.update_progress(progress)
 
         # --- Step 5: Finalize ---
-        app_instance.transcription = " ".join(all_text_segments)
+        # Optional diarization
+        if getattr(app_instance, "use_diarization", False):
+            try:
+                app_instance.set_status("Running diarization (detecting speakers)...")
+                app_instance.update_diar_progress(25)
+                diar_segments = run_diarization(
+                    wav_path,
+                    device=app_instance.device,
+                    max_speakers=app_instance.max_speakers_override,
+                )
+                app_instance.set_status("Assigning speakers to transcript...")
+                app_instance.update_diar_progress(65)
+                labeled = assign_speakers(all_segments_struct, diar_segments)
+                # build transcript with speaker tags
+                lines = []
+                for seg in labeled:
+                    speaker = seg.get("speaker", "S?")
+                    lines.append(f"[{speaker}] {seg['text']}")
+                app_instance.transcription = "\n".join(lines)
+                app_instance.update_diar_progress(100)
+            except Exception as e:
+                app_instance.show_error(f"Diarization failed (continuing without speakers):\n\n{e}")
+                app_instance.transcription = " ".join(all_text_segments)
+                app_instance.update_diar_progress(0)
+        else:
+            app_instance.transcription = " ".join(all_text_segments)
+
+        # Reflect final transcript (with speakers if available) in the UI text box.
+        app_instance.update_text_area(app_instance.transcription)
         app_instance.update_progress(100)
         
         elapsed_time = time.time() - start_time

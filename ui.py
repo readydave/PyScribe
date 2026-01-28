@@ -137,7 +137,10 @@ class PyScribeApp(BaseAppClass):
         self.model_font_bold = tkfont.Font(family="Segoe UI", size=10, weight="bold")
         self.hf_xet_available = self._hf_xet_available()
         self.config_path = Path.home() / ".pyscribe_config.json"
-        self.last_model_used = self._load_last_model()
+        self.last_model_used = None
+        self.use_diarization = False
+        self.max_speakers_override = None
+        self._load_config()
 
         # --- UI Initialization ---
         self._create_widgets()
@@ -193,7 +196,7 @@ class PyScribeApp(BaseAppClass):
 
         toolbar = tk.Frame(self)
         toolbar.grid(row=1, column=0, sticky="ew", padx=10, pady=(0,6))
-        for i in range(6):
+        for i in range(8):
             toolbar.grid_columnconfigure(i, weight=0)
         self.save_btn = tk.Button(toolbar, text="Save Transcript", command=self.save_transcription, state=tk.DISABLED)
         self.save_btn.grid(row=0, column=0, padx=4)
@@ -205,23 +208,11 @@ class PyScribeApp(BaseAppClass):
         self.play_btn.grid(row=0, column=3, padx=4)
         tk.Button(toolbar, text="Run Benchmark", command=self.open_benchmark_window).grid(row=0, column=4, padx=4)
         tk.Button(toolbar, text="Rescan Cache", command=self._rescan_cache_and_refresh).grid(row=0, column=5, padx=4)
-        
-        second_frame = tk.Frame(self)
-        second_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
-
-        self.save_btn = tk.Button(second_frame, text="Save Transcript", command=self.save_transcription, state=tk.DISABLED)
-        self.save_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.copy_btn = tk.Button(second_frame, text="Copy", command=self.copy_to_clipboard, state=tk.DISABLED)
-        self.copy_btn.pack(side=tk.LEFT, padx=6)
-
-        self.open_btn = tk.Button(second_frame, text="Open Save Folder", command=self.open_transcriptions_folder, state=tk.NORMAL)
-        self.open_btn.pack(side=tk.LEFT, padx=6)
-
-        self.play_btn = tk.Button(second_frame, text="▶ Play", command=self.play_audio, state=tk.DISABLED)
-        self.play_btn.pack(side=tk.LEFT, padx=6)
-
-        tk.Button(second_frame, text="Run Benchmark", command=self.open_benchmark_window).pack(side=tk.LEFT, padx=6)
+        self.diar_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(toolbar, text="Identify speakers", variable=self.diar_var, command=self._toggle_diarization).grid(row=0, column=6, padx=4)
+        tk.Label(toolbar, text="Max speakers").grid(row=0, column=7, sticky="e")
+        self.max_speakers_var = tk.StringVar(value="")
+        tk.Entry(toolbar, textvariable=self.max_speakers_var, width=4).grid(row=0, column=8, padx=4)
 
         center_frame = tk.Frame(self)
         center_frame.grid(row=2, column=0, sticky="nsew")
@@ -233,8 +224,12 @@ class PyScribeApp(BaseAppClass):
         self.progress = ttk.Progressbar(center_frame, mode="determinate", maximum=100)
         self.progress.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
 
+        # Secondary progress bar dedicated to diarization phase
+        self.diar_progress = ttk.Progressbar(center_frame, mode="determinate", maximum=100)
+        self.diar_progress.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
+
         self.hw_metrics_text = tk.Text(center_frame, height=1, relief="flat", background=self.cget('bg'))
-        self.hw_metrics_text.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
+        self.hw_metrics_text.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 5))
         self.hw_metrics_text.config(state=tk.DISABLED)
         
         self.hw_metrics_text.tag_configure("cpu_color", foreground="green")
@@ -250,6 +245,12 @@ class PyScribeApp(BaseAppClass):
         info = f"GPU: {self.gpu_name} ({self.vram_gb} GB VRAM)" if self.device == "cuda" else f"CPU Mode ({self.cpu_count} cores)"
         self.status_var.set(f"{info} | Recommended model: {self.recommended_model_name}")
 
+    def _toggle_diarization(self):
+        self.use_diarization = bool(self.diar_var.get())
+        max_spk = self.max_speakers_var.get().strip()
+        self.max_speakers_override = int(max_spk) if max_spk.isdigit() else None
+        self._persist_config()
+
     def start_transcription(self):
         """Validates user inputs and starts the transcription in a new thread."""
         if self.is_waiting_for_user:
@@ -263,6 +264,11 @@ class PyScribeApp(BaseAppClass):
         if not model_to_use:
             messagebox.showerror("Error", "Please select a model.")
             return
+
+        # diarization settings
+        self.use_diarization = bool(self.diar_var.get())
+        max_spk = self.max_speakers_var.get().strip()
+        self.max_speakers_override = int(max_spk) if max_spk.isdigit() else None
 
         if model_to_use.startswith("openai/") and "faster-whisper" not in model_to_use and "ct2" not in model_to_use:
             messagebox.showerror(
@@ -288,7 +294,7 @@ class PyScribeApp(BaseAppClass):
                         f"({self.vram_gb} GB vs {entry.get('vram')} GB). Continue?")
             if not messagebox.askokcancel("Hardware Warning", warn_msg):
                 return
-        self._persist_last_model(model_to_use)
+        self._persist_config(model_to_use)
 
         self._toggle_busy(True)
         self.cancel_event.clear()
@@ -367,6 +373,9 @@ class PyScribeApp(BaseAppClass):
     def update_progress(self, value: float):
         self.after(0, lambda: self.progress.config(value=value))
 
+    def update_diar_progress(self, value: float):
+        self.after(0, lambda: self.diar_progress.config(value=value))
+
     def update_text_area(self, text: str):
         self.after(0, lambda: (self.text_area.delete(1.0, tk.END), self.text_area.insert(tk.END, text)))
 
@@ -378,6 +387,7 @@ class PyScribeApp(BaseAppClass):
 
     def finish_transcription_flow(self):
         self._toggle_busy(False)
+        self.update_diar_progress(0)
 
     def refresh_hf_model_list(self):
         def _refresh():
@@ -488,16 +498,31 @@ class PyScribeApp(BaseAppClass):
                     repos.add(model_id)
         return repos
 
-    def _load_last_model(self):
+    def _load_config(self):
         try:
             data = json.loads(self.config_path.read_text())
-            return data.get("last_model")
         except Exception:
-            return None
-
-    def _persist_last_model(self, model_name: str):
+            data = {}
+        self.last_model_used = data.get("last_model")
+        self.use_diarization = bool(data.get("use_diarization", False))
+        self.max_speakers_override = data.get("max_speakers")
+        # hydrate UI vars if available
         try:
-            data = {"last_model": model_name}
+            self.diar_var.set(self.use_diarization)
+        except Exception:
+            pass
+        try:
+            self.max_speakers_var.set("" if self.max_speakers_override is None else str(self.max_speakers_override))
+        except Exception:
+            pass
+
+    def _persist_config(self, model_name: str = None):
+        try:
+            data = {
+                "last_model": model_name or self.selected_model_name,
+                "use_diarization": self.use_diarization,
+                "max_speakers": self.max_speakers_override,
+            }
             self.config_path.write_text(json.dumps(data))
         except Exception:
             pass

@@ -3,13 +3,16 @@
 # Example for CUDA 12.1:
 # pip install torch==2.5.1 torchvision==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 
-# Core dependencies
-torch
-torchvision
-torchaudio
+# Use the PyTorch CUDA 12.1 wheels (keep this line so pip finds the GPU builds)
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Core dependencies (pinned to CUDA 12.1 GPU builds)
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+torchaudio==2.5.1+cu121
 faster-whisper==1.2.1
 ffmpeg-python==0.2.0
-numpy==2.3.2
+numpy==1.26.4
 pyperclip
 
 # Hardware Monitoring
@@ -28,3 +31,5 @@ hf_xet  # Optional accelerator for Hugging Face Xet storage; speeds up model dow
 huggingface-hub[hf_xet]==0.36.0
 ctranslate2==4.6.1
 typing_extensions==4.15.0
+# Optional: speaker diarization
+pyannote.audio==3.1.1

@@ -11,7 +11,19 @@ from utils import get_available_hf_models
 from benchmark import run_benchmark
 
 # This constant is shared with ui.py
-MODEL_CHOICES = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
+MODEL_CHOICES = [
+    "tiny",
+    "base",
+    "small",
+    "small.en",
+    "medium",
+    "large-v2",
+    "large-v3",
+    "distil-whisper/large-v3",
+    "Systran/faster-whisper-large-v3-turbo",
+    "deepdml/faster-whisper-large-v3-turbo-ct2",
+    "openai/whisper-large-v3-turbo",
+]
 
 class BenchmarkWindow(tk.Toplevel):
     """

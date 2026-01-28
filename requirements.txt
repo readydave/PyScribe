@@ -20,10 +20,11 @@ pynvml
 ttkthemes==3.3.0
 tkinterdnd2
 gradio
+hf_xet  # Optional accelerator for Hugging Face Xet storage; speeds up model downloads
 
 
 # Additional pinned packages added after environment sync
 # (these are required by the app at runtime or by faster-whisper/hf tooling)
-huggingface-hub==0.36.0
+huggingface-hub[hf_xet]==0.36.0
 ctranslate2==4.6.1
 typing_extensions==4.15.0

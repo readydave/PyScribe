@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 from huggingface_hub import HfApi, hf_hub_download
 from models import get_ranked_models, strip_badges, BADGES, TIER_ORDER
+from diar_backends import available_backends
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
     DND_AVAILABLE = True
@@ -140,6 +141,9 @@ class PyScribeApp(BaseAppClass):
         self.last_model_used = None
         self.use_diarization = False
         self.max_speakers_override = None
+        self.diar_backend = "accurate"
+        # Detect which diarization backends are actually available on this platform.
+        self.available_backends = [k for k, ok in available_backends().items() if ok]
         self._load_config()
 
         # --- UI Initialization ---
@@ -156,12 +160,8 @@ class PyScribeApp(BaseAppClass):
         """Creates and arranges all the GUI widgets in the main window."""
         top_frame = tk.Frame(self)
         top_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=6)
-        top_frame.grid_columnconfigure(0, weight=0)
-        top_frame.grid_columnconfigure(1, weight=0)
-        top_frame.grid_columnconfigure(2, weight=1)
-        top_frame.grid_columnconfigure(3, weight=0)
-        top_frame.grid_columnconfigure(4, weight=0)
-        top_frame.grid_columnconfigure(5, weight=0)
+        for col, w in [(0,0),(1,0),(2,1),(3,0),(4,0),(5,0),(6,0),(7,0),(8,0),(9,0),(10,0)]:
+            top_frame.grid_columnconfigure(col, weight=w)
 
         tk.Button(top_frame, text="Browse File", command=self.browse_file).grid(row=0, column=0, sticky="w", padx=(0,8))
 
@@ -213,7 +213,21 @@ class PyScribeApp(BaseAppClass):
         tk.Label(toolbar, text="Max speakers").grid(row=0, column=7, sticky="e")
         self.max_speakers_var = tk.StringVar(value="")
         tk.Entry(toolbar, textvariable=self.max_speakers_var, width=4).grid(row=0, column=8, padx=4)
-
+        tk.Label(toolbar, text="Diar mode").grid(row=0, column=9, sticky="e")
+        # Use only backends that are installed/available on this platform.
+        if not self.available_backends:
+            self.available_backends = ["off", "accurate"]
+        if getattr(self, "diar_backend", "accurate") not in self.available_backends:
+            self.diar_backend = self.available_backends[0]
+        self.diar_backend_var = tk.StringVar(value=self.diar_backend)
+        ttk.OptionMenu(
+            toolbar,
+            self.diar_backend_var,
+            self.diar_backend_var.get(),
+            *self.available_backends,
+            command=lambda _: self._toggle_diarization()
+        ).grid(row=0, column=10, padx=4, sticky="w")
+        
         center_frame = tk.Frame(self)
         center_frame.grid(row=2, column=0, sticky="nsew")
         center_frame.grid_columnconfigure(0, weight=1)
@@ -249,6 +263,7 @@ class PyScribeApp(BaseAppClass):
         self.use_diarization = bool(self.diar_var.get())
         max_spk = self.max_speakers_var.get().strip()
         self.max_speakers_override = int(max_spk) if max_spk.isdigit() else None
+        self.diar_backend = self.diar_backend_var.get()
         self._persist_config()
 
     def start_transcription(self):
@@ -506,6 +521,11 @@ class PyScribeApp(BaseAppClass):
         self.last_model_used = data.get("last_model")
         self.use_diarization = bool(data.get("use_diarization", False))
         self.max_speakers_override = data.get("max_speakers")
+        self.diar_backend = data.get("diar_backend", "accurate")
+        # If saved backend is unavailable, fall back to first available.
+        if self.diar_backend not in getattr(self, "available_backends", []):
+            if getattr(self, "available_backends", []):
+                self.diar_backend = self.available_backends[0]
         # hydrate UI vars if available
         try:
             self.diar_var.set(self.use_diarization)
@@ -515,6 +535,10 @@ class PyScribeApp(BaseAppClass):
             self.max_speakers_var.set("" if self.max_speakers_override is None else str(self.max_speakers_override))
         except Exception:
             pass
+        try:
+            self.diar_backend_var.set(self.diar_backend)
+        except Exception:
+            pass
 
     def _persist_config(self, model_name: str = None):
         try:
@@ -522,6 +546,7 @@ class PyScribeApp(BaseAppClass):
                 "last_model": model_name or self.selected_model_name,
                 "use_diarization": self.use_diarization,
                 "max_speakers": self.max_speakers_override,
+                "diar_backend": self.diar_backend,
             }
             self.config_path.write_text(json.dumps(data))
         except Exception:

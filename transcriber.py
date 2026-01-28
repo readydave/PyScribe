@@ -8,7 +8,8 @@ import tempfile
 import ffmpeg
 from faster_whisper import WhisperModel
 from utils import get_ffmpeg_cmd, convert_to_16k_mono, load_audio_waveform
-from diarization import run_diarization, assign_speakers
+from diar_backends import run_diarization_backend
+from diarization import assign_speakers
 
 def run_transcription(app_instance, model_name: str):
     """
@@ -109,10 +110,12 @@ def run_transcription(app_instance, model_name: str):
             try:
                 app_instance.set_status("Running diarization (detecting speakers)...")
                 app_instance.update_diar_progress(25)
-                diar_segments = run_diarization(
-                    wav_path,
+                diar_segments = run_diarization_backend(
+                    audio_path=wav_path,
+                    backend=getattr(app_instance, "diar_backend", "accurate"),
                     device=app_instance.device,
                     max_speakers=app_instance.max_speakers_override,
+                    progress_cb=app_instance.update_diar_progress,
                 )
                 app_instance.set_status("Assigning speakers to transcript...")
                 app_instance.update_diar_progress(65)

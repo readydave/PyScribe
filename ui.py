@@ -13,6 +13,8 @@ import warnings
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 import tkinter.font as tkfont
+import json
+from pathlib import Path
 from huggingface_hub import HfApi, hf_hub_download
 from models import get_ranked_models, strip_badges, BADGES, TIER_ORDER
 try:
@@ -134,9 +136,12 @@ class PyScribeApp(BaseAppClass):
         self.model_font = tkfont.Font(family="Segoe UI", size=10)
         self.model_font_bold = tkfont.Font(family="Segoe UI", size=10, weight="bold")
         self.hf_xet_available = self._hf_xet_available()
+        self.config_path = Path.home() / ".pyscribe_config.json"
+        self.last_model_used = self._load_last_model()
 
         # --- UI Initialization ---
         self._create_widgets()
+        self._apply_last_model_selection()
         self._show_startup_status()
         self.protocol("WM_DELETE_WINDOW", self.on_exit)
 
@@ -148,16 +153,22 @@ class PyScribeApp(BaseAppClass):
         """Creates and arranges all the GUI widgets in the main window."""
         top_frame = tk.Frame(self)
         top_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=6)
-        for col, weight in [(0,0),(1,0),(2,0),(3,1),(4,0),(5,0),(6,0),(7,0)]:
-            top_frame.grid_columnconfigure(col, weight=weight)
+        top_frame.grid_columnconfigure(0, weight=0)
+        top_frame.grid_columnconfigure(1, weight=0)
+        top_frame.grid_columnconfigure(2, weight=1)
+        top_frame.grid_columnconfigure(3, weight=0)
+        top_frame.grid_columnconfigure(4, weight=0)
+        top_frame.grid_columnconfigure(5, weight=0)
 
         tk.Button(top_frame, text="Browse File", command=self.browse_file).grid(row=0, column=0, sticky="w", padx=(0,8))
 
         self.drop_label = tk.Label(
             top_frame,
             text="Drag & Drop audio/video here",
-            relief="groove",
-            bd=1,
+            relief="solid",
+            bd=2,
+            highlightthickness=2,
+            highlightbackground="red",
             width=28,
             pady=4
         )
@@ -168,15 +179,32 @@ class PyScribeApp(BaseAppClass):
             self.drop_label.dnd_bind("<<DragEnter>>", self._on_drag_enter)
             self.drop_label.dnd_bind("<<DragLeave>>", self._on_drag_leave)
 
-        ttk.Label(top_frame, text="Model:").grid(row=0, column=2, sticky="w", padx=(4,2))
-        self.model_label = ttk.Label(top_frame, text=self._model_label_text(), font=("Segoe UI", 10, "bold"))
-        self.model_label.grid(row=0, column=3, sticky="w", padx=(0,8))
-        ttk.Button(top_frame, text="Choose Model", command=self.open_model_dialog).grid(row=0, column=4, sticky="w", padx=(0,12))
+        model_frame = tk.Frame(top_frame)
+        model_frame.grid(row=0, column=2, sticky="ew", padx=(4,8))
+        model_frame.grid_columnconfigure(1, weight=1)
+        ttk.Label(model_frame, text="Model:").grid(row=0, column=0, sticky="w", padx=(0,4))
+        self.model_label = ttk.Label(model_frame, text=self._model_label_text(), font=("Segoe UI", 10, "bold"))
+        self.model_label.grid(row=0, column=1, sticky="w")
 
+        ttk.Button(top_frame, text="Choose Model", command=self.open_model_dialog).grid(row=0, column=3, sticky="w", padx=(6,8))
         self.transcribe_btn = tk.Button(top_frame, text="Transcribe", command=self.start_transcription, font=("Segoe UI", 9, "bold"))
-        self.transcribe_btn.grid(row=0, column=5, sticky="e", padx=(0,8))
+        self.transcribe_btn.grid(row=0, column=4, sticky="e", padx=(0,8))
+        tk.Button(top_frame, text="Exit", command=self.on_exit).grid(row=0, column=5, sticky="e")
 
-        tk.Button(top_frame, text="Exit", command=self.on_exit).grid(row=0, column=6, sticky="e")
+        toolbar = tk.Frame(self)
+        toolbar.grid(row=1, column=0, sticky="ew", padx=10, pady=(0,6))
+        for i in range(6):
+            toolbar.grid_columnconfigure(i, weight=0)
+        self.save_btn = tk.Button(toolbar, text="Save Transcript", command=self.save_transcription, state=tk.DISABLED)
+        self.save_btn.grid(row=0, column=0, padx=4)
+        self.copy_btn = tk.Button(toolbar, text="Copy", command=self.copy_to_clipboard, state=tk.DISABLED)
+        self.copy_btn.grid(row=0, column=1, padx=4)
+        self.open_btn = tk.Button(toolbar, text="Open Save Folder", command=self.open_transcriptions_folder, state=tk.NORMAL)
+        self.open_btn.grid(row=0, column=2, padx=4)
+        self.play_btn = tk.Button(toolbar, text="▶ Play", command=self.play_audio, state=tk.DISABLED)
+        self.play_btn.grid(row=0, column=3, padx=4)
+        tk.Button(toolbar, text="Run Benchmark", command=self.open_benchmark_window).grid(row=0, column=4, padx=4)
+        tk.Button(toolbar, text="Rescan Cache", command=self._rescan_cache_and_refresh).grid(row=0, column=5, padx=4)
         
         second_frame = tk.Frame(self)
         second_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
@@ -196,7 +224,7 @@ class PyScribeApp(BaseAppClass):
         tk.Button(second_frame, text="Run Benchmark", command=self.open_benchmark_window).pack(side=tk.LEFT, padx=6)
 
         center_frame = tk.Frame(self)
-        center_frame.grid(row=1, column=0, sticky="nsew")
+        center_frame.grid(row=2, column=0, sticky="nsew")
         center_frame.grid_columnconfigure(0, weight=1)
         center_frame.grid_rowconfigure(4, weight=1)
 
@@ -260,6 +288,7 @@ class PyScribeApp(BaseAppClass):
                         f"({self.vram_gb} GB vs {entry.get('vram')} GB). Continue?")
             if not messagebox.askokcancel("Hardware Warning", warn_msg):
                 return
+        self._persist_last_model(model_to_use)
 
         self._toggle_busy(True)
         self.cancel_event.clear()
@@ -386,6 +415,21 @@ class PyScribeApp(BaseAppClass):
         self.is_waiting_for_user = False
         self.override_event.set()
 
+    def prompt_detected_language(self, lang_code: str, lang_prob: float):
+        """
+        Ask user to confirm detected language or force English.
+        Returns 'en' if user opts to force English, otherwise the detected code.
+        """
+        self.is_waiting_for_user = True
+        choice = messagebox.askyesno(
+            "Confirm Language",
+            f"Detected language: '{lang_code}' (confidence {lang_prob*100:.1f}%).\n\n"
+            f"Yes = use detected language.\nNo = force US English.",
+            parent=self
+        )
+        self.is_waiting_for_user = False
+        return lang_code if choice else "en"
+
     # --- UI Event Handlers ---
     def _load_ranked_models(self):
         # Build entries from curated set + any cached repos
@@ -443,6 +487,32 @@ class PyScribeApp(BaseAppClass):
                     model_id = item.replace("models--", "").replace("--", "/")
                     repos.add(model_id)
         return repos
+
+    def _load_last_model(self):
+        try:
+            data = json.loads(self.config_path.read_text())
+            return data.get("last_model")
+        except Exception:
+            return None
+
+    def _persist_last_model(self, model_name: str):
+        try:
+            data = {"last_model": model_name}
+            self.config_path.write_text(json.dumps(data))
+        except Exception:
+            pass
+
+    def _apply_last_model_selection(self):
+        if not self.last_model_used:
+            return
+        entry = self._find_model_entry_by_name(self.last_model_used)
+        if entry:
+            self.selected_model_name = entry["name"]
+            self.selected_model_label = f"{self._status_prefix(entry['name'])} {entry['label']}"
+        else:
+            # keep recommended if not found
+            self.selected_model_name = self.recommended_model_name
+            self.selected_model_label = self.recommended_model_label
 
     def _is_repo_cached(self, model_id: str) -> bool:
         """Best-effort check if a HF repo snapshot exists locally (model.bin or safetensors)."""
@@ -812,6 +882,14 @@ class PyScribeApp(BaseAppClass):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _rescan_cache_and_refresh(self):
+        names = set(TIERS.keys()) | self._scan_cache_repos()
+        self.cached_models = self._get_cached_hf_models()
+        names |= self.cached_models
+        self.model_entries = self._build_entries_from_names(names)
+        self.refresh_hf_model_list()
+        messagebox.showinfo("Cache", f"Cache rescan complete. Models available: {len(self.model_entries)}")
+
     def _guess_tier_from_name(self, name: str) -> str:
         lname = name.lower()
         if "large" in lname:
@@ -826,8 +904,13 @@ class PyScribeApp(BaseAppClass):
         if not list_frames:
             return
         list_frame = list_frames[0]
-        canvas = list_frame.grid_slaves(row=0, column=0)[0]
-        inner = canvas.children[list(canvas.children.keys())[0]]
+        canvas_widgets = list_frame.grid_slaves(row=0, column=0)
+        if not canvas_widgets:
+            return
+        canvas = canvas_widgets[0]
+        if not canvas.children:
+            return
+        inner = list(canvas.children.values())[0]
         for child in inner.winfo_children():
             child.destroy()
 

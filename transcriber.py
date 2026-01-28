@@ -43,6 +43,10 @@ def run_transcription(app_instance, model_name: str):
         is_english_only_model = ".en" in model_name.lower()
         lang_to_transcribe_in = detected_lang_code
 
+        # Ask user to confirm/override if not English
+        if detected_lang_code != "en":
+            lang_to_transcribe_in = app_instance.prompt_detected_language(detected_lang_code, lang_prob)
+
         if is_english_only_model and detected_lang_code != 'en':
             app_instance.prompt_for_english_override(detected_lang_code, model_name)
             

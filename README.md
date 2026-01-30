@@ -1,111 +1,92 @@
 # PyScribe - Local Transcription GUI
 
-PyScribe is a modern, Windows-friendly GUI application for fast, local audio/video transcription using the powerful `faster-whisper` library. It's designed to provide a seamless and efficient transcription workflow, running entirely on your own hardware for maximum privacy and performance.
+PyScribe is a Windows-friendly GUI for fast, private audio/video transcription powered by `faster-whisper`. It now includes streamlined model selection, drag-and-drop input, dual progress bars, and optional speaker diarization backends (pyannote or NVIDIA Sortformer).
 
-**Screenshot showing HF Model selection:**
+---
 
-![PyScribe HF Model Selection](./images/2025-08-11_09-36-47.png)
-
-**Screenshot showing Whisper model selection:**
-
-![PyScribe Whisper Model Selection](./images/2025-08-11_09-37-06.png)
-
-**Screenshot showing metrics during transcription:**
-
-![PyScribe Main Interface](./images/2025-08-15_07-50-06.png)
+## What’s new (high level)
+- Single model chooser with tier badges (🟢 Fast, 🟡 Balanced, 🔴 Pro) and cache status (☑ downloaded, ● cached, ☐ fetch).
+- “Refresh models” merges Hugging Face faster‑whisper/distil models with anything already in your HF cache; “Filter to available” shows only cached models.
+- Drag & Drop audio/video next to Browse File; toolbar consolidated at the top.
+- Dual progress bars: transcription and diarization, with clear status messages.
+- Diarization modes: Off, Fast (pyannote-lite), Accurate (pyannote 3.x), and optional GPU Sortformer (NeMo, CUDA/WSL/Linux).
+- Language confirmations and English override prompts when model/language mismatch.
+- Cache rescan button and hardware‑best model preselect.
 
 ---
 
 ## Key Features
-
-- **High-Speed Transcription:** Powered by `faster-whisper` for significant speed improvements over the original Whisper, especially on GPUs.
-- **Hardware-Aware:** Automatically detects your GPU (NVIDIA/CUDA) or CPU and recommends the optimal model size for your hardware.
-- **Live Progress & Transcription:** Watch the transcription appear in real-time and monitor progress with a live percentage bar.
-- **Live Hardware Monitoring:** View real-time CPU, RAM, GPU, and VRAM usage directly in the app during transcription.
-- **Audio Playback & Cancellation:** Preview your audio files with a built-in player (Play/Stop) and cancel a transcription mid-process if it's taking too long.
-- **Automatic Language Detection:** Transcribes audio in its detected language.
-- **English Override:** For multi-language audio, you can force transcription in English when using an English-only model.
-- **Built-in Benchmark Tool:** Test the performance of different models on your hardware using standardized audio files to find the best balance of speed and accuracy for your system.
-- **Flexible Model Selection:**
-    - Choose from standard Whisper models (`tiny`, `base`, `small`, `medium`, `large-v3`).
-    - Select from a curated list of fine-tuned, `faster-whisper`-compatible models from Hugging Face.
-    - Automatically caches and lists previously downloaded custom models for easy reuse.
-- **Detailed Reporting:** Get a full summary upon completion, including time taken (HH:MM:SS), detected language, and the model used.
-- **Smart File Naming:** Automatically saves transcripts with a detailed, sortable filename that includes the timestamp and model name.
+- **High-speed transcription** with `faster-whisper`.
+- **Hardware-aware recommendations** for GPU/CPU and model tier.
+- **Live progress + live transcript** with dual bars (transcribe + diarize).
+- **Live hardware monitoring** (CPU, RAM, GPU, VRAM).
+- **Audio playback & cancel** while transcribing.
+- **Auto language detection** with optional forced English override.
+- **Benchmark tool** to compare models on your hardware.
+- **Model selection** from curated faster‑whisper/distil models plus your cached models; badges show tier and download status.
+- **Speaker diarization** with selectable backends and max-speakers limit.
+- **Drag & drop input** for quick file selection.
 
 ---
 
-## Benchmark Tool
+## Requirements (Windows)
+- **Python 3.12** (recommended).
+- **FFmpeg** on PATH (install with `winget install Gyan.FFmpeg`).
+- **CUDA 12.1** if using GPU Torch on Windows.
 
-The application includes a powerful benchmark tool to test and compare the performance of different models on your specific hardware.
-
-**Screenshot showing the benchmark tool:**
-
-![PyScribe Benchmark Tool](./images/2025-08-15_07-50-43.png)
-
----
-
-## Requirements
-
-- **Python 3.12 (Recommended):** This version is confirmed to be compatible with the required libraries.
-- **FFmpeg:** Must be installed and available in your system's PATH. You can install it easily on Windows with `winget install Gyan.FFmpeg`.
+Optional (only if you want Sortformer via WSL/Linux):
+- CUDA 12.1 + cuDNN 9.x, Python 3.10+, `nemo_toolkit[asr]`, and `nvidia-cudnn-cu12` wheels inside WSL/Linux.
 
 ---
 
-## Installation (One-Time Setup for Windows)
+## Install (Windows, external venv)
+1) Install FFmpeg: `winget install Gyan.FFmpeg`  
+2) Extract repo to e.g. `C:\Code\PyScribe`  
+3) Create envs folder: `C:\Code\_envs`  
+4) Create venv: `py -3.12 -m venv C:\Code\_envs\pyscribe`  
+5) Activate: `C:\Code\_envs\pyscribe\Scripts\activate`  
+6) `cd C:\Code\PyScribe`  
+7) Install deps (GPU path shown; CPU path is just `-r requirements.txt`):
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+```
 
-This guide explains how to set up the project using an external virtual environment.
-
-1.  **Install FFmpeg:** Open a terminal and run: `winget install Gyan.FFmpeg`
-2.  **Download and Extract:** Download the project ZIP from GitHub and extract it to a folder (e.g., `C:\Code\PyScribe`).
-3.  **Create an Environments Folder:** Create a central folder for your virtual environments, for example, `C:\Code\_envs`.
-4.  **Create the Virtual Environment:** In a terminal, run the following command:
-    ```bash
-    # Replace the path with your chosen environments folder
-    py -3.12 -m venv C:\Code\_envs\pyscribe
-    ```
-5.  **Activate the Environment:**
-    ```bash
-    C:\Code\_envs\pyscribe\Scripts\activate
-    ```
-6.  **Navigate to Project Folder:** In the same terminal, change to your project directory.
-    ```bash
-    cd C:\Code\PyScribe
-    ```
-7.  **Install Dependencies:** Choose one of the following two paths.
-
-    ---
-    ### For Users with NVIDIA GPUs (Recommended)
-
-    **A. Install GPU-Enabled PyTorch:**
-    ```bash
-    pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
-    ```
-
-    **B. Install Remaining Packages:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-    ---
-    ### For Users without GPUs (CPU-Only)
-    ```bash
-    pip install -r requirements.txt
-    ```
+Launch: double‑click `launch.bat` (auto-uses the external venv).
 
 ---
 
-## Usage
+## Usage guide
+- **Choose Model**: single dialog with search; badges show tier; status icons show cache.  
+  - **Refresh models**: fetch latest HF faster‑whisper/distil; merge with cache.  
+  - **Filter to available**: show only cached models.  
+  - **Rescan cache**: re-index local HF cache folders.  
+- **Drag & Drop**: drop audio/video onto the red-outlined box; or click **Browse File**.  
+- **Diarization**: check **Identify speakers**, set **Max speakers**.  
+  - **Diar mode**: Off | Fast (pyannote-lite) | Accurate (pyannote 3.x) | Sortformer (NeMo, requires CUDA via WSL/Linux).  
+  - Dual progress bars show when diarization runs.  
+- **Language prompts**: if non‑English is detected with an English-only model, you can force English or cancel.  
+- **Save/Copy**: buttons enable automatically when a run finishes.
 
-Simply double-click the **`launch.bat`** file inside the project folder. It will automatically find the external virtual environment and start the application.
+---
+
+## Optional: Sortformer (NeMo) in WSL/Linux
+Only needed if you want the fastest diarization:
+1) In WSL/Ubuntu: install CUDA drivers; create a Python 3.10+ venv.  
+2) Install CUDA Torch wheels (cu121) and project requirements.  
+3) Add cuDNN wheel and NeMo:  
+```bash
+pip install nvidia-cudnn-cu12==9.1.0.70
+export LD_LIBRARY_PATH="$VIRTUAL_ENV/lib/python3.10/site-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH"
+pip install "nemo_toolkit[asr]==1.23.0"
+```
+4) Run `python main.py` inside WSL and select **Diar mode: sortformer**.  
+If you stay on Windows native, use **Accurate** or **Fast** modes instead.
 
 ---
 
 ## License
-
-This project is licensed under the terms of the GNU GPLv3.
-
----
+GPLv3
 
 ## Acknowledgments
-
-The benchmark audio files used in this project are public domain recordings from [LibriVox](https://librivox.org/).
+Benchmark audio from [LibriVox](https://librivox.org/).

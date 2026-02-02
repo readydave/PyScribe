@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 from huggingface_hub import HfFolder
 import torchaudio
 import numpy as np
+import torch
 from services.runtime_compat import ensure_platform_sys_version_compat
 LOGGER = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def run_diarization(
     requested_device = device
     effective_device = "cpu"
     try:
-        pipeline.to(device)
+        pipeline.to(torch.device(device))
         effective_device = device
         if status_cb:
             status_cb(f"Diarization backend: accurate | Device: {str(effective_device).upper()}")

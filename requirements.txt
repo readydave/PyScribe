@@ -17,7 +17,7 @@ pyperclip
 
 # Hardware Monitoring
 psutil
-pynvml
+nvidia-ml-py
 
 # Optional dependency for GUI theme
 ttkthemes==3.3.0

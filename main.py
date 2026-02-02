@@ -3,8 +3,12 @@
 
 import argparse
 import os
+import socket
 import sys
 import warnings
+from services.runtime_compat import ensure_platform_sys_version_compat
+
+ensure_platform_sys_version_compat()
 
 # Reduce noisy ONNX Runtime warning logs (keep errors/fatal only).
 os.environ.setdefault("ORT_LOG_SEVERITY_LEVEL", "3")
@@ -81,7 +85,32 @@ def run_listener(
         auth_user=auth_user,
         auth_pass=auth_pass,
     )
-    print(f"PyScribe listener running on http://{host}:{chosen_port}")
+    print("PyScribe listener running:")
+    if host in {"0.0.0.0", "::"}:
+        lan_ip = _resolve_lan_ip()
+        print(f"  Local: http://127.0.0.1:{chosen_port}")
+        print(f"  LAN:   http://{lan_ip}:{chosen_port}  (share this on your local network)")
+    else:
+        print(f"  URL:   http://{host}:{chosen_port}")
+
+
+def _resolve_lan_ip() -> str:
+    """Best-effort LAN IP for copy/share when binding to 0.0.0.0."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            ip = sock.getsockname()[0]
+            if ip and not ip.startswith("127."):
+                return ip
+    except Exception:
+        pass
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return "localhost"
 
 
 def run_qt():

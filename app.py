@@ -10,6 +10,9 @@ import threading
 
 import gradio as gr
 import pyperclip
+from services.runtime_compat import ensure_platform_sys_version_compat
+
+ensure_platform_sys_version_compat()
 
 from services import (
     AppConfig,

@@ -1,48 +1,52 @@
-"""Shared backend services for PyScribe frontends."""
+"""Shared backend services for PyScribe frontends.
 
-from .catalog_service import (
-    BASE_MODEL_CHOICES,
-    get_available_diarization_backends,
-    get_backend_label,
-    get_model_choices,
-)
-from .config_service import AppConfig, load_config, save_config
-from .hf_auth_service import get_hf_token, save_hf_token
-from .model_download_service import (
-    ensure_model_cached,
-    estimate_model_download_size_bytes,
-    format_bytes,
-    is_model_cached,
-    normalize_model_name,
-    resolve_repo_id,
-)
-from .model_service import RuntimeInfo, detect_language, detect_runtime, load_model, recommend_model
-from .platform_service import open_folder
-from .transcription_service import TranscriptionResult, transcribe_media_file, transcribe_prepared_audio
+This module intentionally uses lazy exports so importing :mod:`services`
+does not eagerly pull in heavy runtime dependencies (torch/pyannote/etc.).
+"""
 
-__all__ = [
-    "AppConfig",
-    "BASE_MODEL_CHOICES",
-    "RuntimeInfo",
-    "detect_language",
-    "detect_runtime",
-    "get_available_diarization_backends",
-    "get_backend_label",
-    "get_hf_token",
-    "get_model_choices",
-    "estimate_model_download_size_bytes",
-    "format_bytes",
-    "is_model_cached",
-    "normalize_model_name",
-    "load_config",
-    "ensure_model_cached",
-    "load_model",
-    "open_folder",
-    "recommend_model",
-    "save_hf_token",
-    "resolve_repo_id",
-    "save_config",
-    "TranscriptionResult",
-    "transcribe_media_file",
-    "transcribe_prepared_audio",
-]
+from __future__ import annotations
+
+from importlib import import_module
+
+_EXPORTS = {
+    "BASE_MODEL_CHOICES": (".catalog_service", "BASE_MODEL_CHOICES"),
+    "get_available_diarization_backends": (".catalog_service", "get_available_diarization_backends"),
+    "get_backend_label": (".catalog_service", "get_backend_label"),
+    "get_model_choices": (".catalog_service", "get_model_choices"),
+    "AppConfig": (".config_service", "AppConfig"),
+    "load_config": (".config_service", "load_config"),
+    "save_config": (".config_service", "save_config"),
+    "get_hf_token": (".hf_auth_service", "get_hf_token"),
+    "save_hf_token": (".hf_auth_service", "save_hf_token"),
+    "ensure_model_cached": (".model_download_service", "ensure_model_cached"),
+    "estimate_model_download_size_bytes": (".model_download_service", "estimate_model_download_size_bytes"),
+    "format_bytes": (".model_download_service", "format_bytes"),
+    "is_model_cached": (".model_download_service", "is_model_cached"),
+    "normalize_model_name": (".model_download_service", "normalize_model_name"),
+    "resolve_repo_id": (".model_download_service", "resolve_repo_id"),
+    "RuntimeInfo": (".model_service", "RuntimeInfo"),
+    "detect_language": (".model_service", "detect_language"),
+    "detect_runtime": (".model_service", "detect_runtime"),
+    "load_model": (".model_service", "load_model"),
+    "recommend_model": (".model_service", "recommend_model"),
+    "open_folder": (".platform_service", "open_folder"),
+    "TranscriptionResult": (".transcription_service", "TranscriptionResult"),
+    "transcribe_media_file": (".transcription_service", "transcribe_media_file"),
+    "transcribe_prepared_audio": (".transcription_service", "transcribe_prepared_audio"),
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr_name = _EXPORTS[name]
+    module = import_module(module_name, __name__)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

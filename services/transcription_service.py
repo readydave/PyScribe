@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import tempfile
+import time
 from dataclasses import dataclass
 from threading import Event
 from typing import Callable
@@ -20,6 +22,7 @@ from utils import convert_to_16k_mono, get_ffmpeg_cmd, load_audio_waveform
 StatusCallback = Callable[[str], None]
 TextCallback = Callable[[str], None]
 ProgressCallback = Callable[[float], None]
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,6 +31,8 @@ class TranscriptionResult:
     segments: list[dict]
     cancelled: bool
     duration_seconds: float
+    transcription_seconds: float
+    diarization_seconds: float
 
 
 def _probe_duration_seconds(wav_path: str) -> float:
@@ -70,17 +75,28 @@ def transcribe_prepared_audio(
 
     all_text_segments: list[str] = []
     all_segments_struct: list[dict] = []
+    transcription_started = time.perf_counter()
+    diarization_seconds = 0.0
 
     if on_diar_progress:
         on_diar_progress(0)
 
     for segment in segments_generator:
         if cancel_event and cancel_event.is_set():
+            transcription_seconds = time.perf_counter() - transcription_started
+            LOGGER.info(
+                "Transcription cancelled during ASR audio_seconds=%.2f transcribe_seconds=%.2f diar_seconds=%.2f",
+                duration,
+                transcription_seconds,
+                diarization_seconds,
+            )
             return TranscriptionResult(
                 transcript=" ".join(all_text_segments).strip(),
                 segments=all_segments_struct,
                 cancelled=True,
                 duration_seconds=duration,
+                transcription_seconds=transcription_seconds,
+                diarization_seconds=diarization_seconds,
             )
 
         segment_text = segment.text.strip()
@@ -101,19 +117,29 @@ def transcribe_prepared_audio(
 
     transcript = " ".join(all_text_segments).strip()
     final_segments = all_segments_struct
+    transcription_seconds = time.perf_counter() - transcription_started
 
     if cancel_event and cancel_event.is_set():
+        LOGGER.info(
+            "Transcription cancelled after ASR audio_seconds=%.2f transcribe_seconds=%.2f diar_seconds=%.2f",
+            duration,
+            transcription_seconds,
+            diarization_seconds,
+        )
         return TranscriptionResult(
             transcript=transcript,
             segments=final_segments,
             cancelled=True,
             duration_seconds=duration,
+            transcription_seconds=transcription_seconds,
+            diarization_seconds=diarization_seconds,
         )
 
     if use_diarization:
+        diarization_started = time.perf_counter()
         try:
             if on_status:
-                on_status("Running diarization (detecting speakers)...")
+                on_status(f"Running diarization ({diar_backend}) on {device.upper()} (detecting speakers)...")
             if on_diar_progress:
                 on_diar_progress(25)
 
@@ -129,6 +155,7 @@ def transcribe_prepared_audio(
                 device=device,
                 max_speakers=max_speakers,
                 progress_cb=_diar_progress,
+                status_cb=on_status,
             )
 
             if on_status:
@@ -141,14 +168,26 @@ def transcribe_prepared_audio(
 
             if on_diar_progress:
                 on_diar_progress(100)
+            diarization_seconds = time.perf_counter() - diarization_started
         except InterruptedError:
+            diarization_seconds = time.perf_counter() - diarization_started
+            LOGGER.info(
+                "Transcription cancelled during diarization audio_seconds=%.2f transcribe_seconds=%.2f diar_seconds=%.2f backend=%s",
+                duration,
+                transcription_seconds,
+                diarization_seconds,
+                diar_backend,
+            )
             return TranscriptionResult(
                 transcript=transcript,
                 segments=final_segments,
                 cancelled=True,
                 duration_seconds=duration,
+                transcription_seconds=transcription_seconds,
+                diarization_seconds=diarization_seconds,
             )
         except Exception as exc:
+            diarization_seconds = time.perf_counter() - diarization_started
             # Preserve transcript output even when diarization backend fails.
             diag_msg = str(exc)
             if "failed to parse CPython sys.version" in diag_msg:
@@ -161,11 +200,22 @@ def transcribe_prepared_audio(
             if on_diar_progress:
                 on_diar_progress(0)
 
+    LOGGER.info(
+        "Transcription pipeline completed cancelled=%s audio_seconds=%.2f transcribe_seconds=%.2f diar_seconds=%.2f diar_enabled=%s backend=%s",
+        False,
+        duration,
+        transcription_seconds,
+        diarization_seconds,
+        use_diarization,
+        diar_backend,
+    )
     return TranscriptionResult(
         transcript=transcript,
         segments=final_segments,
         cancelled=False,
         duration_seconds=duration,
+        transcription_seconds=transcription_seconds,
+        diarization_seconds=diarization_seconds,
     )
 
 

@@ -7,6 +7,7 @@ import os
 import socket
 import tempfile
 import threading
+from typing import Callable
 
 import gradio as gr
 import pyperclip
@@ -37,6 +38,93 @@ if not AVAILABLE_DIAR_BACKENDS:
     AVAILABLE_DIAR_BACKENDS = ["accurate"]
 
 APP_CONFIG = load_config()
+
+CUSTOM_CSS = """
+html.pyscribe-prog-red progress,
+html.pyscribe-prog-red [role="progressbar"],
+html.pyscribe-prog-red .progress-bar,
+html.pyscribe-prog-red .progress-bar-wrap > div {
+  accent-color: #dc2626 !important;
+  background-color: #dc2626 !important;
+}
+html.pyscribe-prog-orange progress,
+html.pyscribe-prog-orange [role="progressbar"],
+html.pyscribe-prog-orange .progress-bar,
+html.pyscribe-prog-orange .progress-bar-wrap > div {
+  accent-color: #f97316 !important;
+  background-color: #f97316 !important;
+}
+html.pyscribe-prog-yellow progress,
+html.pyscribe-prog-yellow [role="progressbar"],
+html.pyscribe-prog-yellow .progress-bar,
+html.pyscribe-prog-yellow .progress-bar-wrap > div {
+  accent-color: #facc15 !important;
+  background-color: #facc15 !important;
+}
+html.pyscribe-prog-blue progress,
+html.pyscribe-prog-blue [role="progressbar"],
+html.pyscribe-prog-blue .progress-bar,
+html.pyscribe-prog-blue .progress-bar-wrap > div {
+  accent-color: #2563eb !important;
+  background-color: #2563eb !important;
+}
+html.pyscribe-prog-green progress,
+html.pyscribe-prog-green [role="progressbar"],
+html.pyscribe-prog-green .progress-bar,
+html.pyscribe-prog-green .progress-bar-wrap > div {
+  accent-color: #16a34a !important;
+  background-color: #16a34a !important;
+}
+"""
+
+CUSTOM_HEAD = """
+<script>
+(function () {
+  const classes = [
+    "pyscribe-prog-red",
+    "pyscribe-prog-orange",
+    "pyscribe-prog-yellow",
+    "pyscribe-prog-blue",
+    "pyscribe-prog-green",
+  ];
+
+  function pickClass(pct) {
+    if (pct >= 100) return "pyscribe-prog-green";
+    if (pct >= 76) return "pyscribe-prog-blue";
+    if (pct >= 51) return "pyscribe-prog-yellow";
+    if (pct >= 26) return "pyscribe-prog-orange";
+    return "pyscribe-prog-red";
+  }
+
+  function extractPct() {
+    // Preferred: aria value from rendered progress bar.
+    const pb = document.querySelector('[role="progressbar"][aria-valuenow]');
+    if (pb) {
+      const v = Number(pb.getAttribute("aria-valuenow"));
+      if (!Number.isNaN(v)) return v;
+    }
+    // Fallback: parse "Transcribing xx%" text.
+    const candidates = document.querySelectorAll("div,span,p");
+    for (const el of candidates) {
+      const txt = (el.textContent || "").trim();
+      const m = txt.match(/Transcribing\\s+(\\d+)%/i);
+      if (m) return Number(m[1]);
+    }
+    return null;
+  }
+
+  function tick() {
+    const pct = extractPct();
+    if (pct === null) return;
+    const root = document.documentElement;
+    for (const c of classes) root.classList.remove(c);
+    root.classList.add(pickClass(pct));
+  }
+
+  setInterval(tick, 250);
+})();
+</script>
+"""
 
 # --- State for Cancellation ---
 _cancel_event = threading.Event()
@@ -198,7 +286,7 @@ def set_cancel_flag():
 
 # --- Gradio Interface Definition ---
 def create_interface() -> gr.Blocks:
-    with gr.Blocks(title="PyScribe Listener") as iface:
+    with gr.Blocks(title="PyScribe Listener", css=CUSTOM_CSS, head=CUSTOM_HEAD) as iface:
         gr.Markdown(
             """
             # PyScribe Listener
@@ -291,11 +379,14 @@ def launch_listener(
     queue_size: int = 16,
     auth_user: str | None = None,
     auth_pass: str | None = None,
+    on_start: Callable[[int], None] | None = None,
 ):
     iface = create_interface()
     # Serialize jobs so only one transcription runs at a time on the host.
     iface.queue(default_concurrency_limit=1, max_size=queue_size)
     chosen_port = find_open_port(host=host, preferred_port=port, max_tries=max_tries)
+    if on_start is not None:
+        on_start(chosen_port)
     auth = None
     if auth_user and auth_pass:
         auth = (auth_user, auth_pass)

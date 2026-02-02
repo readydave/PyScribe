@@ -6,6 +6,7 @@ import os
 import tempfile
 import threading
 import time
+import logging
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtWidgets import (
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from services import get_model_choices, load_model
 from utils import convert_to_16k_mono, get_ffmpeg_cmd, load_audio_waveform
+LOGGER = logging.getLogger(__name__)
 
 
 class BenchmarkWorker(QObject):
@@ -173,12 +175,14 @@ class BenchmarkDialog(QDialog):
         self.worker.finished.connect(self._cleanup_worker)
         self.worker.failed.connect(self._cleanup_worker)
         self.worker_thread.start()
+        LOGGER.info("Benchmark started models=%s lang=%s", selected, self.audio_language)
 
     @Slot()
     def cancel_benchmark(self):
         self.cancel_event.set()
         self.cancel_btn.setEnabled(False)
         self.status_label.setText("Cancelling...")
+        LOGGER.info("Benchmark cancel requested")
 
     @Slot(str)
     def _append_result_line(self, line: str):
@@ -201,6 +205,24 @@ class BenchmarkDialog(QDialog):
         if not self.worker_thread:
             return
         self.worker_thread.quit()
-        self.worker_thread.wait(2000)
+        self.worker_thread.wait(3000)
         self.worker_thread = None
         self.worker = None
+        LOGGER.info("Benchmark worker cleaned up")
+
+    def closeEvent(self, event):  # noqa: N802
+        if self.worker_thread and self.worker_thread.isRunning():
+            LOGGER.warning("Benchmark dialog close requested while running; cancelling worker.")
+            self.cancel_event.set()
+            self.worker_thread.quit()
+            if not self.worker_thread.wait(3000):
+                QMessageBox.information(
+                    self,
+                    "Benchmark running",
+                    "Benchmark is still shutting down. Please try closing again in a few seconds.",
+                )
+                event.ignore()
+                return
+            self.worker_thread = None
+            self.worker = None
+        event.accept()

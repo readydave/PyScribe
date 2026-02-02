@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import List, Dict, Optional
 from huggingface_hub import HfFolder
 import torchaudio
 import numpy as np
 from services.runtime_compat import ensure_platform_sys_version_compat
+LOGGER = logging.getLogger(__name__)
 
 
 def _lazy_import_pyannote():
@@ -25,6 +27,7 @@ def run_diarization(
     device: str = "cpu",
     max_speakers: Optional[int] = None,
     progress_cb=None,
+    status_cb=None,
 ) -> List[Dict]:
     """
     Runs diarization on the provided audio file.
@@ -51,10 +54,22 @@ def run_diarization(
         except Exception as e2:
             raise RuntimeError(f"Failed to load pyannote pipeline (3.1 then 3.0): {e2}")
 
+    requested_device = device
+    effective_device = "cpu"
     try:
         pipeline.to(device)
-    except Exception:
-        pass
+        effective_device = device
+        if status_cb:
+            status_cb(f"Diarization backend: accurate | Device: {str(effective_device).upper()}")
+    except Exception as exc:
+        effective_device = "cpu"
+        if status_cb:
+            status_cb(f"Diarization backend fallback to CPU (requested {requested_device.upper()})")
+        LOGGER.warning(
+            "Diarization pipeline.to(%s) failed; using CPU fallback. reason=%s",
+            requested_device,
+            exc,
+        )
 
     diarization = pipeline(audio_path, num_speakers=max_speakers)
     if progress_cb:
@@ -76,6 +91,12 @@ def run_diarization(
                 "speaker": speaker_map[speaker],
             }
         )
+    LOGGER.info(
+        "Diarization complete backend=accurate requested_device=%s effective_device=%s segments=%s",
+        requested_device,
+        effective_device,
+        len(segments),
+    )
     return segments
 
 

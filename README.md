@@ -7,12 +7,13 @@ PyScribe is a cross-platform local transcription app for Windows and Linux, powe
 - Hardware-aware model recommendations (GPU/CPU)
 - Live progress, live transcript, and hardware metrics
 - Optional speaker diarization with selectable backends
-- Tk desktop UI, Qt desktop UI, and Gradio listener mode
+- Qt desktop UI and Gradio listener mode
 - Model download confirmation + in-app progress
 - Hugging Face token support for gated diarization models
-- Interactive launcher menu (`python main.py`) so users can choose mode without remembering commands
+- Interactive launcher menu (`python main.py`) so users can choose Qt desktop or listener mode without remembering commands
 - Qt quality-of-life controls: `Cancel`, `Force Stop`, and `Exit`
 - Save dialog defaults to source media folder and remembers the last browse/save location
+- Qt menu bar with `Tools` (HF Token, Benchmark) and `Help` (PyScribe Help, Model Help, Open Logs Folder, About)
 
 ## Requirements
 - Python 3.12 (recommended)
@@ -39,16 +40,11 @@ pip install -r requirements.txt
 
 ## Usage
 ```bash
-# Interactive launcher (choose Tk / Qt / Listener)
+# Interactive launcher (choose Qt / Listener)
 python main.py
-
-# Tk desktop UI (direct)
-python main.py desktop
 
 # Qt desktop UI
 python main.py qt
-# or
-python main.py --gui qt
 
 # Gradio listener mode
 python main.py serve --host 0.0.0.0 --port 7860
@@ -60,6 +56,7 @@ Listener mode auto-falls to the next free port if `7860` is in use.
 - `Open Folder` opens the selected media folder (or last-opened folder if no media is selected).
 - Speaker identification toggle clearly shows on/off state.
 - Deselect speaker identification to disable diarization and its progress bar.
+- See `docs/qt_help.md` for the in-app help content shown by **Help -> PyScribe Help**.
 
 ## Hugging Face Token (Diarization)
 Some diarization pipelines are gated on Hugging Face. In Qt mode, click `HF Token` and paste your token. You may also need to accept terms on model pages (for example, `pyannote/speaker-diarization-3.1`).

@@ -1,14 +1,18 @@
 # main.py
-# Entry point for PyScribe desktop and listener modes.
+# Entry point for PyScribe Qt desktop and listener modes.
 
 import argparse
+import logging
 import os
 import socket
 import sys
 import warnings
+from services.logging_service import configure_logging
 from services.runtime_compat import ensure_platform_sys_version_compat
 
 ensure_platform_sys_version_compat()
+LOG_PATH = configure_logging()
+LOGGER = logging.getLogger(__name__)
 
 # Reduce noisy ONNX Runtime warning logs (keep errors/fatal only).
 os.environ.setdefault("ORT_LOG_SEVERITY_LEVEL", "3")
@@ -48,19 +52,6 @@ warnings.filterwarnings(
 )
 
 
-def run_desktop():
-    """Checks desktop dependencies and launches the Tk GUI."""
-    from utils import check_and_install_dependencies
-
-    if not check_and_install_dependencies():
-        sys.exit(1)
-
-    from ui import PyScribeApp
-
-    app = PyScribeApp()
-    app.mainloop()
-
-
 def run_listener(
     host: str,
     port: int,
@@ -71,12 +62,30 @@ def run_listener(
     auth_pass: str | None,
 ):
     """Launches the Gradio listener with automatic port fallback."""
+    LOGGER.info(
+        "Launching listener host=%s port=%s max_port_tries=%s share=%s queue_size=%s auth=%s",
+        host,
+        port,
+        max_port_tries,
+        share,
+        queue_size,
+        bool(auth_user and auth_pass),
+    )
     if bool(auth_user) != bool(auth_pass):
         raise SystemExit("Both --auth-user and --auth-pass must be provided together.")
 
+    def _announce_listener(chosen_port: int):
+        print("PyScribe listener running:")
+        if host in {"0.0.0.0", "::"}:
+            lan_ip = _resolve_lan_ip()
+            print(f"  Local: http://127.0.0.1:{chosen_port}")
+            print(f"  LAN:   http://{lan_ip}:{chosen_port}  (share this on your local network)")
+        else:
+            print(f"  URL:   http://{host}:{chosen_port}")
+
     from app import launch_listener
 
-    chosen_port = launch_listener(
+    launch_listener(
         host=host,
         port=port,
         max_tries=max_port_tries,
@@ -84,14 +93,8 @@ def run_listener(
         queue_size=queue_size,
         auth_user=auth_user,
         auth_pass=auth_pass,
+        on_start=_announce_listener,
     )
-    print("PyScribe listener running:")
-    if host in {"0.0.0.0", "::"}:
-        lan_ip = _resolve_lan_ip()
-        print(f"  Local: http://127.0.0.1:{chosen_port}")
-        print(f"  LAN:   http://{lan_ip}:{chosen_port}  (share this on your local network)")
-    else:
-        print(f"  URL:   http://{host}:{chosen_port}")
 
 
 def _resolve_lan_ip() -> str:
@@ -115,6 +118,7 @@ def _resolve_lan_ip() -> str:
 
 def run_qt():
     """Launches the PySide6 desktop UI."""
+    LOGGER.info("Launching Qt desktop UI")
     from ui_qt import run_qt_app
 
     run_qt_app()
@@ -122,15 +126,7 @@ def run_qt():
 
 def parse_args():
     parser = argparse.ArgumentParser(description="PyScribe entry point.")
-    parser.add_argument(
-        "--gui",
-        choices=["tk", "qt"],
-        help="Quick GUI selector (equivalent to desktop/qt subcommands).",
-    )
     subparsers = parser.add_subparsers(dest="mode")
-
-    desktop_parser = subparsers.add_parser("desktop", help="Run local desktop GUI (default)")
-    desktop_parser.set_defaults(mode="desktop")
 
     serve_parser = subparsers.add_parser("serve", help="Run Gradio listener mode")
     serve_parser.add_argument("--host", default="0.0.0.0", help="Host interface to bind (default: 0.0.0.0)")
@@ -150,25 +146,23 @@ def parse_args():
 
 def prompt_launch_mode() -> str:
     """Interactive launcher menu shown when no CLI mode is provided."""
+    LOGGER.info("Starting interactive launcher menu")
     print("\nPyScribe launcher")
-    print("  1) Desktop (Tk)")
-    print("  2) Desktop (Qt)")
-    print("  3) Listener (Gradio web)")
+    print("  1) Desktop (Qt)")
+    print("  2) Listener (Gradio web)")
     while True:
-        choice = input("Choose mode [1/2/3] (default 1): ").strip() or "1"
-        if choice in {"1", "2", "3"}:
+        choice = input("Choose mode [1/2] (default 1): ").strip() or "1"
+        if choice in {"1", "2"}:
             return choice
-        print("Please enter 1, 2, or 3.")
+        print("Please enter 1 or 2.")
 
 
 def main():
+    LOGGER.info("PyScribe startup argv=%s log_path=%s", sys.argv, LOG_PATH)
     args = parse_args()
     if len(sys.argv) == 1:
         selected = prompt_launch_mode()
         if selected == "1":
-            run_desktop()
-            return
-        if selected == "2":
             run_qt()
             return
         run_listener(
@@ -182,12 +176,6 @@ def main():
         )
         return
 
-    if args.gui == "qt":
-        run_qt()
-        return
-    if args.gui == "tk":
-        run_desktop()
-        return
     if args.mode == "serve":
         run_listener(
             host=args.host,
@@ -202,7 +190,7 @@ def main():
     if args.mode == "qt":
         run_qt()
         return
-    run_desktop()
+    run_qt()
 
 
 if __name__ == "__main__":

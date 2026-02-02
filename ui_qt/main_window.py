@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import multiprocessing as mp
 import os
 import queue
@@ -10,12 +11,13 @@ import threading
 import time
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QAction, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -50,12 +52,28 @@ from services import (
     save_config,
     transcribe_media_file,
 )
+from services.logging_service import configure_logging, get_log_path
 from ui_qt.benchmark_dialog import BenchmarkDialog
 from utils import load_audio_waveform
 AUDIO_VIDEO_FILTER = (
     "Media Files (*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.wma *.mp4 *.mov *.mkv *.avi *.flv);;All Files (*.*)"
 )
+ALLOWED_MEDIA_EXTS = {
+    ".m4a",
+    ".mp3",
+    ".wav",
+    ".flac",
+    ".aac",
+    ".ogg",
+    ".wma",
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".avi",
+    ".flv",
+}
 _UNSET = object()
+LOGGER = logging.getLogger(__name__)
 
 
 class DropLabel(QLabel):
@@ -105,6 +123,8 @@ def _transcription_process_entry(
     event_queue,
     cancel_event,
 ):
+    configure_logging()
+
     def _emit(kind: str, value):
         event_queue.put({"type": kind, "value": value})
 
@@ -136,7 +156,15 @@ def _transcription_process_entry(
                 result = _run_with("cpu", "int8")
             else:
                 raise
-        _emit("finished", {"cancelled": result.cancelled, "transcript": result.transcript})
+        _emit(
+            "finished",
+            {
+                "cancelled": result.cancelled,
+                "transcript": result.transcript,
+                "transcription_seconds": result.transcription_seconds,
+                "diarization_seconds": result.diarization_seconds,
+            },
+        )
     except Exception as exc:
         _emit("error", str(exc))
 
@@ -147,7 +175,7 @@ class TranscriptionWorker(QObject):
     progress = Signal(int)
     model_download_progress = Signal(int)
     diar_progress = Signal(int)
-    finished = Signal(bool, str)
+    finished = Signal(bool, str, float, float)
     failed = Signal(str)
 
     def __init__(
@@ -175,6 +203,7 @@ class TranscriptionWorker(QObject):
 
     @Slot()
     def request_cancel(self):
+        LOGGER.info("Qt worker: cancel requested")
         with self._lock:
             self._cancel_requested = True
             if self._mp_cancel_event is not None:
@@ -182,6 +211,7 @@ class TranscriptionWorker(QObject):
 
     @Slot()
     def request_force_stop(self):
+        LOGGER.warning("Qt worker: force-stop requested")
         with self._lock:
             self._force_stop_requested = True
             proc = self._process
@@ -190,6 +220,7 @@ class TranscriptionWorker(QObject):
 
     @Slot()
     def run(self):
+        LOGGER.info("Qt worker: run start model=%s diar=%s backend=%s", self.model_name, self.use_diarization, self.diar_backend)
         # Always use spawn to avoid CUDA re-init issues after forking.
         mp_ctx = mp.get_context("spawn")
         event_queue = mp_ctx.Queue()
@@ -217,6 +248,7 @@ class TranscriptionWorker(QObject):
                 self._mp_cancel_event = cancel_event
                 self._process = process
             process.start()
+            LOGGER.info("Qt worker: child process started pid=%s", process.pid)
 
             while True:
                 with self._lock:
@@ -252,9 +284,16 @@ class TranscriptionWorker(QObject):
                         self.model_download_progress.emit(int(value))
                     elif etype == "finished":
                         terminal_emitted = True
-                        self.finished.emit(bool(value.get("cancelled")), str(value.get("transcript", latest_transcript)))
+                        LOGGER.info("Qt worker: finished event cancelled=%s", bool(value.get("cancelled")))
+                        self.finished.emit(
+                            bool(value.get("cancelled")),
+                            str(value.get("transcript", latest_transcript)),
+                            float(value.get("transcription_seconds", 0.0)),
+                            float(value.get("diarization_seconds", 0.0)),
+                        )
                     elif etype == "error":
                         terminal_emitted = True
+                        LOGGER.error("Qt worker: error event from child: %s", value)
                         self.failed.emit(str(value))
 
                 if not process.is_alive() and not drained:
@@ -284,14 +323,23 @@ class TranscriptionWorker(QObject):
                     self.model_download_progress.emit(int(value))
                 elif etype == "finished" and not terminal_emitted:
                     terminal_emitted = True
-                    self.finished.emit(bool(value.get("cancelled")), str(value.get("transcript", latest_transcript)))
+                    LOGGER.info("Qt worker: late finished event cancelled=%s", bool(value.get("cancelled")))
+                    self.finished.emit(
+                        bool(value.get("cancelled")),
+                        str(value.get("transcript", latest_transcript)),
+                        float(value.get("transcription_seconds", 0.0)),
+                        float(value.get("diarization_seconds", 0.0)),
+                    )
                 elif etype == "error" and not terminal_emitted:
                     terminal_emitted = True
+                    LOGGER.error("Qt worker: late error event from child: %s", value)
                     self.failed.emit(str(value))
 
             if force_stopped and not terminal_emitted:
-                self.finished.emit(True, latest_transcript)
+                LOGGER.warning("Qt worker: force-stopped before terminal event")
+                self.finished.emit(True, latest_transcript, 0.0, 0.0)
         finally:
+            LOGGER.info("Qt worker: cleanup begin")
             with self._lock:
                 self._mp_cancel_event = None
                 self._process = None
@@ -306,6 +354,7 @@ class TranscriptionWorker(QObject):
                 event_queue.join_thread()
             except Exception:
                 pass
+            LOGGER.info("Qt worker: cleanup end")
 
 
 class MainWindow(QMainWindow):
@@ -328,13 +377,16 @@ class MainWindow(QMainWindow):
         self.metrics_thread: threading.Thread | None = None
         self.download_progress_dialog: QProgressDialog | None = None
         self.diarization_warning: str | None = None
+        self._current_use_diarization = bool(self.config.use_diarization)
 
         self._build_ui()
+        self._build_menus()
         self._apply_theme()
         self._set_bar_color(self.progress_bar, "#dc2626")
         self._set_bar_color(self.diar_progress_bar, "#dc2626")
         self.hw_metrics.connect(self.hw_metrics_label.setText)
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
+        LOGGER.info("Qt MainWindow initialized runtime=%s compute=%s", self.runtime.device, self.runtime.compute_type)
 
     def _build_ui(self):
         root = QWidget()
@@ -413,22 +465,12 @@ class MainWindow(QMainWindow):
         self.copy_btn = QPushButton("Copy")
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self.copy_transcript)
-        self.hf_token_btn = QPushButton("HF Token")
-        self.hf_token_btn.clicked.connect(self.configure_hf_token)
-        self.model_help_btn = QPushButton("Model Help")
-        self.model_help_btn.clicked.connect(self.show_model_help)
-        self.benchmark_btn = QPushButton("Benchmark")
-        self.benchmark_btn.clicked.connect(self.open_benchmark_dialog)
-
         actions.addWidget(self.transcribe_btn)
         actions.addWidget(self.cancel_btn)
         actions.addWidget(self.force_stop_btn)
         actions.addWidget(self.save_btn)
         actions.addWidget(self.open_btn)
         actions.addWidget(self.copy_btn)
-        actions.addWidget(self.hf_token_btn)
-        actions.addWidget(self.model_help_btn)
-        actions.addWidget(self.benchmark_btn)
 
         self.status_label = QLabel("Ready")
         self.hf_token_status = QLabel(self._hf_token_status_text())
@@ -444,6 +486,10 @@ class MainWindow(QMainWindow):
         self.diar_progress_bar.setFormat("Diarization %p%")
         self._set_bar_color(self.progress_bar, "#dc2626")
         self._set_bar_color(self.diar_progress_bar, "#dc2626")
+        self.transcription_time_label = QLabel("Transcription time: --")
+        self.transcription_time_label.setObjectName("metricsLabel")
+        self.diar_time_label = QLabel("Diarization time: --")
+        self.diar_time_label.setObjectName("metricsLabel")
 
         self.text_area = QTextEdit()
         self.text_area.setPlaceholderText("Transcript appears here...")
@@ -457,9 +503,42 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.hf_token_status)
         layout.addWidget(self.hw_metrics_label)
         layout.addWidget(self.progress_bar)
+        layout.addWidget(self.transcription_time_label)
         layout.addWidget(self.diar_progress_bar)
+        layout.addWidget(self.diar_time_label)
         layout.addWidget(self.text_area, 1)
         self.setCentralWidget(root)
+
+    def _build_menus(self):
+        tools_menu = self.menuBar().addMenu("&Tools")
+        help_menu = self.menuBar().addMenu("&Help")
+
+        hf_action = QAction("HF Token...", self)
+        hf_action.setShortcut(QKeySequence("Ctrl+Shift+T"))
+        hf_action.triggered.connect(self.configure_hf_token)
+        tools_menu.addAction(hf_action)
+
+        benchmark_action = QAction("Benchmark...", self)
+        benchmark_action.setShortcut(QKeySequence("Ctrl+B"))
+        benchmark_action.triggered.connect(self.open_benchmark_dialog)
+        tools_menu.addAction(benchmark_action)
+
+        app_help_action = QAction("PyScribe Help", self)
+        app_help_action.setShortcut(QKeySequence.HelpContents)
+        app_help_action.triggered.connect(self.show_app_help)
+        help_menu.addAction(app_help_action)
+
+        model_help_action = QAction("Model Help", self)
+        model_help_action.triggered.connect(self.show_model_help)
+        help_menu.addAction(model_help_action)
+
+        logs_action = QAction("Open Logs Folder", self)
+        logs_action.triggered.connect(self.open_logs_folder)
+        help_menu.addAction(logs_action)
+
+        about_action = QAction("About PyScribe", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(about_action)
 
     def _apply_theme(self):
         self.setFont(QFont("Noto Sans", 10))
@@ -554,6 +633,15 @@ class MainWindow(QMainWindow):
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Missing file", "The selected file does not exist.")
             return
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in ALLOWED_MEDIA_EXTS:
+            QMessageBox.warning(
+                self,
+                "Unsupported file",
+                "Please select an audio/video media file.\n\n"
+                f"Unsupported extension: {ext or '(none)'}",
+            )
+            return
         self.media_path = path
         self.last_open_dir = os.path.dirname(path) or self.last_open_dir
         self.path_label.setText(path)
@@ -579,6 +667,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No model", "Please select a model.")
             return
         self.model_combo.setCurrentText(model_name)
+        LOGGER.info("Qt start transcription model=%s media=%s", model_name, self.media_path)
 
         if not self._confirm_model_download(model_name):
             return
@@ -591,6 +680,8 @@ class MainWindow(QMainWindow):
         self.diarization_warning = None
         self.progress_bar.setValue(0)
         self.diar_progress_bar.setValue(0)
+        self.transcription_time_label.setText("Transcription time: --")
+        self.diar_time_label.setText("Diarization time: --")
         self.status_label.setText("Starting...")
         self.transcribe_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
@@ -602,6 +693,7 @@ class MainWindow(QMainWindow):
         max_speakers_text = self.max_speakers_input.text().strip()
         max_speakers = int(max_speakers_text) if max_speakers_text.isdigit() else None
         use_diarization = self.diar_checkbox.isChecked()
+        self._current_use_diarization = use_diarization
         diar_backend = self.diar_backend_combo.currentData() if use_diarization else "off"
         self._save_config(
             last_model=model_name,
@@ -628,6 +720,8 @@ class MainWindow(QMainWindow):
         self.worker.diar_progress.connect(self._on_diar_progress)
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.failed.connect(self._on_worker_failed)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.failed.connect(self.worker_thread.quit)
         self.worker_thread.start()
 
     @Slot()
@@ -664,7 +758,20 @@ class MainWindow(QMainWindow):
             self._set_bar_color(self.diar_progress_bar, self._progress_color(65))
 
     @Slot(bool, str)
-    def _on_worker_finished(self, cancelled: bool, transcript: str):
+    def _on_worker_finished(
+        self,
+        cancelled: bool,
+        transcript: str,
+        transcription_seconds: float,
+        diarization_seconds: float,
+    ):
+        LOGGER.info(
+            "Qt worker finished cancelled=%s transcript_len=%s transcribe_seconds=%.2f diar_seconds=%.2f",
+            cancelled,
+            len(transcript or ""),
+            transcription_seconds,
+            diarization_seconds,
+        )
         self.transcript_text = transcript
         self.text_area.setPlainText(transcript)
         self.transcribe_btn.setEnabled(True)
@@ -678,6 +785,11 @@ class MainWindow(QMainWindow):
             self._set_bar_color(self.progress_bar, self._progress_color(100))
         done = "Cancelled." if cancelled else "Transcription complete."
         self.status_label.setText(done)
+        self.transcription_time_label.setText(f"Transcription time: {self._format_seconds(transcription_seconds)}")
+        if self._current_use_diarization:
+            self.diar_time_label.setText(f"Diarization time: {self._format_seconds(diarization_seconds)}")
+        else:
+            self.diar_time_label.setText("Diarization time: n/a (disabled)")
         if transcript:
             self.save_btn.setEnabled(True)
             self.copy_btn.setEnabled(True)
@@ -689,6 +801,7 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_worker_failed(self, error_msg: str):
+        LOGGER.error("Qt worker failed: %s", error_msg)
         self.transcribe_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
@@ -696,6 +809,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.diar_progress_bar.setRange(0, 100)
         self.status_label.setText("Error")
+        self.transcription_time_label.setText("Transcription time: --")
+        self.diar_time_label.setText("Diarization time: --")
         QMessageBox.critical(self, "Transcription error", error_msg)
         self._hide_download_progress_dialog()
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
@@ -763,16 +878,29 @@ class MainWindow(QMainWindow):
     def _cleanup_worker(self):
         if not self.worker_thread:
             return
+        LOGGER.info(
+            "Qt cleanup worker begin thread_running=%s",
+            self.worker_thread.isRunning(),
+        )
         if QThread.currentThread() == self.worker_thread:
             self.worker_thread.quit()
+            LOGGER.info("Qt cleanup worker called on worker thread; deferred quit.")
             return
-        self.worker_thread.quit()
-        self.worker_thread.wait(2000)
+        if self.worker_thread.isRunning():
+            self.worker_thread.quit()
+            if not self.worker_thread.wait(3000):
+                LOGGER.warning("Qt cleanup worker timed out; requesting force stop.")
+                if self.worker is not None:
+                    self.worker.request_force_stop()
+                self.worker_thread.quit()
+                self.worker_thread.wait(3000)
         self.worker_thread = None
         self.worker = None
+        LOGGER.info("Qt cleanup worker end")
 
     def closeEvent(self, event):  # noqa: N802
         if self.worker_thread and self.worker_thread.isRunning():
+            LOGGER.warning("Qt close requested while transcription is running.")
             if self.worker is not None:
                 self.worker.request_cancel()
             QMessageBox.information(
@@ -782,6 +910,8 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+        LOGGER.info("Qt close accepted")
+        self.stop_hw_monitor()
         event.accept()
 
     def _hf_token_status_text(self) -> str:
@@ -824,6 +954,16 @@ class MainWindow(QMainWindow):
         if value >= 26:
             return "#f97316"  # orange
         return "#dc2626"  # red
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        if seconds <= 0:
+            return "0.0s"
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        mins = int(seconds // 60)
+        rem = seconds - (mins * 60)
+        return f"{mins}m {rem:.1f}s"
 
     @staticmethod
     def _set_bar_color(bar: QProgressBar, color: str):
@@ -883,6 +1023,62 @@ class MainWindow(QMainWindow):
             ),
         )
 
+    @Slot()
+    def show_app_help(self):
+        help_text = self._load_help_markdown()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("PyScribe Help")
+        dlg.resize(760, 560)
+
+        layout = QVBoxLayout(dlg)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setMarkdown(help_text)
+        layout.addWidget(text)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn)
+        dlg.exec()
+
+    @Slot()
+    def show_about_dialog(self):
+        repo_url = "https://github.com/readydave/PyScribe"
+        msg = QMessageBox(self)
+        msg.setWindowTitle("About PyScribe")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(
+            "PyScribe<br><br>"
+            "Local transcription app with Qt desktop and Gradio listener modes.<br><br>"
+            f'Repository: <a href="{repo_url}">{repo_url}</a>'
+        )
+        msg.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec()
+
+    @Slot()
+    def open_logs_folder(self):
+        try:
+            log_dir = os.path.dirname(str(get_log_path()))
+            if not os.path.isdir(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+            open_folder(log_dir)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open logs folder failed", str(exc))
+
+    @staticmethod
+    def _load_help_markdown() -> str:
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "qt_help.md")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return fh.read()
+        except OSError:
+            return (
+                "# PyScribe Help\n\n"
+                "Documentation file was not found.\n\n"
+                "Expected path: docs/qt_help.md\n"
+            )
+
     def _resolve_language_choice(self, model_name: str) -> str | None:
         """
         Detect language and let the user confirm/override before transcription.
@@ -895,7 +1091,13 @@ class MainWindow(QMainWindow):
             audio_np = load_audio_waveform(self.media_path)
             lang_code, lang_prob = detect_language(audio_np, device=self.runtime.device)
         except Exception as exc:
-            QMessageBox.warning(self, "Language detection failed", f"Continuing with auto-detect.\n\n{exc}")
+            msg = str(exc)
+            if "Output file does not contain any stream" in msg or "does not contain any stream" in msg:
+                msg = (
+                    "The selected file appears to have no audio stream.\n"
+                    "Please choose an audio/video file that contains audio."
+                )
+            QMessageBox.warning(self, "Language detection failed", f"Continuing with auto-detect.\n\n{msg}")
             return None
 
         if ".en" in model_name.lower() and lang_code != "en":
@@ -1056,4 +1258,6 @@ def run_qt_app():
     app = QApplication.instance() or QApplication([])
     win = MainWindow()
     win.show()
+    LOGGER.info("Qt app event loop starting")
     app.exec()
+    LOGGER.info("Qt app event loop exited")

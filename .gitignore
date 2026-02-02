@@ -6,6 +6,7 @@ venv/
 
 # Python cache
 __pycache__/
+.pycache_tmp/
 *.pyc
 *.pyo
 *.pyd
@@ -25,6 +26,7 @@ dist/
 # Temporary files
 *.log
 *.tmp
+.pyscribe_logs/
 launch.bat
 
 

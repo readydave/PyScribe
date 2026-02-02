@@ -8,6 +8,7 @@ from typing import List, Dict, Optional, Callable
 from diarization import run_diarization as run_pyannote
 
 ProgressCB = Optional[Callable[[float], None]]
+StatusCB = Optional[Callable[[str], None]]
 
 
 def _bump(cb: ProgressCB, value: float):
@@ -15,16 +16,28 @@ def _bump(cb: ProgressCB, value: float):
         cb(min(max(value, 0), 100))
 
 
-def run_pyannote_fast(audio_path: str, device: str, max_speakers: Optional[int], progress_cb: ProgressCB = None) -> List[Dict]:
+def run_pyannote_fast(
+    audio_path: str,
+    device: str,
+    max_speakers: Optional[int],
+    progress_cb: ProgressCB = None,
+    status_cb: StatusCB = None,
+) -> List[Dict]:
     """
     A slightly faster variant of the pyannote pipeline.
     Today this reuses the same pipeline but keeps a hook to tweak settings later.
     """
     _bump(progress_cb, 35)
-    return run_pyannote(audio_path, device=device, max_speakers=max_speakers)
+    return run_pyannote(audio_path, device=device, max_speakers=max_speakers, status_cb=status_cb)
 
 
-def run_nemo_sortformer(audio_path: str, device: str, max_speakers: Optional[int], progress_cb: ProgressCB = None) -> List[Dict]:
+def run_nemo_sortformer(
+    audio_path: str,
+    device: str,
+    max_speakers: Optional[int],
+    progress_cb: ProgressCB = None,
+    status_cb: StatusCB = None,
+) -> List[Dict]:
     """
     Optional NVIDIA NeMo Sortformer diarization backend.
     Requires nemo_toolkit[asr] >= 1.23 and a CUDA GPU.
@@ -37,6 +50,8 @@ def run_nemo_sortformer(audio_path: str, device: str, max_speakers: Optional[int
 
     if device != "cuda":
         raise RuntimeError("NeMo Sortformer requires CUDA GPU.")
+    if status_cb:
+        status_cb("Diarization backend: sortformer | Device: CUDA")
 
     _bump(progress_cb, 20)
     # API guard: NeMo releases use different class names
@@ -134,6 +149,7 @@ def run_diarization_backend(
     device: str = "cpu",
     max_speakers: Optional[int] = None,
     progress_cb: ProgressCB = None,
+    status_cb: StatusCB = None,
 ) -> List[Dict]:
     """
     Dispatch diarization to the selected backend.
@@ -147,4 +163,10 @@ def run_diarization_backend(
     runner = meta["runner"]
     if runner is None:
         return []
-    return runner(audio_path=audio_path, device=device, max_speakers=max_speakers, progress_cb=progress_cb)
+    return runner(
+        audio_path=audio_path,
+        device=device,
+        max_speakers=max_speakers,
+        progress_cb=progress_cb,
+        status_cb=status_cb,
+    )

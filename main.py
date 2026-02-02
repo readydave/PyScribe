@@ -2,8 +2,13 @@
 # Entry point for PyScribe desktop and listener modes.
 
 import argparse
+import os
 import sys
 import warnings
+
+# Reduce noisy ONNX Runtime warning logs (keep errors/fatal only).
+os.environ.setdefault("ORT_LOG_SEVERITY_LEVEL", "3")
+os.environ.setdefault("ORT_LOG_VERBOSITY_LEVEL", "0")
 
 # Silence noisy dependency warning from ctranslate2.
 warnings.filterwarnings(
@@ -111,14 +116,43 @@ def parse_args():
     qt_parser = subparsers.add_parser("qt", help="Run PySide6 desktop GUI")
     qt_parser.set_defaults(mode="qt")
 
-    args = parser.parse_args()
-    if not args.mode:
-        args.mode = "desktop"
-    return args
+    return parser.parse_args()
+
+
+def prompt_launch_mode() -> str:
+    """Interactive launcher menu shown when no CLI mode is provided."""
+    print("\nPyScribe launcher")
+    print("  1) Desktop (Tk)")
+    print("  2) Desktop (Qt)")
+    print("  3) Listener (Gradio web)")
+    while True:
+        choice = input("Choose mode [1/2/3] (default 1): ").strip() or "1"
+        if choice in {"1", "2", "3"}:
+            return choice
+        print("Please enter 1, 2, or 3.")
 
 
 def main():
     args = parse_args()
+    if len(sys.argv) == 1:
+        selected = prompt_launch_mode()
+        if selected == "1":
+            run_desktop()
+            return
+        if selected == "2":
+            run_qt()
+            return
+        run_listener(
+            host="0.0.0.0",
+            port=7860,
+            max_port_tries=50,
+            share=False,
+            queue_size=16,
+            auth_user=None,
+            auth_pass=None,
+        )
+        return
+
     if args.gui == "qt":
         run_qt()
         return

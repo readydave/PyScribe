@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import datetime
+import multiprocessing as mp
 import os
+import queue
 import threading
 import time
 
@@ -53,6 +55,7 @@ from utils import load_audio_waveform
 AUDIO_VIDEO_FILTER = (
     "Media Files (*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.wma *.mp4 *.mov *.mkv *.avi *.flv);;All Files (*.*)"
 )
+_UNSET = object()
 
 
 class DropLabel(QLabel):
@@ -90,6 +93,54 @@ class DropLabel(QLabel):
         event.acceptProposedAction()
 
 
+def _transcription_process_entry(
+    media_path: str,
+    model_name: str,
+    device: str,
+    compute_type: str,
+    language: str | None,
+    use_diarization: bool,
+    diar_backend: str,
+    max_speakers: int | None,
+    event_queue,
+    cancel_event,
+):
+    def _emit(kind: str, value):
+        event_queue.put({"type": kind, "value": value})
+
+    try:
+        def _run_with(device_name: str, compute_name: str):
+            return transcribe_media_file(
+                media_path=media_path,
+                model_name=model_name,
+                device=device_name,
+                compute_type=compute_name,
+                language=language,
+                cancel_event=cancel_event,
+                use_diarization=use_diarization,
+                diar_backend=diar_backend,
+                max_speakers=max_speakers,
+                on_status=lambda msg: _emit("status", msg),
+                on_text=lambda text: _emit("transcript", text),
+                on_progress=lambda p: _emit("progress", max(0, min(100, int(p)))),
+                on_diar_progress=lambda p: _emit("diar_progress", max(0, min(100, int(p)))),
+                on_model_download_progress=lambda p: _emit("model_download_progress", max(0, min(100, int(p)))),
+            )
+
+        try:
+            result = _run_with(device, compute_type)
+        except Exception as cuda_exc:
+            msg = str(cuda_exc).lower()
+            if device == "cuda" and ("initialization error" in msg or "cuda failed" in msg):
+                _emit("status", "CUDA init failed in worker process. Retrying on CPU...")
+                result = _run_with("cpu", "int8")
+            else:
+                raise
+        _emit("finished", {"cancelled": result.cancelled, "transcript": result.transcript})
+    except Exception as exc:
+        _emit("error", str(exc))
+
+
 class TranscriptionWorker(QObject):
     status = Signal(str)
     transcript = Signal(str)
@@ -103,7 +154,6 @@ class TranscriptionWorker(QObject):
         self,
         media_path: str,
         model_name: str,
-        cancel_event: threading.Event,
         use_diarization: bool,
         diar_backend: str,
         max_speakers: int | None,
@@ -112,35 +162,150 @@ class TranscriptionWorker(QObject):
         super().__init__()
         self.media_path = media_path
         self.model_name = model_name
-        self.cancel_event = cancel_event
         self.use_diarization = use_diarization
         self.diar_backend = diar_backend
         self.max_speakers = max_speakers
         self.language = language
         self.runtime = detect_runtime()
+        self._lock = threading.Lock()
+        self._cancel_requested = False
+        self._force_stop_requested = False
+        self._mp_cancel_event = None
+        self._process = None
+
+    @Slot()
+    def request_cancel(self):
+        with self._lock:
+            self._cancel_requested = True
+            if self._mp_cancel_event is not None:
+                self._mp_cancel_event.set()
+
+    @Slot()
+    def request_force_stop(self):
+        with self._lock:
+            self._force_stop_requested = True
+            proc = self._process
+        if proc is not None and proc.is_alive():
+            proc.terminate()
 
     @Slot()
     def run(self):
+        # Always use spawn to avoid CUDA re-init issues after forking.
+        mp_ctx = mp.get_context("spawn")
+        event_queue = mp_ctx.Queue()
+        cancel_event = mp_ctx.Event()
+        process = mp_ctx.Process(
+            target=_transcription_process_entry,
+            args=(
+                self.media_path,
+                self.model_name,
+                self.runtime.device,
+                self.runtime.compute_type,
+                self.language,
+                self.use_diarization,
+                self.diar_backend,
+                self.max_speakers,
+                event_queue,
+                cancel_event,
+            ),
+        )
+        latest_transcript = ""
+        terminal_emitted = False
+        force_stopped = False
         try:
-            result = transcribe_media_file(
-                media_path=self.media_path,
-                model_name=self.model_name,
-                device=self.runtime.device,
-                compute_type=self.runtime.compute_type,
-                language=self.language,
-                cancel_event=self.cancel_event,
-                use_diarization=self.use_diarization,
-                diar_backend=self.diar_backend,
-                max_speakers=self.max_speakers,
-                on_status=self.status.emit,
-                on_text=self.transcript.emit,
-                on_progress=lambda p: self.progress.emit(max(0, min(100, int(p)))),
-                on_diar_progress=lambda p: self.diar_progress.emit(max(0, min(100, int(p)))),
-                on_model_download_progress=lambda p: self.model_download_progress.emit(max(0, min(100, int(p)))),
-            )
-            self.finished.emit(result.cancelled, result.transcript)
-        except Exception as exc:
-            self.failed.emit(str(exc))
+            with self._lock:
+                self._mp_cancel_event = cancel_event
+                self._process = process
+            process.start()
+
+            while True:
+                with self._lock:
+                    cancel_req = self._cancel_requested
+                    force_req = self._force_stop_requested
+
+                if cancel_req and not cancel_event.is_set():
+                    cancel_event.set()
+                if force_req and process.is_alive():
+                    self.status.emit("Force stop requested. Terminating worker process...")
+                    process.terminate()
+                    force_stopped = True
+
+                drained = False
+                while True:
+                    try:
+                        evt = event_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    drained = True
+                    etype = evt.get("type")
+                    value = evt.get("value")
+                    if etype == "status":
+                        self.status.emit(str(value))
+                    elif etype == "transcript":
+                        latest_transcript = str(value)
+                        self.transcript.emit(latest_transcript)
+                    elif etype == "progress":
+                        self.progress.emit(int(value))
+                    elif etype == "diar_progress":
+                        self.diar_progress.emit(int(value))
+                    elif etype == "model_download_progress":
+                        self.model_download_progress.emit(int(value))
+                    elif etype == "finished":
+                        terminal_emitted = True
+                        self.finished.emit(bool(value.get("cancelled")), str(value.get("transcript", latest_transcript)))
+                    elif etype == "error":
+                        terminal_emitted = True
+                        self.failed.emit(str(value))
+
+                if not process.is_alive() and not drained:
+                    break
+                time.sleep(0.05)
+
+            process.join(timeout=2.0)
+
+            # Drain any final queued events.
+            while True:
+                try:
+                    evt = event_queue.get_nowait()
+                except queue.Empty:
+                    break
+                etype = evt.get("type")
+                value = evt.get("value")
+                if etype == "status":
+                    self.status.emit(str(value))
+                elif etype == "transcript":
+                    latest_transcript = str(value)
+                    self.transcript.emit(latest_transcript)
+                elif etype == "progress":
+                    self.progress.emit(int(value))
+                elif etype == "diar_progress":
+                    self.diar_progress.emit(int(value))
+                elif etype == "model_download_progress":
+                    self.model_download_progress.emit(int(value))
+                elif etype == "finished" and not terminal_emitted:
+                    terminal_emitted = True
+                    self.finished.emit(bool(value.get("cancelled")), str(value.get("transcript", latest_transcript)))
+                elif etype == "error" and not terminal_emitted:
+                    terminal_emitted = True
+                    self.failed.emit(str(value))
+
+            if force_stopped and not terminal_emitted:
+                self.finished.emit(True, latest_transcript)
+        finally:
+            with self._lock:
+                self._mp_cancel_event = None
+                self._process = None
+            try:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=1.0)
+            except Exception:
+                pass
+            try:
+                event_queue.close()
+                event_queue.join_thread()
+            except Exception:
+                pass
 
 
 class MainWindow(QMainWindow):
@@ -154,19 +319,22 @@ class MainWindow(QMainWindow):
         self.runtime = detect_runtime()
         self.config = load_config()
         self.media_path: str | None = None
+        self.last_open_dir = self.config.last_open_dir or os.path.expanduser("~")
+        self.last_save_dir = self.config.last_save_dir
         self.transcript_text = ""
-        self.cancel_event = threading.Event()
         self.worker_thread: QThread | None = None
         self.worker: TranscriptionWorker | None = None
         self.monitoring_active = False
         self.metrics_thread: threading.Thread | None = None
         self.download_progress_dialog: QProgressDialog | None = None
+        self.diarization_warning: str | None = None
 
         self._build_ui()
         self._apply_theme()
         self._set_bar_color(self.progress_bar, "#dc2626")
         self._set_bar_color(self.diar_progress_bar, "#dc2626")
         self.hw_metrics.connect(self.hw_metrics_label.setText)
+        self._update_diar_ui_state(self.diar_checkbox.isChecked())
 
     def _build_ui(self):
         root = QWidget()
@@ -178,8 +346,12 @@ class MainWindow(QMainWindow):
         self.path_label.setObjectName("pathLabel")
         browse_btn = QPushButton("Browse")
         browse_btn.clicked.connect(self.on_browse)
+        self.exit_btn = QPushButton("Exit")
+        self.exit_btn.setObjectName("exitButton")
+        self.exit_btn.clicked.connect(self.close)
         top_row.addWidget(self.path_label, 1)
         top_row.addWidget(browse_btn)
+        top_row.addWidget(self.exit_btn)
 
         model_row = QHBoxLayout()
         model_row.addWidget(QLabel("Model"))
@@ -200,6 +372,9 @@ class MainWindow(QMainWindow):
         diar_row = QHBoxLayout()
         self.diar_checkbox = QCheckBox("Identify Speakers")
         self.diar_checkbox.setChecked(bool(self.config.use_diarization))
+        self._update_diar_toggle_label(self.diar_checkbox.isChecked())
+        self.diar_checkbox.toggled.connect(self._update_diar_toggle_label)
+        self.diar_checkbox.toggled.connect(self._update_diar_ui_state)
         diar_row.addWidget(self.diar_checkbox)
         diar_row.addWidget(QLabel("Mode"))
         self.diar_backend_combo = QComboBox()
@@ -227,6 +402,9 @@ class MainWindow(QMainWindow):
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_transcription)
+        self.force_stop_btn = QPushButton("Force Stop")
+        self.force_stop_btn.setEnabled(False)
+        self.force_stop_btn.clicked.connect(self.force_stop_transcription)
         self.save_btn = QPushButton("Save")
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self.save_transcript)
@@ -244,6 +422,7 @@ class MainWindow(QMainWindow):
 
         actions.addWidget(self.transcribe_btn)
         actions.addWidget(self.cancel_btn)
+        actions.addWidget(self.force_stop_btn)
         actions.addWidget(self.save_btn)
         actions.addWidget(self.open_btn)
         actions.addWidget(self.copy_btn)
@@ -329,6 +508,29 @@ class MainWindow(QMainWindow):
             QPushButton:disabled {
                 background: #94a3b8;
             }
+            QPushButton#exitButton {
+                background: #dc2626;
+            }
+            QPushButton#exitButton:hover {
+                background: #b91c1c;
+            }
+            QCheckBox {
+                color: #0f172a;
+                font-weight: 600;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 20px;
+                height: 20px;
+                border: 2px solid #334155;
+                border-radius: 4px;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                border: 2px solid #0f766e;
+                background: #0f766e;
+                image: url(:/qt-project.org/styles/commonstyle/images/checkbox_checked.png);
+            }
             QTextEdit {
                 background: #ffffff;
                 border: 1px solid #d0d7e2;
@@ -353,12 +555,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Missing file", "The selected file does not exist.")
             return
         self.media_path = path
+        self.last_open_dir = os.path.dirname(path) or self.last_open_dir
         self.path_label.setText(path)
         self.status_label.setText(f"Selected: {os.path.basename(path)}")
+        self._save_config()
 
     @Slot()
     def on_browse(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select Media File", "", AUDIO_VIDEO_FILTER)
+        start_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")
+        path, _ = QFileDialog.getOpenFileName(self, "Select Media File", start_dir, AUDIO_VIDEO_FILTER)
         if path:
             self.set_media_path(path)
 
@@ -383,12 +588,13 @@ class MainWindow(QMainWindow):
             self._hide_download_progress_dialog()
             return
 
-        self.cancel_event.clear()
+        self.diarization_warning = None
         self.progress_bar.setValue(0)
         self.diar_progress_bar.setValue(0)
         self.status_label.setText("Starting...")
         self.transcribe_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
+        self.force_stop_btn.setEnabled(True)
         self.save_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         self.start_hw_monitor()
@@ -397,23 +603,17 @@ class MainWindow(QMainWindow):
         max_speakers = int(max_speakers_text) if max_speakers_text.isdigit() else None
         use_diarization = self.diar_checkbox.isChecked()
         diar_backend = self.diar_backend_combo.currentData() if use_diarization else "off"
-        try:
-            save_config(
-                AppConfig(
-                    last_model=model_name,
-                    use_diarization=use_diarization,
-                    max_speakers=max_speakers,
-                    diar_backend=diar_backend,
-                )
-            )
-        except Exception:
-            pass
+        self._save_config(
+            last_model=model_name,
+            use_diarization=use_diarization,
+            max_speakers=max_speakers,
+            diar_backend=diar_backend,
+        )
 
         self.worker_thread = QThread()
         self.worker = TranscriptionWorker(
             self.media_path,
             model_name,
-            self.cancel_event,
             use_diarization=use_diarization,
             diar_backend=diar_backend,
             max_speakers=max_speakers,
@@ -432,9 +632,18 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def cancel_transcription(self):
-        self.cancel_event.set()
+        if self.worker is not None:
+            self.worker.request_cancel()
         self.status_label.setText("Cancelling... waiting for current stage to yield.")
         self.cancel_btn.setEnabled(False)
+
+    @Slot()
+    def force_stop_transcription(self):
+        if self.worker is not None:
+            self.worker.request_force_stop()
+        self.status_label.setText("Force stop requested...")
+        self.cancel_btn.setEnabled(False)
+        self.force_stop_btn.setEnabled(False)
 
     @Slot(str)
     def _on_transcript_update(self, text: str):
@@ -444,6 +653,8 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_status_update(self, text: str):
         self.status_label.setText(text)
+        if text.startswith("Diarization unavailable"):
+            self.diarization_warning = text
         # Pyannote diarization can be a long blocking stage; show busy indicator instead of a stuck 25%.
         if "Running diarization" in text and self.diar_progress_bar.maximum() != 0:
             self.diar_progress_bar.setRange(0, 0)
@@ -458,27 +669,36 @@ class MainWindow(QMainWindow):
         self.text_area.setPlainText(transcript)
         self.transcribe_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.force_stop_btn.setEnabled(False)
         self.stop_hw_monitor()
         self.progress_bar.setRange(0, 100)
         self.diar_progress_bar.setRange(0, 100)
+        if not cancelled:
+            self.progress_bar.setValue(100)
+            self._set_bar_color(self.progress_bar, self._progress_color(100))
         done = "Cancelled." if cancelled else "Transcription complete."
         self.status_label.setText(done)
         if transcript:
             self.save_btn.setEnabled(True)
             self.copy_btn.setEnabled(True)
+        if self.diarization_warning:
+            QMessageBox.warning(self, "Diarization", self.diarization_warning)
         self._hide_download_progress_dialog()
+        self._update_diar_ui_state(self.diar_checkbox.isChecked())
         self._cleanup_worker()
 
     @Slot(str)
     def _on_worker_failed(self, error_msg: str):
         self.transcribe_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.force_stop_btn.setEnabled(False)
         self.stop_hw_monitor()
         self.progress_bar.setRange(0, 100)
         self.diar_progress_bar.setRange(0, 100)
         self.status_label.setText("Error")
         QMessageBox.critical(self, "Transcription error", error_msg)
         self._hide_download_progress_dialog()
+        self._update_diar_ui_state(self.diar_checkbox.isChecked())
         self._cleanup_worker()
 
     @Slot(int)
@@ -495,6 +715,24 @@ class MainWindow(QMainWindow):
             self.diar_progress_bar.setRange(0, 100)
         self.diar_progress_bar.setValue(value)
         self._set_bar_color(self.diar_progress_bar, self._progress_color(value))
+
+    @Slot(bool)
+    def _update_diar_ui_state(self, enabled: bool):
+        self.diar_backend_combo.setEnabled(enabled)
+        self.max_speakers_input.setEnabled(enabled)
+        self.diar_progress_bar.setEnabled(enabled)
+        if not enabled:
+            self.diar_progress_bar.setRange(0, 100)
+            self.diar_progress_bar.setValue(0)
+            self.diar_progress_bar.setFormat("Diarization disabled")
+            self._set_bar_color(self.diar_progress_bar, "#94a3b8")
+        else:
+            self.diar_progress_bar.setFormat("Diarization %p%")
+            self._set_bar_color(self.diar_progress_bar, self._progress_color(self.diar_progress_bar.value()))
+
+    @Slot(bool)
+    def _update_diar_toggle_label(self, enabled: bool):
+        self.diar_checkbox.setText("Speaker Identification is On" if enabled else "Speaker Identification is Off")
 
     @Slot(int)
     def _on_model_download_progress(self, value: int):
@@ -535,7 +773,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):  # noqa: N802
         if self.worker_thread and self.worker_thread.isRunning():
-            self.cancel_event.set()
+            if self.worker is not None:
+                self.worker.request_cancel()
             QMessageBox.information(
                 self,
                 "Transcription running",
@@ -748,12 +987,18 @@ class MainWindow(QMainWindow):
             stem = os.path.splitext(os.path.basename(self.media_path))[0]
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         suggested = f"{stem}_{ts}.txt"
-        path, _ = QFileDialog.getSaveFileName(self, "Save Transcript", suggested, "Text Files (*.txt)")
+        default_dir = os.path.dirname(self.media_path) if self.media_path else self.last_save_dir
+        if not default_dir or not os.path.isdir(default_dir):
+            default_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")
+        suggested_path = os.path.join(default_dir, suggested)
+        path, _ = QFileDialog.getSaveFileName(self, "Save Transcript", suggested_path, "Text Files (*.txt)")
         if not path:
             return
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(self.transcript_text)
+            self.last_save_dir = os.path.dirname(path) or self.last_save_dir
+            self._save_config()
             self.status_label.setText(f"Saved: {os.path.basename(path)}")
         except OSError as exc:
             QMessageBox.critical(self, "Save failed", str(exc))
@@ -767,7 +1012,12 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def open_transcriptions_folder(self):
-        folder = os.path.dirname(self.media_path) if self.media_path else os.path.expanduser("~")
+        if self.media_path:
+            folder = os.path.dirname(self.media_path)
+        elif self.last_open_dir and os.path.isdir(self.last_open_dir):
+            folder = self.last_open_dir
+        else:
+            folder = os.path.expanduser("~")
         try:
             open_folder(folder)
         except Exception as exc:
@@ -777,6 +1027,29 @@ class MainWindow(QMainWindow):
     def open_benchmark_dialog(self):
         dlg = BenchmarkDialog(parent=self, runtime=self.runtime)
         dlg.exec()
+
+    def _save_config(
+        self,
+        *,
+        last_model: str | object = _UNSET,
+        use_diarization: bool | object = _UNSET,
+        max_speakers: int | None | object = _UNSET,
+        diar_backend: str | object = _UNSET,
+    ):
+        try:
+            if last_model is not _UNSET:
+                self.config.last_model = last_model
+            if use_diarization is not _UNSET:
+                self.config.use_diarization = use_diarization
+            if max_speakers is not _UNSET:
+                self.config.max_speakers = max_speakers
+            if diar_backend is not _UNSET:
+                self.config.diar_backend = diar_backend
+            self.config.last_open_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
+            self.config.last_save_dir = self.last_save_dir if self.last_save_dir and os.path.isdir(self.last_save_dir) else self.config.last_save_dir
+            save_config(self.config)
+        except Exception:
+            pass
 
 
 def run_qt_app():

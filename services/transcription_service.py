@@ -150,8 +150,14 @@ def transcribe_prepared_audio(
             )
         except Exception as exc:
             # Preserve transcript output even when diarization backend fails.
+            diag_msg = str(exc)
+            if "failed to parse CPython sys.version" in diag_msg:
+                diag_msg += (
+                    "\n\nDetected interpreter string parsing issue. If this persists, run PyScribe from a clean shell "
+                    "without Conda/Pinokio LD_LIBRARY_PATH overrides."
+                )
             if on_status:
-                on_status(f"Diarization unavailable, continuing without speakers: {exc}")
+                on_status(f"Diarization unavailable, continuing without speakers: {diag_msg}")
             if on_diar_progress:
                 on_diar_progress(0)
 

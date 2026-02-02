@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import platform
+import re
+import sys
 from typing import List, Dict, Optional
 from huggingface_hub import HfFolder
 import torchaudio
@@ -19,6 +22,42 @@ def _lazy_import_pyannote():
     return Pipeline
 
 
+def _patch_platform_sys_version_parser():
+    """
+    Handle conda-forge style sys.version strings that can break platform parsing.
+    """
+    try:
+        platform.python_implementation()
+        return
+    except ValueError:
+        pass
+
+    original = platform._sys_version  # type: ignore[attr-defined]
+
+    def _safe_sys_version(sys_version=None):
+        try:
+            return original(sys_version)
+        except ValueError:
+            text = sys_version or sys.version
+            match = re.search(
+                r"(?P<ver>\d+\.\d+\.\d+).*?\((?P<buildno>[^,]+),\s*(?P<builddate>[^)]+)\)\s*\[(?P<compiler>[^\]]+)\]",
+                text,
+            )
+            if match:
+                return (
+                    "CPython",
+                    match.group("ver"),
+                    "",
+                    "",
+                    match.group("buildno").strip(),
+                    match.group("builddate").strip(),
+                    match.group("compiler").strip(),
+                )
+            return ("CPython", platform.python_version(), "", "", "", "", "")
+
+    platform._sys_version = _safe_sys_version  # type: ignore[attr-defined]
+
+
 def run_diarization(
     audio_path: str,
     device: str = "cpu",
@@ -29,6 +68,7 @@ def run_diarization(
     Runs diarization on the provided audio file.
     Returns a list of segments: [{"start": float, "end": float, "speaker": "S1"}, ...]
     """
+    _patch_platform_sys_version_parser()
     Pipeline = _lazy_import_pyannote()
     # Some torchaudio builds dropped set_audio_backend; provide a no-op to avoid pipeline errors.
     if not hasattr(torchaudio, "set_audio_backend"):

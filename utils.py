@@ -88,10 +88,14 @@ def get_ffmpeg_cmd(tool: str = "ffmpeg") -> str | None:
     """
     env_dir = os.environ.get("FFMPEG_PATH")
     if env_dir and os.path.isdir(env_dir):
-        tool_path = os.path.join(env_dir, f"{tool}.exe")
-        if os.path.isfile(tool_path):
-            return tool_path
-            
+        candidates = [tool]
+        if sys.platform.startswith("win"):
+            candidates.insert(0, f"{tool}.exe")
+        for candidate in candidates:
+            tool_path = os.path.join(env_dir, candidate)
+            if os.path.isfile(tool_path):
+                return tool_path
+
     return shutil.which(tool)
 
 def convert_to_16k_mono(src_path: str, tmpdir: str, ffmpeg_cmd: str) -> str:

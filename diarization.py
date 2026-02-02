@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import List, Dict, Optional
 from huggingface_hub import HfFolder
 import torchaudio
@@ -40,12 +39,13 @@ def run_diarization(
     if not hasattr(np, "NaN"):
         np.NaN = np.nan  # type: ignore
 
+    token = HfFolder.get_token()
     try:
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
     except Exception:
         # fallback to 3.0 if 3.1 still gated or unavailable
         try:
-            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.0")
+            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.0", use_auth_token=token)
         except Exception as e2:
             raise RuntimeError(f"Failed to load pyannote pipeline (3.1 then 3.0): {e2}")
 

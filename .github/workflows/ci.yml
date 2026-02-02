@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: CLI Help Smoke
+        run: |
+          python main.py --help
+          python main.py serve --help
+          python main.py qt --help
+      - name: Compile Smoke
+        run: |
+          python -m py_compile \
+            main.py app.py ui.py transcriber.py \
+            services/config_service.py services/model_service.py services/transcription_service.py \
+            ui_qt/main_window.py ui_qt/benchmark_dialog.py
+      - name: Listener Script Syntax
+        run: bash -n scripts/run_listener.sh
+      - name: Pytest Smoke
+        run: |
+          python -m pip install pytest
+          pytest -q tests/smoke_cli.py

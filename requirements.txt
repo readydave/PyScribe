@@ -23,6 +23,7 @@ pynvml
 ttkthemes==3.3.0
 tkinterdnd2
 gradio
+PySide6>=6.7
 hf_xet  # Optional accelerator for Hugging Face Xet storage; speeds up model downloads
 
 

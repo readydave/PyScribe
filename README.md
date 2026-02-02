@@ -1,89 +1,74 @@
 # PyScribe - Local Transcription GUI
 
-PyScribe is a Windows-friendly GUI for fast, private audio/video transcription powered by `faster-whisper`. It now includes streamlined model selection, drag-and-drop input, dual progress bars, and optional speaker diarization backends (pyannote or NVIDIA Sortformer).
-
----
-
-## What’s new (high level)
-- Single model chooser with tier badges (🟢 Fast, 🟡 Balanced, 🔴 Pro) and cache status (☑ downloaded, ● cached, ☐ fetch).
-- “Refresh models” merges Hugging Face faster‑whisper/distil models with anything already in your HF cache; “Filter to available” shows only cached models.
-- Drag & Drop audio/video next to Browse File; toolbar consolidated at the top.
-- Dual progress bars: transcription and diarization, with clear status messages.
-- Diarization modes: Off, Fast (pyannote-lite), Accurate (pyannote 3.x), and optional GPU Sortformer (NeMo, CUDA/WSL/Linux).
-- Language confirmations and English override prompts when model/language mismatch.
-- Cache rescan button and hardware‑best model preselect.
-
----
+PyScribe is a cross-platform local transcription app for Windows and Linux, powered by `faster-whisper`. It runs fully on your machine (desktop UI or browser listener mode) for privacy and high performance.
 
 ## Key Features
-- **High-speed transcription** with `faster-whisper`.
-- **Hardware-aware recommendations** for GPU/CPU and model tier.
-- **Live progress + live transcript** with dual bars (transcribe + diarize).
-- **Live hardware monitoring** (CPU, RAM, GPU, VRAM).
-- **Audio playback & cancel** while transcribing.
-- **Auto language detection** with optional forced English override.
-- **Benchmark tool** to compare models on your hardware.
-- **Model selection** from curated faster‑whisper/distil models plus your cached models; badges show tier and download status.
-- **Speaker diarization** with selectable backends and max-speakers limit.
-- **Drag & drop input** for quick file selection.
+- High-speed transcription with `faster-whisper`
+- Hardware-aware model recommendations (GPU/CPU)
+- Live progress, live transcript, and hardware metrics
+- Optional speaker diarization with selectable backends
+- Tk desktop UI, Qt desktop UI, and Gradio listener mode
+- Model download confirmation + in-app progress
+- Hugging Face token support for gated diarization models
 
----
+## Requirements
+- Python 3.12 (recommended)
+- FFmpeg in PATH
+  - Windows: `winget install Gyan.FFmpeg`
+  - Ubuntu/Debian: `sudo apt install ffmpeg`
 
-## Requirements (Windows)
-- **Python 3.12** (recommended).
-- **FFmpeg** on PATH (install with `winget install Gyan.FFmpeg`).
-- **CUDA 12.1** if using GPU Torch on Windows.
-
-Optional (only if you want Sortformer via WSL/Linux):
-- CUDA 12.1 + cuDNN 9.x, Python 3.10+, `nemo_toolkit[asr]`, and `nvidia-cudnn-cu12` wheels inside WSL/Linux.
-
----
-
-## Install (Windows, external venv)
-1) Install FFmpeg: `winget install Gyan.FFmpeg`  
-2) Extract repo to e.g. `C:\Code\PyScribe`  
-3) Create envs folder: `C:\Code\_envs`  
-4) Create venv: `py -3.12 -m venv C:\Code\_envs\pyscribe`  
-5) Activate: `C:\Code\_envs\pyscribe\Scripts\activate`  
-6) `cd C:\Code\PyScribe`  
-7) Install deps (GPU path shown; CPU path is just `-r requirements.txt`):
+## Installation (Windows)
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+py -3.12 -m venv C:\Code\_envs\pyscribe
+C:\Code\_envs\pyscribe\Scripts\activate
+cd C:\Code\PyScribe
 pip install -r requirements.txt
 ```
 
-Launch: double‑click `launch.bat` (auto-uses the external venv).
-
----
-
-## Usage guide
-- **Choose Model**: single dialog with search; badges show tier; status icons show cache.  
-  - **Refresh models**: fetch latest HF faster‑whisper/distil; merge with cache.  
-  - **Filter to available**: show only cached models.  
-  - **Rescan cache**: re-index local HF cache folders.  
-- **Drag & Drop**: drop audio/video onto the red-outlined box; or click **Browse File**.  
-- **Diarization**: check **Identify speakers**, set **Max speakers**.  
-  - **Diar mode**: Off | Fast (pyannote-lite) | Accurate (pyannote 3.x) | Sortformer (NeMo, requires CUDA via WSL/Linux).  
-  - Dual progress bars show when diarization runs.  
-- **Language prompts**: if non‑English is detected with an English-only model, you can force English or cancel.  
-- **Save/Copy**: buttons enable automatically when a run finishes.
-
----
-
-## Optional: Sortformer (NeMo) in WSL/Linux
-Only needed if you want the fastest diarization:
-1) In WSL/Ubuntu: install CUDA drivers; create a Python 3.10+ venv.  
-2) Install CUDA Torch wheels (cu121) and project requirements.  
-3) Add cuDNN wheel and NeMo:  
+## Installation (Linux)
 ```bash
-pip install nvidia-cudnn-cu12==9.1.0.70
-export LD_LIBRARY_PATH="$VIRTUAL_ENV/lib/python3.10/site-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH"
-pip install "nemo_toolkit[asr]==1.23.0"
+sudo apt update
+sudo apt install -y ffmpeg python3.12 python3.12-venv
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
-4) Run `python main.py` inside WSL and select **Diar mode: sortformer**.  
-If you stay on Windows native, use **Accurate** or **Fast** modes instead.
 
----
+## Usage
+```bash
+# Tk desktop UI
+python main.py
+
+# Qt desktop UI
+python main.py qt
+# or
+python main.py --gui qt
+
+# Gradio listener mode
+python main.py serve --host 0.0.0.0 --port 7860
+```
+
+Listener mode auto-falls to the next free port if `7860` is in use.
+
+## Hugging Face Token (Diarization)
+Some diarization pipelines are gated on Hugging Face. In Qt mode, click `HF Token` and paste your token. You may also need to accept terms on model pages (for example, `pyannote/speaker-diarization-3.1`).
+
+## Custom Model Repos
+Users can choose built-in models or custom Hugging Face repos.
+
+- Preferred: `owner/repo`
+- Full HF URLs are accepted and auto-converted to `owner/repo`
+- App performs best-effort size estimation and asks before download
+- Private/gated repos require authentication and accepted model terms
+
+## Packaging and Service Mode
+- Optional CLI install:
+  ```bash
+  pip install .
+  pyscribe --help
+  ```
+- Linux listener helper: `scripts/run_listener.sh`
+- systemd example: `deploy/systemd/pyscribe-listener.service.example`
 
 ## License
 GPLv3

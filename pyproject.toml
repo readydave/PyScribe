@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyscribe"
+version = "0.1.0"
+description = "Local transcription app with Tk, Qt, and Gradio listener modes."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-only" }
+authors = [{ name = "PyScribe Contributors" }]
+
+[project.scripts]
+pyscribe = "main:main"
+
+[tool.setuptools]
+py-modules = [
+  "main",
+  "app",
+  "ui",
+  "transcriber",
+  "benchmark",
+  "benchmark_ui",
+  "utils",
+  "models",
+  "diarization",
+  "diar_backends",
+]
+
+[tool.setuptools.packages.find]
+include = ["services*", "ui_qt*"]

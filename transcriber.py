@@ -4,12 +4,8 @@
 
 import time
 import datetime # For formatting the elapsed time
-import tempfile
-import ffmpeg
-from faster_whisper import WhisperModel
-from utils import get_ffmpeg_cmd, convert_to_16k_mono, load_audio_waveform
-from diar_backends import run_diarization_backend
-from diarization import assign_speakers
+from utils import load_audio_waveform
+from services import detect_language, load_model, transcribe_prepared_audio
 
 def run_transcription(app_instance, model_name: str):
     """
@@ -38,9 +34,7 @@ def run_transcription(app_instance, model_name: str):
         # Step 2: Language Detection and Model Validation
         app_instance.set_status("Detecting language...")
         
-        lang_detector_model = WhisperModel("tiny", device=app_instance.device, compute_type="int8")
-        detected_lang_code, lang_prob, *_ = lang_detector_model.detect_language(audio_np)
-        del lang_detector_model
+        detected_lang_code, lang_prob = detect_language(audio_np, device=app_instance.device)
 
         is_english_only_model = ".en" in model_name.lower()
         lang_to_transcribe_in = detected_lang_code
@@ -63,76 +57,37 @@ def run_transcription(app_instance, model_name: str):
         if app_instance.current_model_name != model_name:
             app_instance.set_status(f"Loading '{model_name}' model...")
             compute_type = "float16" if app_instance.device == "cuda" else "int8"
-            app_instance.model = WhisperModel(model_name, device=app_instance.device, compute_type=compute_type)
+            app_instance.model = load_model(
+                model_name,
+                device=app_instance.device,
+                compute_type=compute_type,
+                use_cache=True,
+            )
             app_instance.current_model_name = model_name
             app_instance.refresh_hf_model_list()
-
-        # Get audio duration for progress bar calculation.
-        try:
-            probe = ffmpeg.probe(wav_path)
-            duration = float(probe['format']['duration'])
-        except (ffmpeg.Error, KeyError):
-            duration = 0
 
         # Step 4: Transcribe
         status_msg = f"Transcribing in {lang_to_transcribe_in}..."
         app_instance.set_status(status_msg)
-        
-        segments_generator, _ = app_instance.model.transcribe(
-            audio_np, task="transcribe", language=lang_to_transcribe_in, beam_size=5
+        result = transcribe_prepared_audio(
+            wav_path=wav_path,
+            model=app_instance.model,
+            language=lang_to_transcribe_in,
+            cancel_event=app_instance.cancel_event,
+            use_diarization=getattr(app_instance, "use_diarization", False),
+            diar_backend=getattr(app_instance, "diar_backend", "accurate"),
+            device=app_instance.device,
+            max_speakers=app_instance.max_speakers_override,
+            on_status=app_instance.set_status,
+            on_text=app_instance.update_text_area,
+            on_progress=app_instance.update_progress,
+            on_diar_progress=app_instance.update_diar_progress,
         )
-        # Reset diarization progress bar for this run.
-        app_instance.update_diar_progress(0)
-        
-        all_text_segments = []
-        all_segments_struct = []
-        for segment in segments_generator:
-            if app_instance.cancel_event.is_set():
-                app_instance.set_status("Transcription cancelled by user.")
-                return
+        if result.cancelled:
+            app_instance.set_status("Transcription cancelled by user.")
+            return
 
-            all_text_segments.append(segment.text.strip())
-            all_segments_struct.append(
-                {
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text.strip(),
-                }
-            )
-            app_instance.update_text_area(" ".join(all_text_segments))
-            if duration > 0:
-                progress = (segment.end / duration) * 100
-                app_instance.update_progress(progress)
-
-        # --- Step 5: Finalize ---
-        # Optional diarization
-        if getattr(app_instance, "use_diarization", False):
-            try:
-                app_instance.set_status("Running diarization (detecting speakers)...")
-                app_instance.update_diar_progress(25)
-                diar_segments = run_diarization_backend(
-                    audio_path=wav_path,
-                    backend=getattr(app_instance, "diar_backend", "accurate"),
-                    device=app_instance.device,
-                    max_speakers=app_instance.max_speakers_override,
-                    progress_cb=app_instance.update_diar_progress,
-                )
-                app_instance.set_status("Assigning speakers to transcript...")
-                app_instance.update_diar_progress(65)
-                labeled = assign_speakers(all_segments_struct, diar_segments)
-                # build transcript with speaker tags
-                lines = []
-                for seg in labeled:
-                    speaker = seg.get("speaker", "S?")
-                    lines.append(f"[{speaker}] {seg['text']}")
-                app_instance.transcription = "\n".join(lines)
-                app_instance.update_diar_progress(100)
-            except Exception as e:
-                app_instance.show_error(f"Diarization failed (continuing without speakers):\n\n{e}")
-                app_instance.transcription = " ".join(all_text_segments)
-                app_instance.update_diar_progress(0)
-        else:
-            app_instance.transcription = " ".join(all_text_segments)
+        app_instance.transcription = result.transcript
 
         # Reflect final transcript (with speakers if available) in the UI text box.
         app_instance.update_text_area(app_instance.transcription)

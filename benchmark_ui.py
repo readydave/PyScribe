@@ -5,6 +5,7 @@ import os
 import threading
 import datetime
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox, scrolledtext, ttk
 
 from utils import get_available_hf_models
@@ -38,6 +39,7 @@ class BenchmarkWindow(tk.Toplevel):
         
         self.cancel_event = threading.Event()
         self.monitoring_active = False # Flag for HW monitor thread
+        self.ui_font_family = self._pick_ui_font_family()
         
         # --- Create Widgets ---
         self.create_widgets()
@@ -106,7 +108,7 @@ class BenchmarkWindow(tk.Toplevel):
         results_frame = ttk.LabelFrame(main_frame, text="Results")
         results_frame.pack(fill=tk.BOTH, expand=True, pady=(10,0))
         
-        self.results_text = scrolledtext.ScrolledText(results_frame, wrap=tk.WORD, font=("Segoe UI", 9))
+        self.results_text = scrolledtext.ScrolledText(results_frame, wrap=tk.WORD, font=(self.ui_font_family, 9))
         self.results_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.results_text.insert(tk.END, "Benchmark results will appear here.\n")
         self.results_text.config(state=tk.DISABLED)
@@ -288,3 +290,14 @@ class BenchmarkWindow(tk.Toplevel):
         for text, tag in metrics:
             self.hw_metrics_text.insert(tk.END, text, tag)
         self.hw_metrics_text.config(state=tk.DISABLED)
+
+    def _pick_ui_font_family(self) -> str:
+        preferred = ["Segoe UI", "Noto Sans", "Ubuntu", "DejaVu Sans", "Arial"]
+        try:
+            families = set(tkfont.families(self))
+        except Exception:
+            return "TkDefaultFont"
+        for family in preferred:
+            if family in families:
+                return family
+        return "TkDefaultFont"

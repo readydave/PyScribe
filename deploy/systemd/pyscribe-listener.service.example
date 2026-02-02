@@ -1,0 +1,23 @@
+[Unit]
+Description=PyScribe Gradio Listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+Group=YOUR_GROUP
+WorkingDirectory=/opt/pyscribe
+Environment=PYSCRIBE_HOST=0.0.0.0
+Environment=PYSCRIBE_PORT=7860
+Environment=PYSCRIBE_MAX_PORT_TRIES=200
+Environment=PYSCRIBE_QUEUE_SIZE=16
+# Optional auth:
+# Environment=PYSCRIBE_AUTH_USER=admin
+# Environment=PYSCRIBE_AUTH_PASS=change-me
+ExecStart=/opt/pyscribe/scripts/run_listener.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

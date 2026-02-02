@@ -3,7 +3,6 @@
 # built with tkinter. It handles window creation, widget layout, and user events.
 
 import os
-import sys
 import threading
 import datetime
 import tempfile
@@ -13,10 +12,8 @@ import warnings
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 import tkinter.font as tkfont
-import json
-from pathlib import Path
-from huggingface_hub import HfApi, hf_hub_download
-from models import get_ranked_models, strip_badges, BADGES, TIER_ORDER
+from huggingface_hub import HfApi
+from models import strip_badges, BADGES, TIER_ORDER
 from diar_backends import available_backends
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -40,6 +37,7 @@ from utils import get_ffmpeg_cmd, convert_to_16k_mono
 from models import TIERS
 from transcriber import run_transcription
 from benchmark_ui import BenchmarkWindow # Import the new benchmark window
+from services import AppConfig, load_config as config_load, open_folder, save_config as config_save
 
 # --- Dynamic Base Class for Theming ---
 try:
@@ -134,10 +132,10 @@ class PyScribeApp(BaseAppClass):
         self.recommended_model_label = f"{self._status_prefix(self.recommended_model_name)} {base_label}"
         self.selected_model_name = self.recommended_model_name
         self.selected_model_label = self.recommended_model_label
-        self.model_font = tkfont.Font(family="Segoe UI", size=10)
-        self.model_font_bold = tkfont.Font(family="Segoe UI", size=10, weight="bold")
+        self.ui_font_family = self._pick_ui_font_family()
+        self.model_font = tkfont.Font(family=self.ui_font_family, size=10)
+        self.model_font_bold = tkfont.Font(family=self.ui_font_family, size=10, weight="bold")
         self.hf_xet_available = self._hf_xet_available()
-        self.config_path = Path.home() / ".pyscribe_config.json"
         self.last_model_used = None
         self.use_diarization = False
         self.max_speakers_override = None
@@ -186,11 +184,11 @@ class PyScribeApp(BaseAppClass):
         model_frame.grid(row=0, column=2, sticky="ew", padx=(4,8))
         model_frame.grid_columnconfigure(1, weight=1)
         ttk.Label(model_frame, text="Model:").grid(row=0, column=0, sticky="w", padx=(0,4))
-        self.model_label = ttk.Label(model_frame, text=self._model_label_text(), font=("Segoe UI", 10, "bold"))
+        self.model_label = ttk.Label(model_frame, text=self._model_label_text(), font=(self.ui_font_family, 10, "bold"))
         self.model_label.grid(row=0, column=1, sticky="w")
 
         ttk.Button(top_frame, text="Choose Model", command=self.open_model_dialog).grid(row=0, column=3, sticky="w", padx=(6,8))
-        self.transcribe_btn = tk.Button(top_frame, text="Transcribe", command=self.start_transcription, font=("Segoe UI", 9, "bold"))
+        self.transcribe_btn = tk.Button(top_frame, text="Transcribe", command=self.start_transcription, font=(self.ui_font_family, 9, "bold"))
         self.transcribe_btn.grid(row=0, column=4, sticky="e", padx=(0,8))
         tk.Button(top_frame, text="Exit", command=self.on_exit).grid(row=0, column=5, sticky="e")
 
@@ -251,13 +249,25 @@ class PyScribeApp(BaseAppClass):
         self.hw_metrics_text.tag_configure("gpu_color", foreground="purple")
         self.hw_metrics_text.tag_configure("vram_color", foreground="purple")
         
-        self.text_area = scrolledtext.ScrolledText(center_frame, wrap=tk.WORD, font=("Segoe UI", 10))
+        self.text_area = scrolledtext.ScrolledText(center_frame, wrap=tk.WORD, font=(self.ui_font_family, 10))
         self.text_area.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 8))
 
     def _show_startup_status(self):
         """Displays hardware info and recommended model in the status bar on startup."""
         info = f"GPU: {self.gpu_name} ({self.vram_gb} GB VRAM)" if self.device == "cuda" else f"CPU Mode ({self.cpu_count} cores)"
         self.status_var.set(f"{info} | Recommended model: {self.recommended_model_name}")
+
+    def _pick_ui_font_family(self) -> str:
+        """Select a cross-platform UI font with safe fallbacks."""
+        preferred = ["Segoe UI", "Noto Sans", "Ubuntu", "DejaVu Sans", "Arial"]
+        try:
+            families = set(tkfont.families(self))
+        except Exception:
+            return "TkDefaultFont"
+        for family in preferred:
+            if family in families:
+                return family
+        return "TkDefaultFont"
 
     def _toggle_diarization(self):
         self.use_diarization = bool(self.diar_var.get())
@@ -514,14 +524,11 @@ class PyScribeApp(BaseAppClass):
         return repos
 
     def _load_config(self):
-        try:
-            data = json.loads(self.config_path.read_text())
-        except Exception:
-            data = {}
-        self.last_model_used = data.get("last_model")
-        self.use_diarization = bool(data.get("use_diarization", False))
-        self.max_speakers_override = data.get("max_speakers")
-        self.diar_backend = data.get("diar_backend", "accurate")
+        cfg = config_load()
+        self.last_model_used = cfg.last_model
+        self.use_diarization = cfg.use_diarization
+        self.max_speakers_override = cfg.max_speakers
+        self.diar_backend = cfg.diar_backend
         # If saved backend is unavailable, fall back to first available.
         if self.diar_backend not in getattr(self, "available_backends", []):
             if getattr(self, "available_backends", []):
@@ -542,13 +549,14 @@ class PyScribeApp(BaseAppClass):
 
     def _persist_config(self, model_name: str = None):
         try:
-            data = {
-                "last_model": model_name or self.selected_model_name,
-                "use_diarization": self.use_diarization,
-                "max_speakers": self.max_speakers_override,
-                "diar_backend": self.diar_backend,
-            }
-            self.config_path.write_text(json.dumps(data))
+            config_save(
+                AppConfig(
+                    last_model=model_name or self.selected_model_name,
+                    use_diarization=self.use_diarization,
+                    max_speakers=self.max_speakers_override,
+                    diar_backend=self.diar_backend,
+                )
+            )
         except Exception:
             pass
 
@@ -653,7 +661,7 @@ class PyScribeApp(BaseAppClass):
         header = tk.Label(
             dialog,
             text=header_text,
-            font=("Segoe UI", 11, "bold"),
+            font=(self.ui_font_family, 11, "bold"),
             anchor="w",
             justify="left",
             wraplength=520
@@ -673,7 +681,7 @@ class PyScribeApp(BaseAppClass):
         tk.Label(legend_frame, text="● Downloading", anchor="w").grid(row=1, column=1, sticky="w", pady=(2,0), padx=(4,4))
         tk.Label(legend_frame, text="☐ Fetch", anchor="w").grid(row=1, column=2, sticky="w", pady=(2,0), padx=(4,4))
         tk.Label(legend_frame, text="! Error", fg="red", anchor="w").grid(row=1, column=3, sticky="w", pady=(2,0), padx=(4,4))
-        tk.Label(legend_frame, text="★ Suggested (hardware)", font=("Segoe UI", 9, "bold"), anchor="w").grid(row=1, column=4, sticky="w", pady=(2,0), padx=(4,0))
+        tk.Label(legend_frame, text="★ Suggested (hardware)", font=(self.ui_font_family, 9, "bold"), anchor="w").grid(row=1, column=4, sticky="w", pady=(2,0), padx=(4,0))
 
         list_frame = tk.Frame(dialog)
         list_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=6)
@@ -1109,7 +1117,7 @@ class PyScribeApp(BaseAppClass):
     def open_transcriptions_folder(self):
         folder = os.path.dirname(self.media_path) if self.media_path else os.path.expanduser("~")
         try:
-            os.startfile(folder)
+            open_folder(folder)
         except Exception as e:
             self.show_error(f"Could not open folder:\n\n{e}")
 

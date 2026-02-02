@@ -25,5 +25,8 @@ dist/
 # Temporary files
 *.log
 *.tmp
+launch.bat
 
 
+.continue/mcpServers/searxng.yaml
+.python-version

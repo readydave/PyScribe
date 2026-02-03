@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HOST="${PYSCRIBE_HOST:-0.0.0.0}"
+HOST="${PYSCRIBE_HOST:-127.0.0.1}"
 PORT="${PYSCRIBE_PORT:-7860}"
 MAX_PORT_TRIES="${PYSCRIBE_MAX_PORT_TRIES:-50}"
 QUEUE_SIZE="${PYSCRIBE_QUEUE_SIZE:-16}"
-AUTH_USER="${PYSCRIBE_AUTH_USER:-}"
-AUTH_PASS="${PYSCRIBE_AUTH_PASS:-}"
+ALLOW_NONLOCAL_HOST="${PYSCRIBE_ALLOW_NONLOCAL_HOST:-0}"
+# Auth is read from environment in main.py to avoid leaking secrets via process args.
 
-AUTH_ARGS=()
-if [[ -n "$AUTH_USER" && -n "$AUTH_PASS" ]]; then
-  AUTH_ARGS+=(--auth-user "$AUTH_USER" --auth-pass "$AUTH_PASS")
+NONLOCAL_ARGS=()
+if [[ "$ALLOW_NONLOCAL_HOST" == "1" ]]; then
+  NONLOCAL_ARGS+=(--allow-nonlocal-host)
 fi
 
 exec python main.py serve \
@@ -18,5 +18,5 @@ exec python main.py serve \
   --port "$PORT" \
   --max-port-tries "$MAX_PORT_TRIES" \
   --queue-size "$QUEUE_SIZE" \
-  "${AUTH_ARGS[@]}" \
+  "${NONLOCAL_ARGS[@]}" \
   "$@"

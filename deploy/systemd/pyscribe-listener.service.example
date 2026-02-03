@@ -8,11 +8,14 @@ Type=simple
 User=YOUR_USER
 Group=YOUR_GROUP
 WorkingDirectory=/opt/pyscribe
-Environment=PYSCRIBE_HOST=0.0.0.0
 Environment=PYSCRIBE_PORT=7860
 Environment=PYSCRIBE_MAX_PORT_TRIES=200
 Environment=PYSCRIBE_QUEUE_SIZE=16
-# Optional auth:
+# Default localhost-only bind.
+Environment=PYSCRIBE_HOST=127.0.0.1
+# To expose on LAN, set:
+# Environment=PYSCRIBE_HOST=0.0.0.0
+# Environment=PYSCRIBE_ALLOW_NONLOCAL_HOST=1
 # Environment=PYSCRIBE_AUTH_USER=admin
 # Environment=PYSCRIBE_AUTH_PASS=change-me
 ExecStart=/opt/pyscribe/scripts/run_listener.sh

@@ -52,8 +52,12 @@ python main.py
 # Qt desktop UI
 python main.py qt
 
-# Gradio listener mode
-python main.py serve --host 0.0.0.0 --port 7860
+# Gradio listener mode (localhost-only default)
+python main.py serve --port 7860
+
+# Expose listener on LAN (explicit opt-in + auth required)
+PYSCRIBE_AUTH_USER=admin PYSCRIBE_AUTH_PASS=change-me \
+python main.py serve --host 0.0.0.0 --allow-nonlocal-host --port 7860
 ```
 
 Listener mode auto-falls to the next free port if `7860` is in use.

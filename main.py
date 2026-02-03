@@ -2,6 +2,7 @@
 # Entry point for PyScribe Qt desktop and listener modes.
 
 import argparse
+import getpass
 import logging
 import os
 import socket
@@ -58,6 +59,95 @@ warnings.filterwarnings(
 )
 
 
+def _redact_sensitive_argv(argv: list[str]) -> list[str]:
+    """Return argv with secret values redacted for logging."""
+    redacted: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--auth-pass":
+            redacted.append(arg)
+            if i + 1 < len(argv):
+                redacted.append("********")
+                i += 2
+                continue
+            i += 1
+            continue
+        if arg.startswith("--auth-pass="):
+            redacted.append("--auth-pass=********")
+            i += 1
+            continue
+        redacted.append(arg)
+        i += 1
+    return redacted
+
+
+def _clean_env_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _resolve_listener_auth(auth_user: str | None) -> tuple[str | None, str | None]:
+    resolved_user = (auth_user or "").strip() or _clean_env_value("PYSCRIBE_AUTH_USER")
+    resolved_pass = _clean_env_value("PYSCRIBE_AUTH_PASS")
+    if resolved_user and not resolved_pass and sys.stdin and sys.stdin.isatty():
+        prompted = getpass.getpass("Listener auth password (input hidden): ").strip()
+        resolved_pass = prompted or None
+    if bool(resolved_user) != bool(resolved_pass):
+        raise SystemExit(
+            "Listener auth requires both username and password "
+            "(provide --auth-user and set PYSCRIBE_AUTH_PASS, or set both "
+            "PYSCRIBE_AUTH_USER/PYSCRIBE_AUTH_PASS)."
+        )
+    return resolved_user, resolved_pass
+
+
+def _as_bool_env(name: str) -> bool:
+    value = _clean_env_value(name)
+    if value is None:
+        return False
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = (host or "").strip().lower()
+    return normalized in {"127.0.0.1", "localhost", "::1"}
+
+
+def _validate_listener_security(
+    host: str,
+    *,
+    auth_user: str | None,
+    auth_pass: str | None,
+    allow_nonlocal_host: bool,
+) -> None:
+    if _is_loopback_host(host):
+        return
+    if not allow_nonlocal_host:
+        raise SystemExit(
+            "Refusing non-local listener bind. Use --host 127.0.0.1 for local-only access, "
+            "or add --allow-nonlocal-host to explicitly expose the listener."
+        )
+    if not (auth_user and auth_pass):
+        raise SystemExit(
+            "Non-local listener bind requires authentication. "
+            "Provide --auth-user and set PYSCRIBE_AUTH_PASS, or set "
+            "PYSCRIBE_AUTH_USER/PYSCRIBE_AUTH_PASS."
+        )
+
+
+def _reject_legacy_auth_pass_flag(argv: list[str]) -> None:
+    for arg in argv[1:]:
+        if arg == "--auth-pass" or arg.startswith("--auth-pass="):
+            raise SystemExit(
+                "`--auth-pass` is no longer supported to avoid credential leakage. "
+                "Set PYSCRIBE_AUTH_PASS instead."
+            )
+
+
 def run_listener(
     host: str,
     port: int,
@@ -78,7 +168,7 @@ def run_listener(
         bool(auth_user and auth_pass),
     )
     if bool(auth_user) != bool(auth_pass):
-        raise SystemExit("Both --auth-user and --auth-pass must be provided together.")
+        raise SystemExit("Both auth username and password must be provided together.")
 
     def _announce_listener(chosen_port: int):
         print("PyScribe listener running:")
@@ -135,12 +225,16 @@ def parse_args():
     subparsers = parser.add_subparsers(dest="mode")
 
     serve_parser = subparsers.add_parser("serve", help="Run Gradio listener mode")
-    serve_parser.add_argument("--host", default="0.0.0.0", help="Host interface to bind (default: 0.0.0.0)")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind (default: 127.0.0.1)")
     serve_parser.add_argument("--port", type=int, default=7860, help="Preferred port (default: 7860)")
     serve_parser.add_argument("--max-port-tries", type=int, default=50, help="How many fallback ports to try")
     serve_parser.add_argument("--queue-size", type=int, default=16, help="Max queued listener requests")
     serve_parser.add_argument("--auth-user", default=None, help="Optional basic-auth username")
-    serve_parser.add_argument("--auth-pass", default=None, help="Optional basic-auth password")
+    serve_parser.add_argument(
+        "--allow-nonlocal-host",
+        action="store_true",
+        help="Allow binding to non-local interfaces (requires auth).",
+    )
     serve_parser.add_argument("--share", action="store_true", help="Enable Gradio public share URL")
     serve_parser.set_defaults(mode="serve")
 
@@ -155,7 +249,7 @@ def prompt_launch_mode() -> str:
     LOGGER.info("Starting interactive launcher menu")
     print("\nPyScribe launcher")
     print("  1) Desktop (Qt)")
-    print("  2) Listener (Gradio web)")
+    print("  2) Listener (Gradio web, localhost only)")
     while True:
         choice = input("Choose mode [1/2] (default 1): ").strip() or "1"
         if choice in {"1", "2"}:
@@ -164,38 +258,55 @@ def prompt_launch_mode() -> str:
 
 
 def main():
+    safe_argv = _redact_sensitive_argv(sys.argv)
     LOGGER.info(
         "PyScribe startup argv=%s log_path=%s cache_root=%s",
-        sys.argv,
+        safe_argv,
         LOG_PATH,
         RUNTIME_ENV.get("cache_root"),
     )
+    _reject_legacy_auth_pass_flag(sys.argv)
     args = parse_args()
     if len(sys.argv) == 1:
         selected = prompt_launch_mode()
         if selected == "1":
             run_qt()
             return
+        auth_user, auth_pass = _resolve_listener_auth(None)
+        _validate_listener_security(
+            "127.0.0.1",
+            auth_user=auth_user,
+            auth_pass=auth_pass,
+            allow_nonlocal_host=False,
+        )
         run_listener(
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=7860,
             max_port_tries=50,
             share=False,
             queue_size=16,
-            auth_user=None,
-            auth_pass=None,
+            auth_user=auth_user,
+            auth_pass=auth_pass,
         )
         return
 
     if args.mode == "serve":
+        auth_user, auth_pass = _resolve_listener_auth(args.auth_user)
+        allow_nonlocal_host = bool(args.allow_nonlocal_host or _as_bool_env("PYSCRIBE_ALLOW_NONLOCAL_HOST"))
+        _validate_listener_security(
+            args.host,
+            auth_user=auth_user,
+            auth_pass=auth_pass,
+            allow_nonlocal_host=allow_nonlocal_host,
+        )
         run_listener(
             host=args.host,
             port=args.port,
             max_port_tries=args.max_port_tries,
             share=args.share,
             queue_size=args.queue_size,
-            auth_user=args.auth_user,
-            auth_pass=args.auth_pass,
+            auth_user=auth_user,
+            auth_pass=auth_pass,
         )
         return
     if args.mode == "qt":

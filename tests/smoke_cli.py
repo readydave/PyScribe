@@ -35,6 +35,7 @@ def test_py_compile_core_files():
         "services/config_service.py",
         "services/logging_service.py",
         "services/model_service.py",
+        "services/multimodal_service.py",
         "services/transcription_service.py",
         "ui_qt/main_window.py",
         "ui_qt/benchmark_dialog.py",

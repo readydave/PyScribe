@@ -11,11 +11,12 @@ import threading
 import time
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QAction, QFont, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QMenu,
     QFileDialog,
     QDialog,
     QHBoxLayout,
@@ -28,12 +29,14 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QProgressBar,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from services import (
     AppConfig,
+    check_ocr_backend_ready,
     detect_runtime,
     detect_language,
     get_available_diarization_backends,
@@ -114,12 +117,17 @@ class DropLabel(QLabel):
 def _transcription_process_entry(
     media_path: str,
     model_name: str,
+    run_mode: str,
     device: str,
     compute_type: str,
     language: str | None,
     use_diarization: bool,
     diar_backend: str,
     max_speakers: int | None,
+    use_visual_analysis: bool,
+    visual_profile: str,
+    visual_ocr_backend: str,
+    visual_sample_seconds: float,
     event_queue,
     cancel_event,
 ):
@@ -133,6 +141,7 @@ def _transcription_process_entry(
             return transcribe_media_file(
                 media_path=media_path,
                 model_name=model_name,
+                run_mode=run_mode,
                 device=device_name,
                 compute_type=compute_name,
                 language=language,
@@ -140,10 +149,19 @@ def _transcription_process_entry(
                 use_diarization=use_diarization,
                 diar_backend=diar_backend,
                 max_speakers=max_speakers,
+                use_visual_analysis=use_visual_analysis,
+                visual_profile=visual_profile,
+                visual_ocr_backend=visual_ocr_backend,
+                visual_sample_seconds=visual_sample_seconds,
                 on_status=lambda msg: _emit("status", msg),
                 on_text=lambda text: _emit("transcript", text),
                 on_progress=lambda p: _emit("progress", max(0, min(100, int(p)))),
                 on_diar_progress=lambda p: _emit("diar_progress", max(0, min(100, int(p)))),
+                on_visual_progress=(
+                    (lambda p: _emit("progress", max(0, min(100, int(p)))))
+                    if run_mode == "visual_only"
+                    else None
+                ),
                 on_model_download_progress=lambda p: _emit("model_download_progress", max(0, min(100, int(p)))),
             )
 
@@ -161,8 +179,11 @@ def _transcription_process_entry(
             {
                 "cancelled": result.cancelled,
                 "transcript": result.transcript,
+                "transcript_only": result.transcript_only,
+                "visual_report": result.visual_report,
                 "transcription_seconds": result.transcription_seconds,
                 "diarization_seconds": result.diarization_seconds,
+                "visual_analysis_seconds": result.visual_analysis_seconds,
             },
         )
     except Exception as exc:
@@ -175,24 +196,34 @@ class TranscriptionWorker(QObject):
     progress = Signal(int)
     model_download_progress = Signal(int)
     diar_progress = Signal(int)
-    finished = Signal(bool, str, float, float)
+    finished = Signal(bool, str, str, str, float, float, float)
     failed = Signal(str)
 
     def __init__(
         self,
         media_path: str,
         model_name: str,
+        run_mode: str,
         use_diarization: bool,
         diar_backend: str,
         max_speakers: int | None,
+        use_visual_analysis: bool,
+        visual_profile: str,
+        visual_ocr_backend: str,
+        visual_sample_seconds: float,
         language: str | None,
     ):
         super().__init__()
         self.media_path = media_path
         self.model_name = model_name
+        self.run_mode = run_mode
         self.use_diarization = use_diarization
         self.diar_backend = diar_backend
         self.max_speakers = max_speakers
+        self.use_visual_analysis = use_visual_analysis
+        self.visual_profile = visual_profile
+        self.visual_ocr_backend = visual_ocr_backend
+        self.visual_sample_seconds = visual_sample_seconds
         self.language = language
         self.runtime = detect_runtime()
         self._lock = threading.Lock()
@@ -230,12 +261,17 @@ class TranscriptionWorker(QObject):
             args=(
                 self.media_path,
                 self.model_name,
+                self.run_mode,
                 self.runtime.device,
                 self.runtime.compute_type,
                 self.language,
                 self.use_diarization,
                 self.diar_backend,
                 self.max_speakers,
+                self.use_visual_analysis,
+                self.visual_profile,
+                self.visual_ocr_backend,
+                self.visual_sample_seconds,
                 event_queue,
                 cancel_event,
             ),
@@ -288,8 +324,11 @@ class TranscriptionWorker(QObject):
                         self.finished.emit(
                             bool(value.get("cancelled")),
                             str(value.get("transcript", latest_transcript)),
+                            str(value.get("transcript_only", latest_transcript)),
+                            str(value.get("visual_report", "")),
                             float(value.get("transcription_seconds", 0.0)),
                             float(value.get("diarization_seconds", 0.0)),
+                            float(value.get("visual_analysis_seconds", 0.0)),
                         )
                     elif etype == "error":
                         terminal_emitted = True
@@ -327,8 +366,11 @@ class TranscriptionWorker(QObject):
                     self.finished.emit(
                         bool(value.get("cancelled")),
                         str(value.get("transcript", latest_transcript)),
+                        str(value.get("transcript_only", latest_transcript)),
+                        str(value.get("visual_report", "")),
                         float(value.get("transcription_seconds", 0.0)),
                         float(value.get("diarization_seconds", 0.0)),
+                        float(value.get("visual_analysis_seconds", 0.0)),
                     )
                 elif etype == "error" and not terminal_emitted:
                     terminal_emitted = True
@@ -337,7 +379,7 @@ class TranscriptionWorker(QObject):
 
             if force_stopped and not terminal_emitted:
                 LOGGER.warning("Qt worker: force-stopped before terminal event")
-                self.finished.emit(True, latest_transcript, 0.0, 0.0)
+                self.finished.emit(True, latest_transcript, latest_transcript, "", 0.0, 0.0, 0.0)
         finally:
             LOGGER.info("Qt worker: cleanup begin")
             with self._lock:
@@ -371,13 +413,21 @@ class MainWindow(QMainWindow):
         self.last_open_dir = self.config.last_open_dir or os.path.expanduser("~")
         self.last_save_dir = self.config.last_save_dir
         self.transcript_text = ""
+        self.transcript_only_text = ""
+        self.visual_report_text = ""
         self.worker_thread: QThread | None = None
         self.worker: TranscriptionWorker | None = None
         self.monitoring_active = False
         self.metrics_thread: threading.Thread | None = None
         self.download_progress_dialog: QProgressDialog | None = None
         self.diarization_warning: str | None = None
+        self.theme_mode = self._sanitize_theme_mode(getattr(self.config, "theme_mode", "system"))
+        self._current_run_mode = "full"
         self._current_use_diarization = bool(self.config.use_diarization)
+        self._current_use_visual_analysis = bool(self.config.use_visual_analysis)
+        self._confirmed_visual_backend_downloads: set[str] = set(
+            str(b).strip().lower() for b in (self.config.confirmed_visual_backends or [])
+        )
 
         self._build_ui()
         self._build_menus()
@@ -386,6 +436,8 @@ class MainWindow(QMainWindow):
         self._set_bar_color(self.diar_progress_bar, "#dc2626")
         self.hw_metrics.connect(self.hw_metrics_label.setText)
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
+        self._update_visual_ui_state(self.visual_checkbox.isChecked())
+        self._update_service_visibility()
         LOGGER.info("Qt MainWindow initialized runtime=%s compute=%s", self.runtime.device, self.runtime.compute_type)
 
     def _build_ui(self):
@@ -421,12 +473,22 @@ class MainWindow(QMainWindow):
         model_hint.setObjectName("hint")
         model_row.addWidget(model_hint)
 
+        process_row = QHBoxLayout()
+        self.transcribe_checkbox = QCheckBox("Transcribe audio")
+        start_mode = str(self.config.run_mode or "full").strip().lower()
+        self.transcribe_checkbox.setChecked(start_mode != "visual_only")
+        self.transcribe_checkbox.toggled.connect(self._update_diar_ui_state)
+        self.transcribe_checkbox.toggled.connect(self._update_service_visibility)
+        process_row.addWidget(self.transcribe_checkbox)
+        process_row.addStretch(1)
+
         diar_row = QHBoxLayout()
         self.diar_checkbox = QCheckBox("Identify Speakers")
         self.diar_checkbox.setChecked(bool(self.config.use_diarization))
         self._update_diar_toggle_label(self.diar_checkbox.isChecked())
         self.diar_checkbox.toggled.connect(self._update_diar_toggle_label)
         self.diar_checkbox.toggled.connect(self._update_diar_ui_state)
+        self.diar_checkbox.toggled.connect(self._update_service_visibility)
         diar_row.addWidget(self.diar_checkbox)
         diar_row.addWidget(QLabel("Mode"))
         self.diar_backend_combo = QComboBox()
@@ -445,11 +507,40 @@ class MainWindow(QMainWindow):
         diar_row.addWidget(self.max_speakers_input)
         diar_row.addStretch(1)
 
+        visual_row = QHBoxLayout()
+        self.visual_checkbox = QCheckBox("Analyze visuals (slides/chat OCR, beta)")
+        self.visual_checkbox.setChecked(bool(self.config.use_visual_analysis))
+        self.visual_checkbox.toggled.connect(self._update_visual_ui_state)
+        self.visual_checkbox.toggled.connect(self._update_service_visibility)
+        visual_row.addWidget(self.visual_checkbox)
+        visual_row.addWidget(QLabel("Mode"))
+        self.visual_profile_combo = QComboBox()
+        self.visual_profile_combo.addItems(["fast", "balanced", "accurate"])
+        profile_idx = self.visual_profile_combo.findText(str(self.config.visual_profile or "balanced").lower())
+        if profile_idx < 0:
+            profile_idx = 1
+        self.visual_profile_combo.setCurrentIndex(profile_idx)
+        visual_row.addWidget(self.visual_profile_combo)
+        visual_row.addWidget(QLabel("OCR Backend"))
+        self.visual_backend_combo = QComboBox()
+        self.visual_backend_combo.addItems(["paddleocr", "surya", "pytesseract", "auto"])
+        idx = self.visual_backend_combo.findText(str(self.config.visual_ocr_backend or "paddleocr").lower())
+        if idx < 0:
+            idx = 0
+        self.visual_backend_combo.setCurrentIndex(idx)
+        visual_row.addWidget(self.visual_backend_combo)
+        visual_row.addWidget(QLabel("Sample every (sec)"))
+        self.visual_interval_input = QLineEdit()
+        self.visual_interval_input.setFixedWidth(70)
+        self.visual_interval_input.setText(f"{float(self.config.visual_sample_seconds or 1.0):.1f}")
+        visual_row.addWidget(self.visual_interval_input)
+        visual_row.addStretch(1)
+
         self.drop_label = DropLabel()
         self.drop_label.file_dropped.connect(self.set_media_path)
 
         actions = QHBoxLayout()
-        self.transcribe_btn = QPushButton("Transcribe")
+        self.transcribe_btn = QPushButton("Process File")
         self.transcribe_btn.clicked.connect(self.start_transcription)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
@@ -457,9 +548,20 @@ class MainWindow(QMainWindow):
         self.force_stop_btn = QPushButton("Force Stop")
         self.force_stop_btn.setEnabled(False)
         self.force_stop_btn.clicked.connect(self.force_stop_transcription)
-        self.save_btn = QPushButton("Save")
+        self.save_btn = QToolButton()
+        self.save_btn.setText("Save")
+        self.save_btn.setPopupMode(QToolButton.MenuButtonPopup)
+        self.save_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.save_menu = QMenu(self)
+        self.save_all_action = self.save_menu.addAction("Save All (Transcript + OCR)")
+        self.save_transcript_action = self.save_menu.addAction("Save Transcript Only")
+        self.save_ocr_action = self.save_menu.addAction("Save OCR Only")
+        self.save_all_action.triggered.connect(lambda: self.save_output("all"))
+        self.save_transcript_action.triggered.connect(lambda: self.save_output("transcript"))
+        self.save_ocr_action.triggered.connect(lambda: self.save_output("ocr"))
+        self.save_btn.setMenu(self.save_menu)
+        self.save_btn.clicked.connect(lambda: self.save_output("all"))
         self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self.save_transcript)
         self.open_btn = QPushButton("Open Folder")
         self.open_btn.clicked.connect(self.open_transcriptions_folder)
         self.copy_btn = QPushButton("Copy")
@@ -480,6 +582,7 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Transcription %p%")
         self.diar_progress_bar = QProgressBar()
         self.diar_progress_bar.setRange(0, 100)
         self.diar_progress_bar.setValue(0)
@@ -490,13 +593,17 @@ class MainWindow(QMainWindow):
         self.transcription_time_label.setObjectName("metricsLabel")
         self.diar_time_label = QLabel("Diarization time: --")
         self.diar_time_label.setObjectName("metricsLabel")
+        self.visual_time_label = QLabel("Visual analysis time: --")
+        self.visual_time_label.setObjectName("metricsLabel")
 
         self.text_area = QTextEdit()
         self.text_area.setPlaceholderText("Transcript appears here...")
 
         layout.addLayout(top_row)
         layout.addLayout(model_row)
+        layout.addLayout(process_row)
         layout.addLayout(diar_row)
+        layout.addLayout(visual_row)
         layout.addWidget(self.drop_label)
         layout.addLayout(actions)
         layout.addWidget(self.status_label)
@@ -506,11 +613,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.transcription_time_label)
         layout.addWidget(self.diar_progress_bar)
         layout.addWidget(self.diar_time_label)
+        layout.addWidget(self.visual_time_label)
         layout.addWidget(self.text_area, 1)
         self.setCentralWidget(root)
 
     def _build_menus(self):
         tools_menu = self.menuBar().addMenu("&Tools")
+        view_menu = self.menuBar().addMenu("&View")
         help_menu = self.menuBar().addMenu("&Help")
 
         hf_action = QAction("HF Token...", self)
@@ -522,6 +631,19 @@ class MainWindow(QMainWindow):
         benchmark_action.setShortcut(QKeySequence("Ctrl+B"))
         benchmark_action.triggered.connect(self.open_benchmark_dialog)
         tools_menu.addAction(benchmark_action)
+
+        theme_menu = view_menu.addMenu("Theme")
+        self.theme_action_group = QActionGroup(self)
+        self.theme_action_group.setExclusive(True)
+        self.theme_actions: dict[str, QAction] = {}
+        for mode, label in (("system", "System"), ("light", "Light"), ("dark", "Dark")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, m=mode: self._set_theme_mode(m))
+            self.theme_action_group.addAction(action)
+            theme_menu.addAction(action)
+            self.theme_actions[mode] = action
+        self.theme_actions[self.theme_mode].setChecked(True)
 
         app_help_action = QAction("PyScribe Help", self)
         app_help_action.setShortcut(QKeySequence.HelpContents)
@@ -541,93 +663,171 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _apply_theme(self):
+        applied = self._effective_theme_mode()
         self.setFont(QFont("Noto Sans", 10))
-        self.setStyleSheet(
-            """
-            QWidget {
-                background: #f5f7fa;
-                color: #0f172a;
-            }
-            #pathLabel {
-                background: #ffffff;
-                border: 1px solid #d0d7e2;
-                border-radius: 8px;
-                padding: 8px;
-            }
-            #hint {
-                color: #334155;
-            }
-            #metricsLabel {
-                color: #475569;
-                font-size: 11px;
-            }
-            #tokenLabel {
-                color: #0f766e;
-                font-size: 11px;
-            }
-            #dropZone {
-                border: 2px dashed #2563eb;
-                border-radius: 12px;
-                background: #eef4ff;
-                color: #1d4ed8;
-                font-weight: 600;
-            }
-            #dropZone[activeDrop="true"] {
-                border-color: #ea580c;
-                background: #fff7ed;
-                color: #c2410c;
-            }
-            QPushButton {
-                background: #0f766e;
-                color: white;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-weight: 600;
-            }
-            QPushButton:disabled {
-                background: #94a3b8;
-            }
-            QPushButton#exitButton {
-                background: #dc2626;
-            }
-            QPushButton#exitButton:hover {
-                background: #b91c1c;
-            }
-            QCheckBox {
-                color: #0f172a;
-                font-weight: 600;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 20px;
-                height: 20px;
-                border: 2px solid #334155;
-                border-radius: 4px;
-                background: #ffffff;
-            }
-            QCheckBox::indicator:checked {
-                border: 2px solid #0f766e;
-                background: #0f766e;
-                image: url(:/qt-project.org/styles/commonstyle/images/checkbox_checked.png);
-            }
-            QTextEdit {
-                background: #ffffff;
-                border: 1px solid #d0d7e2;
-                border-radius: 8px;
-                padding: 8px;
-            }
-            QProgressBar {
-                border: 1px solid #d0d7e2;
-                border-radius: 7px;
-                background: #ffffff;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background: #ea580c;
-                border-radius: 6px;
-            }
-            """
-        )
+        if applied == "dark":
+            self.setStyleSheet(
+                """
+                QWidget {
+                    background: #0f172a;
+                    color: #e2e8f0;
+                }
+                #pathLabel {
+                    background: #111827;
+                    border: 1px solid #334155;
+                    border-radius: 8px;
+                    padding: 8px;
+                }
+                #hint { color: #94a3b8; }
+                #metricsLabel { color: #94a3b8; font-size: 11px; }
+                #tokenLabel { color: #2dd4bf; font-size: 11px; }
+                #dropZone {
+                    border: 2px dashed #60a5fa;
+                    border-radius: 12px;
+                    background: #1e293b;
+                    color: #93c5fd;
+                    font-weight: 600;
+                }
+                #dropZone[activeDrop="true"] {
+                    border-color: #f97316;
+                    background: #3b2f1a;
+                    color: #fdba74;
+                }
+                QPushButton, QToolButton {
+                    background: #0f766e;
+                    color: white;
+                    border-radius: 8px;
+                    padding: 8px 12px;
+                    font-weight: 600;
+                }
+                QPushButton:disabled, QToolButton:disabled { background: #475569; }
+                QPushButton#exitButton { background: #dc2626; }
+                QPushButton#exitButton:hover { background: #b91c1c; }
+                QCheckBox {
+                    color: #e2e8f0;
+                    font-weight: 600;
+                    spacing: 8px;
+                }
+                QCheckBox::indicator {
+                    width: 20px;
+                    height: 20px;
+                    border: 2px solid #94a3b8;
+                    border-radius: 4px;
+                    background: #111827;
+                }
+                QCheckBox::indicator:checked {
+                    border: 2px solid #0f766e;
+                    background: #0f766e;
+                    image: url(:/qt-project.org/styles/commonstyle/images/checkbox_checked.png);
+                }
+                QTextEdit {
+                    background: #111827;
+                    border: 1px solid #334155;
+                    border-radius: 8px;
+                    padding: 8px;
+                }
+                QProgressBar {
+                    border: 1px solid #334155;
+                    border-radius: 7px;
+                    background: #111827;
+                    text-align: center;
+                }
+                QProgressBar::chunk { border-radius: 6px; }
+                """
+            )
+        else:
+            self.setStyleSheet(
+                """
+                QWidget {
+                    background: #f5f7fa;
+                    color: #0f172a;
+                }
+                #pathLabel {
+                    background: #ffffff;
+                    border: 1px solid #d0d7e2;
+                    border-radius: 8px;
+                    padding: 8px;
+                }
+                #hint { color: #334155; }
+                #metricsLabel { color: #475569; font-size: 11px; }
+                #tokenLabel { color: #0f766e; font-size: 11px; }
+                #dropZone {
+                    border: 2px dashed #2563eb;
+                    border-radius: 12px;
+                    background: #eef4ff;
+                    color: #1d4ed8;
+                    font-weight: 600;
+                }
+                #dropZone[activeDrop="true"] {
+                    border-color: #ea580c;
+                    background: #fff7ed;
+                    color: #c2410c;
+                }
+                QPushButton, QToolButton {
+                    background: #0f766e;
+                    color: white;
+                    border-radius: 8px;
+                    padding: 8px 12px;
+                    font-weight: 600;
+                }
+                QPushButton:disabled, QToolButton:disabled { background: #94a3b8; }
+                QPushButton#exitButton { background: #dc2626; }
+                QPushButton#exitButton:hover { background: #b91c1c; }
+                QCheckBox {
+                    color: #0f172a;
+                    font-weight: 600;
+                    spacing: 8px;
+                }
+                QCheckBox::indicator {
+                    width: 20px;
+                    height: 20px;
+                    border: 2px solid #334155;
+                    border-radius: 4px;
+                    background: #ffffff;
+                }
+                QCheckBox::indicator:checked {
+                    border: 2px solid #0f766e;
+                    background: #0f766e;
+                    image: url(:/qt-project.org/styles/commonstyle/images/checkbox_checked.png);
+                }
+                QTextEdit {
+                    background: #ffffff;
+                    border: 1px solid #d0d7e2;
+                    border-radius: 8px;
+                    padding: 8px;
+                }
+                QProgressBar {
+                    border: 1px solid #d0d7e2;
+                    border-radius: 7px;
+                    background: #ffffff;
+                    text-align: center;
+                }
+                QProgressBar::chunk { border-radius: 6px; }
+                """
+            )
+
+    @staticmethod
+    def _sanitize_theme_mode(value: str) -> str:
+        mode = str(value or "system").strip().lower()
+        if mode in {"system", "light", "dark"}:
+            return mode
+        return "system"
+
+    def _effective_theme_mode(self) -> str:
+        if self.theme_mode in {"light", "dark"}:
+            return self.theme_mode
+        lightness = QApplication.palette().color(QPalette.Window).lightness()
+        return "dark" if lightness < 128 else "light"
+
+    def _set_theme_mode(self, mode: str):
+        self.theme_mode = self._sanitize_theme_mode(mode)
+        if hasattr(self, "theme_actions") and self.theme_mode in self.theme_actions:
+            self.theme_actions[self.theme_mode].setChecked(True)
+        self._save_config(theme_mode=self.theme_mode)
+        self._apply_theme()
+        self._set_bar_color(self.progress_bar, self._progress_color(self.progress_bar.value()))
+        self._set_bar_color(self.diar_progress_bar, self._progress_color(self.diar_progress_bar.value()))
+        self._update_diar_ui_state(self.diar_checkbox.isChecked())
 
     def set_media_path(self, path: str):
         if not os.path.isfile(path):
@@ -661,27 +861,38 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No file", "Please choose or drop a media file first.")
             return
 
+        run_mode, allow_transcription, run_diarization, run_visual = self._effective_service_flags()
+        if run_mode == "none":
+            QMessageBox.warning(self, "No task selected", "Enable at least one processing option (Transcribe audio or Analyze visuals).")
+            return
+
         model_name = self.model_combo.currentText().strip()
         model_name = normalize_model_name(model_name)
-        if not model_name:
+        if allow_transcription and not model_name:
             QMessageBox.warning(self, "No model", "Please select a model.")
             return
-        self.model_combo.setCurrentText(model_name)
-        LOGGER.info("Qt start transcription model=%s media=%s", model_name, self.media_path)
+        if model_name:
+            self.model_combo.setCurrentText(model_name)
+        LOGGER.info("Qt start transcription mode=%s model=%s media=%s", run_mode, model_name, self.media_path)
 
-        if not self._confirm_model_download(model_name):
-            return
-
-        forced_language = self._resolve_language_choice(model_name)
-        if forced_language == "__cancel__":
-            self._hide_download_progress_dialog()
-            return
+        forced_language = None
+        if allow_transcription:
+            if not self._confirm_model_download(model_name):
+                return
+            forced_language = self._resolve_language_choice(model_name)
+            if forced_language == "__cancel__":
+                self._hide_download_progress_dialog()
+                return
 
         self.diarization_warning = None
+        self.transcript_only_text = ""
+        self.visual_report_text = ""
+        self._current_run_mode = run_mode
         self.progress_bar.setValue(0)
         self.diar_progress_bar.setValue(0)
         self.transcription_time_label.setText("Transcription time: --")
         self.diar_time_label.setText("Diarization time: --")
+        self.visual_time_label.setText("Visual analysis time: --")
         self.status_label.setText("Starting...")
         self.transcribe_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
@@ -692,25 +903,94 @@ class MainWindow(QMainWindow):
 
         max_speakers_text = self.max_speakers_input.text().strip()
         max_speakers = int(max_speakers_text) if max_speakers_text.isdigit() else None
-        use_diarization = self.diar_checkbox.isChecked()
+        use_diarization = run_diarization
         self._current_use_diarization = use_diarization
         diar_backend = self.diar_backend_combo.currentData() if use_diarization else "off"
-        self._save_config(
-            last_model=model_name,
-            use_diarization=use_diarization,
-            max_speakers=max_speakers,
-            diar_backend=diar_backend,
-        )
+        use_visual_analysis = run_visual
+        self._current_use_visual_analysis = use_visual_analysis
+        visual_profile = self.visual_profile_combo.currentText().strip().lower() or "balanced"
+        visual_ocr_backend = self.visual_backend_combo.currentText().strip().lower() or "paddleocr"
+        if use_visual_analysis:
+            ready, reason = check_ocr_backend_ready(visual_ocr_backend)
+            if not ready:
+                fallback = "paddleocr"
+                fallback_ready, _ = check_ocr_backend_ready(fallback)
+                if fallback_ready and visual_ocr_backend != fallback:
+                    answer = QMessageBox.question(
+                        self,
+                        "OCR backend unavailable",
+                        (
+                            f"Selected OCR backend '{visual_ocr_backend}' is not available.\n\n"
+                            f"{reason}\n\n"
+                            f"Switch to '{fallback}' and continue?"
+                        ),
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes,
+                    )
+                    if answer != QMessageBox.Yes:
+                        self.status_label.setText("Visual analysis canceled: OCR backend unavailable.")
+                        self.transcribe_btn.setEnabled(True)
+                        self.cancel_btn.setEnabled(False)
+                        self.force_stop_btn.setEnabled(False)
+                        self.stop_hw_monitor()
+                        return
+                    visual_ocr_backend = fallback
+                    fb_idx = self.visual_backend_combo.findText(fallback)
+                    if fb_idx >= 0:
+                        self.visual_backend_combo.setCurrentIndex(fb_idx)
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "OCR backend unavailable",
+                        (
+                            f"Selected OCR backend '{visual_ocr_backend}' is not available.\n\n"
+                            f"{reason}\n\n"
+                            "Install dependencies or choose another OCR backend."
+                        ),
+                    )
+                    self.status_label.setText("Visual analysis canceled: OCR backend unavailable.")
+                    self.transcribe_btn.setEnabled(True)
+                    self.cancel_btn.setEnabled(False)
+                    self.force_stop_btn.setEnabled(False)
+                    self.stop_hw_monitor()
+                    return
+        if use_visual_analysis and not self._confirm_visual_backend_download(visual_ocr_backend):
+            self.status_label.setText("Visual analysis canceled by user.")
+            self.transcribe_btn.setEnabled(True)
+            self.cancel_btn.setEnabled(False)
+            self.force_stop_btn.setEnabled(False)
+            self.stop_hw_monitor()
+            return
+        visual_sample_seconds = self._parse_visual_sample_seconds()
+        config_updates: dict[str, object] = {
+            "run_mode": run_mode,
+            "use_diarization": use_diarization,
+            "max_speakers": max_speakers,
+            "diar_backend": diar_backend,
+            "use_visual_analysis": use_visual_analysis,
+            "visual_profile": visual_profile,
+            "visual_ocr_backend": visual_ocr_backend,
+            "visual_sample_seconds": visual_sample_seconds,
+        }
+        if model_name:
+            config_updates["last_model"] = model_name
+        self._save_config(**config_updates)
 
         self.worker_thread = QThread()
         self.worker = TranscriptionWorker(
             self.media_path,
             model_name,
+            run_mode=run_mode,
             use_diarization=use_diarization,
             diar_backend=diar_backend,
             max_speakers=max_speakers,
+            use_visual_analysis=use_visual_analysis,
+            visual_profile=visual_profile,
+            visual_ocr_backend=visual_ocr_backend,
+            visual_sample_seconds=visual_sample_seconds,
             language=forced_language,
         )
+        self._update_service_visibility()
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.status.connect(self._on_status_update)
@@ -742,6 +1022,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_transcript_update(self, text: str):
         self.transcript_text = text
+        self.transcript_only_text = text
         self.text_area.setPlainText(text)
 
     @Slot(str)
@@ -757,13 +1038,16 @@ class MainWindow(QMainWindow):
             self.diar_progress_bar.setValue(65)
             self._set_bar_color(self.diar_progress_bar, self._progress_color(65))
 
-    @Slot(bool, str)
+    @Slot(bool, str, str, str, float, float, float)
     def _on_worker_finished(
         self,
         cancelled: bool,
         transcript: str,
+        transcript_only: str,
+        visual_report: str,
         transcription_seconds: float,
         diarization_seconds: float,
+        visual_analysis_seconds: float,
     ):
         LOGGER.info(
             "Qt worker finished cancelled=%s transcript_len=%s transcribe_seconds=%.2f diar_seconds=%.2f",
@@ -773,6 +1057,8 @@ class MainWindow(QMainWindow):
             diarization_seconds,
         )
         self.transcript_text = transcript
+        self.transcript_only_text = transcript_only
+        self.visual_report_text = visual_report
         self.text_area.setPlainText(transcript)
         self.transcribe_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
@@ -783,25 +1069,54 @@ class MainWindow(QMainWindow):
         if not cancelled:
             self.progress_bar.setValue(100)
             self._set_bar_color(self.progress_bar, self._progress_color(100))
-        done = "Cancelled." if cancelled else "Transcription complete."
+        done = "Cancelled."
+        if not cancelled:
+            if self._current_run_mode == "visual_only":
+                done = "Visual analysis complete."
+            elif self._current_run_mode == "transcribe_only":
+                done = "Transcription complete."
+            else:
+                done = "Transcription complete."
+        visual_unavailable = (
+            self._current_use_visual_analysis
+            and bool(visual_report)
+            and "Unavailable:" in visual_report
+        )
+        if visual_unavailable and not cancelled:
+            if self._current_run_mode == "visual_only":
+                done = "Visual analysis unavailable."
+            else:
+                done = "Transcription complete (visual analysis unavailable)."
         self.status_label.setText(done)
-        self.transcription_time_label.setText(f"Transcription time: {self._format_seconds(transcription_seconds)}")
-        if self._current_use_diarization:
+        if self._current_run_mode in {"full", "transcribe_only"}:
+            self.transcription_time_label.setText(f"Transcription time: {self._format_seconds(transcription_seconds)}")
+        else:
+            self.transcription_time_label.setText("Transcription time: n/a (visual-only)")
+        if self._current_use_diarization and self._current_run_mode in {"full", "transcribe_only"}:
             self.diar_time_label.setText(f"Diarization time: {self._format_seconds(diarization_seconds)}")
         else:
             self.diar_time_label.setText("Diarization time: n/a (disabled)")
-        if transcript:
+        if self._current_use_visual_analysis and self._current_run_mode in {"full", "visual_only"}:
+            self.visual_time_label.setText(f"Visual analysis time: {self._format_seconds(visual_analysis_seconds)}")
+        else:
+            self.visual_time_label.setText("Visual analysis time: n/a (disabled)")
+        if transcript or visual_report:
             self.save_btn.setEnabled(True)
             self.copy_btn.setEnabled(True)
+        if visual_unavailable:
+            lines = [line.strip() for line in visual_report.splitlines() if "Unavailable:" in line]
+            detail = lines[0] if lines else "Visual analysis backend unavailable."
+            QMessageBox.warning(self, "Visual analysis", detail)
         if self.diarization_warning:
             QMessageBox.warning(self, "Diarization", self.diarization_warning)
         self._hide_download_progress_dialog()
-        self._update_diar_ui_state(self.diar_checkbox.isChecked())
+        self._update_service_visibility()
         self._cleanup_worker()
 
     @Slot(str)
     def _on_worker_failed(self, error_msg: str):
         LOGGER.error("Qt worker failed: %s", error_msg)
+        self.visual_report_text = ""
         self.transcribe_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
@@ -811,9 +1126,10 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Error")
         self.transcription_time_label.setText("Transcription time: --")
         self.diar_time_label.setText("Diarization time: --")
+        self.visual_time_label.setText("Visual analysis time: --")
         QMessageBox.critical(self, "Transcription error", error_msg)
         self._hide_download_progress_dialog()
-        self._update_diar_ui_state(self.diar_checkbox.isChecked())
+        self._update_service_visibility()
         self._cleanup_worker()
 
     @Slot(int)
@@ -833,10 +1149,12 @@ class MainWindow(QMainWindow):
 
     @Slot(bool)
     def _update_diar_ui_state(self, enabled: bool):
-        self.diar_backend_combo.setEnabled(enabled)
-        self.max_speakers_input.setEnabled(enabled)
-        self.diar_progress_bar.setEnabled(enabled)
-        if not enabled:
+        _, allow_transcription, allow_diarization, _ = self._effective_service_flags()
+        diar_controls_enabled = bool(enabled and allow_transcription and allow_diarization)
+        self.diar_backend_combo.setEnabled(diar_controls_enabled)
+        self.max_speakers_input.setEnabled(diar_controls_enabled)
+        self.diar_progress_bar.setEnabled(diar_controls_enabled)
+        if not diar_controls_enabled:
             self.diar_progress_bar.setRange(0, 100)
             self.diar_progress_bar.setValue(0)
             self.diar_progress_bar.setFormat("Diarization disabled")
@@ -844,10 +1162,55 @@ class MainWindow(QMainWindow):
         else:
             self.diar_progress_bar.setFormat("Diarization %p%")
             self._set_bar_color(self.diar_progress_bar, self._progress_color(self.diar_progress_bar.value()))
+        self._update_service_visibility()
+
+    @Slot(bool)
+    def _update_visual_ui_state(self, enabled: bool):
+        visual_controls_enabled = bool(enabled)
+        self.visual_profile_combo.setEnabled(visual_controls_enabled)
+        self.visual_backend_combo.setEnabled(visual_controls_enabled)
+        self.visual_interval_input.setEnabled(visual_controls_enabled)
+        self._update_service_visibility()
 
     @Slot(bool)
     def _update_diar_toggle_label(self, enabled: bool):
         self.diar_checkbox.setText("Speaker Identification is On" if enabled else "Speaker Identification is Off")
+
+    def _effective_service_flags(self) -> tuple[str, bool, bool, bool]:
+        allow_transcription = self.transcribe_checkbox.isChecked()
+        allow_visual = self.visual_checkbox.isChecked()
+        run_diarization = allow_transcription and self.diar_checkbox.isChecked()
+        run_visual = allow_visual
+        mode = "none"
+        if allow_transcription and run_visual:
+            mode = "full"
+        elif allow_transcription:
+            mode = "transcribe_only"
+        elif run_visual:
+            mode = "visual_only"
+        return mode, allow_transcription, run_diarization, run_visual
+
+    @Slot()
+    def _update_service_visibility(self):
+        mode, allow_transcription, run_diarization, run_visual = self._effective_service_flags()
+        show_main_progress = allow_transcription or run_visual
+        self.progress_bar.setVisible(show_main_progress)
+        self.transcription_time_label.setVisible(allow_transcription)
+        self.diar_progress_bar.setVisible(run_diarization)
+        self.diar_time_label.setVisible(run_diarization)
+        self.visual_time_label.setVisible(run_visual)
+
+        self.model_combo.setEnabled(allow_transcription)
+        self.diar_checkbox.setEnabled(allow_transcription)
+        if not allow_transcription:
+            self.diar_backend_combo.setEnabled(False)
+            self.max_speakers_input.setEnabled(False)
+            self.diar_progress_bar.setEnabled(False)
+
+        if mode == "visual_only":
+            self.progress_bar.setFormat("Visual analysis %p%")
+        else:
+            self.progress_bar.setFormat("Transcription %p%")
 
     @Slot(int)
     def _on_model_download_progress(self, value: int):
@@ -943,6 +1306,35 @@ class MainWindow(QMainWindow):
         self._show_download_progress_dialog(repo_id)
         return True
 
+    def _confirm_visual_backend_download(self, backend: str) -> bool:
+        backend = str(backend or "").strip().lower()
+        if backend in {"pytesseract", "auto"}:
+            return True
+        if backend in self._confirmed_visual_backend_downloads:
+            return True
+        extra = ""
+        if backend == "surya":
+            extra = (
+                "\n\nSurya is experimental in this app and may require a separate environment with newer Torch."
+            )
+        msg = (
+            f"Visual OCR backend '{backend}' may download OCR model files on first run.\n\n"
+            "This can take a few minutes depending on connection speed.\n\n"
+            f"Continue?{extra}"
+        )
+        answer = QMessageBox.question(
+            self,
+            "Visual OCR model download",
+            msg,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._confirmed_visual_backend_downloads.add(backend)
+            self._save_config()
+            return True
+        return False
+
     @staticmethod
     def _progress_color(value: int) -> str:
         if value >= 100:
@@ -964,6 +1356,16 @@ class MainWindow(QMainWindow):
         mins = int(seconds // 60)
         rem = seconds - (mins * 60)
         return f"{mins}m {rem:.1f}s"
+
+    def _parse_visual_sample_seconds(self) -> float:
+        raw = (self.visual_interval_input.text() or "").strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            value = 1.0
+        value = min(10.0, max(0.5, value))
+        self.visual_interval_input.setText(f"{value:.1f}")
+        return value
 
     @staticmethod
     def _set_bar_color(bar: QProgressBar, color: str):
@@ -1180,25 +1582,57 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    @Slot()
-    def save_transcript(self):
-        if not self.transcript_text:
+    def _save_payload_for_mode(self, mode: str) -> tuple[str, str] | None:
+        transcript_part = (self.transcript_only_text or self.transcript_text or "").strip()
+        ocr_part = (self.visual_report_text or "").strip()
+
+        if mode == "transcript":
+            if not transcript_part:
+                QMessageBox.information(self, "Save", "No transcript text is available to save.")
+                return None
+            return transcript_part, "transcript"
+
+        if mode == "ocr":
+            if not ocr_part:
+                QMessageBox.information(
+                    self,
+                    "Save OCR",
+                    "No OCR/visual analysis output is available.\nRun with 'Analyze visuals' enabled.",
+                )
+                return None
+            return ocr_part, "ocr"
+
+        # default: all
+        if not transcript_part and not ocr_part:
+            QMessageBox.information(self, "Save", "Nothing is available to save.")
+            return None
+        if transcript_part and ocr_part:
+            return f"{transcript_part}\n\n{ocr_part}".strip(), "all"
+        if transcript_part:
+            return transcript_part, "all"
+        return ocr_part, "all"
+
+    def save_output(self, mode: str = "all"):
+        payload = self._save_payload_for_mode(mode)
+        if payload is None:
             return
+        content, suffix = payload
         stem = "transcript"
         if self.media_path:
             stem = os.path.splitext(os.path.basename(self.media_path))[0]
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        suggested = f"{stem}_{ts}.txt"
+        suggested = f"{stem}_{suffix}_{ts}.txt"
         default_dir = os.path.dirname(self.media_path) if self.media_path else self.last_save_dir
         if not default_dir or not os.path.isdir(default_dir):
             default_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")
         suggested_path = os.path.join(default_dir, suggested)
-        path, _ = QFileDialog.getSaveFileName(self, "Save Transcript", suggested_path, "Text Files (*.txt)")
+        title = "Save Transcript + OCR" if suffix == "all" else ("Save Transcript" if suffix == "transcript" else "Save OCR")
+        path, _ = QFileDialog.getSaveFileName(self, title, suggested_path, "Text Files (*.txt)")
         if not path:
             return
         try:
             with open(path, "w", encoding="utf-8") as fh:
-                fh.write(self.transcript_text)
+                fh.write(content)
             self.last_save_dir = os.path.dirname(path) or self.last_save_dir
             self._save_config()
             self.status_label.setText(f"Saved: {os.path.basename(path)}")
@@ -1234,19 +1668,38 @@ class MainWindow(QMainWindow):
         self,
         *,
         last_model: str | object = _UNSET,
+        run_mode: str | object = _UNSET,
+        theme_mode: str | object = _UNSET,
         use_diarization: bool | object = _UNSET,
         max_speakers: int | None | object = _UNSET,
         diar_backend: str | object = _UNSET,
+        use_visual_analysis: bool | object = _UNSET,
+        visual_profile: str | object = _UNSET,
+        visual_ocr_backend: str | object = _UNSET,
+        visual_sample_seconds: float | object = _UNSET,
     ):
         try:
             if last_model is not _UNSET:
                 self.config.last_model = last_model
+            if run_mode is not _UNSET:
+                self.config.run_mode = str(run_mode)
+            if theme_mode is not _UNSET:
+                self.config.theme_mode = self._sanitize_theme_mode(str(theme_mode))
             if use_diarization is not _UNSET:
                 self.config.use_diarization = use_diarization
             if max_speakers is not _UNSET:
                 self.config.max_speakers = max_speakers
             if diar_backend is not _UNSET:
                 self.config.diar_backend = diar_backend
+            if use_visual_analysis is not _UNSET:
+                self.config.use_visual_analysis = use_visual_analysis
+            if visual_profile is not _UNSET:
+                self.config.visual_profile = str(visual_profile)
+            if visual_ocr_backend is not _UNSET:
+                self.config.visual_ocr_backend = str(visual_ocr_backend)
+            if visual_sample_seconds is not _UNSET:
+                self.config.visual_sample_seconds = float(visual_sample_seconds)
+            self.config.confirmed_visual_backends = sorted(self._confirmed_visual_backend_downloads)
             self.config.last_open_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
             self.config.last_save_dir = self.last_save_dir if self.last_save_dir and os.path.isdir(self.last_save_dir) else self.config.last_save_dir
             save_config(self.config)

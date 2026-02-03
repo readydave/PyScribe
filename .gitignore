@@ -26,6 +26,7 @@ dist/
 # Temporary files
 *.log
 *.tmp
+.cache/
 .pyscribe_logs/
 launch.bat
 

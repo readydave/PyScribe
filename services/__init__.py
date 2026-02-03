@@ -28,6 +28,7 @@ _EXPORTS = {
     "detect_language": (".model_service", "detect_language"),
     "detect_runtime": (".model_service", "detect_runtime"),
     "load_model": (".model_service", "load_model"),
+    "check_ocr_backend_ready": (".multimodal_service", "check_ocr_backend_ready"),
     "recommend_model": (".model_service", "recommend_model"),
     "open_folder": (".platform_service", "open_folder"),
     "TranscriptionResult": (".transcription_service", "TranscriptionResult"),

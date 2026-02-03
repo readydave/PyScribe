@@ -14,6 +14,16 @@
 - **Speaker Identification**:
   - Turn on to enable diarization (speaker labels).
   - Choose backend mode and optional max speaker count.
+- **Analyze visuals (slides/chat OCR, beta)**:
+  - Optional video-frame OCR to capture on-screen text from slides/chats.
+  - OCR prioritizes the shared-content area and also scans the right-side panel for chat-like text.
+  - Choose visual mode: `fast`, `balanced`, `accurate`.
+  - Choose OCR backend: `paddleocr`, `surya`, `pytesseract`, or `auto`.
+  - `paddleocr` may download model files on first run (Qt prompts for confirmation).
+  - `surya` is experimental and may require a separate environment with newer Torch versions.
+  - Output reports show requested backend and actual backend used (including fallback reason).
+  - PyScribe skips OCR on unchanged frames to reduce runtime.
+  - Set sample interval (seconds): lower values capture more changes but increase runtime.
 
 ## Tools Menu
 
@@ -46,7 +56,10 @@
 - **Transcribe**: starts a new job.
 - **Cancel**: cooperative stop (safe).
 - **Force Stop**: immediate stop if cancel is stuck.
-- **Save**: write transcript to a text file.
+- **Save** (dropdown, default action = Save All):
+  - **Save All (Transcript + OCR)**: one file containing transcript and visual/OCR report.
+  - **Save Transcript Only**: transcript text only.
+  - **Save OCR Only**: visual/OCR report only (shown when Analyze visuals was enabled and produced output).
 - **Copy**: copy transcript to clipboard.
 - **Open Folder**: open selected media folder.
 
@@ -58,6 +71,9 @@
   - Verify HF token and model access terms.
 - **GPU issues**
   - Retry with a smaller model or disable diarization.
+- **Visual analysis unavailable**
+  - Install OCR runtime (`pytesseract` + OS package `tesseract-ocr`).
+  - For packaged builds (AppImage), OCR model cache defaults to `~/.cache/pyscribe`; override with `PYSCRIBE_CACHE_DIR`.
 
 ## Logging
 

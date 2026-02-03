@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from urllib.parse import urlparse
 from typing import Callable
 
@@ -66,22 +67,7 @@ def is_model_cached(model_name: str) -> bool:
     if not repo_id:
         return True
 
-    cache_root = os.environ.get("HUGGINGFACE_HUB_CACHE")
-    if not cache_root:
-        hf_home = os.environ.get("HF_HOME")
-        if hf_home:
-            cache_root = os.path.join(hf_home, "hub")
-        else:
-            cache_root = os.path.expanduser("~/.cache/huggingface/hub")
-
-    model_dir = os.path.join(cache_root, f"models--{repo_id.replace('/', '--')}")
-    snapshots = os.path.join(model_dir, "snapshots")
-    if not os.path.isdir(snapshots):
-        return False
-    for item in os.listdir(snapshots):
-        if os.path.isdir(os.path.join(snapshots, item)):
-            return True
-    return False
+    return _find_cached_snapshot_path(repo_id) is not None
 
 
 def estimate_model_download_size_bytes(model_name: str) -> int | None:
@@ -158,10 +144,11 @@ def ensure_model_cached(
     if not repo_id:
         return model_name
 
-    if is_model_cached(model_name):
+    cached_path = _find_cached_snapshot_path(repo_id)
+    if cached_path:
         if on_status:
             on_status(f"Model cache ready: '{repo_id}'.")
-        return model_name
+        return cached_path
 
     token = get_hf_token()
 
@@ -197,3 +184,40 @@ def ensure_model_cached(
     if on_progress:
         on_progress(100.0)
     return local_dir or model_name
+
+
+def _candidate_hf_cache_roots() -> list[str]:
+    roots: list[str] = []
+    explicit_hub = os.environ.get("HUGGINGFACE_HUB_CACHE")
+    if explicit_hub:
+        roots.append(explicit_hub)
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        roots.append(os.path.join(hf_home, "hub"))
+    # Also check canonical default to reuse existing caches across env changes.
+    roots.append(os.path.expanduser("~/.cache/huggingface/hub"))
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for root in roots:
+        norm = os.path.abspath(os.path.expanduser(root))
+        if norm not in seen:
+            seen.add(norm)
+            unique.append(norm)
+    return unique
+
+
+def _find_cached_snapshot_path(repo_id: str) -> str | None:
+    model_dir_name = f"models--{repo_id.replace('/', '--')}"
+    candidates: list[Path] = []
+    for cache_root in _candidate_hf_cache_roots():
+        snapshots = Path(cache_root) / model_dir_name / "snapshots"
+        if snapshots.is_dir():
+            for item in snapshots.iterdir():
+                if item.is_dir():
+                    candidates.append(item)
+    if not candidates:
+        return None
+    # Prefer most recently updated snapshot if multiple roots/snapshots exist.
+    best = max(candidates, key=lambda p: p.stat().st_mtime)
+    return str(best)

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
+import platform
+import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from threading import Event
 from typing import Callable
@@ -14,6 +18,7 @@ from faster_whisper import WhisperModel
 
 from diar_backends import run_diarization_backend
 from diarization import assign_speakers
+from services.multimodal_service import analyze_video_stream
 from services.model_download_service import ensure_model_cached
 from services.model_service import load_model
 from utils import convert_to_16k_mono, get_ffmpeg_cmd, load_audio_waveform
@@ -28,11 +33,14 @@ LOGGER = logging.getLogger(__name__)
 @dataclass
 class TranscriptionResult:
     transcript: str
+    transcript_only: str
+    visual_report: str
     segments: list[dict]
     cancelled: bool
     duration_seconds: float
     transcription_seconds: float
     diarization_seconds: float
+    visual_analysis_seconds: float
 
 
 def _probe_duration_seconds(wav_path: str) -> float:
@@ -92,11 +100,14 @@ def transcribe_prepared_audio(
             )
             return TranscriptionResult(
                 transcript=" ".join(all_text_segments).strip(),
+                transcript_only=" ".join(all_text_segments).strip(),
+                visual_report="",
                 segments=all_segments_struct,
                 cancelled=True,
                 duration_seconds=duration,
                 transcription_seconds=transcription_seconds,
                 diarization_seconds=diarization_seconds,
+                visual_analysis_seconds=0.0,
             )
 
         segment_text = segment.text.strip()
@@ -128,11 +139,14 @@ def transcribe_prepared_audio(
         )
         return TranscriptionResult(
             transcript=transcript,
+            transcript_only=transcript,
+            visual_report="",
             segments=final_segments,
             cancelled=True,
             duration_seconds=duration,
             transcription_seconds=transcription_seconds,
             diarization_seconds=diarization_seconds,
+            visual_analysis_seconds=0.0,
         )
 
     if use_diarization:
@@ -180,11 +194,14 @@ def transcribe_prepared_audio(
             )
             return TranscriptionResult(
                 transcript=transcript,
+                transcript_only=transcript,
+                visual_report="",
                 segments=final_segments,
                 cancelled=True,
                 duration_seconds=duration,
                 transcription_seconds=transcription_seconds,
                 diarization_seconds=diarization_seconds,
+                visual_analysis_seconds=0.0,
             )
         except Exception as exc:
             diarization_seconds = time.perf_counter() - diarization_started
@@ -211,11 +228,14 @@ def transcribe_prepared_audio(
     )
     return TranscriptionResult(
         transcript=transcript,
+        transcript_only=transcript,
+        visual_report="",
         segments=final_segments,
         cancelled=False,
         duration_seconds=duration,
         transcription_seconds=transcription_seconds,
         diarization_seconds=diarization_seconds,
+        visual_analysis_seconds=0.0,
     )
 
 
@@ -223,6 +243,7 @@ def transcribe_media_file(
     media_path: str,
     model_name: str,
     *,
+    run_mode: str = "full",
     device: str = "cpu",
     compute_type: str = "int8",
     language: str | None = None,
@@ -230,15 +251,71 @@ def transcribe_media_file(
     use_diarization: bool = False,
     diar_backend: str = "accurate",
     max_speakers: int | None = None,
+    use_visual_analysis: bool = False,
+    visual_profile: str = "balanced",
+    visual_ocr_backend: str = "paddleocr",
+    visual_sample_seconds: float = 1.0,
     on_status: StatusCallback | None = None,
     on_text: TextCallback | None = None,
     on_progress: ProgressCallback | None = None,
     on_diar_progress: ProgressCallback | None = None,
+    on_visual_progress: ProgressCallback | None = None,
     on_model_download_progress: ProgressCallback | None = None,
 ) -> TranscriptionResult:
     """
     End-to-end transcription for media input files used by listener mode.
     """
+    job_id = uuid.uuid4().hex[:8]
+    _log_job_technical_header(
+        job_id=job_id,
+        media_path=media_path,
+        model_name=model_name,
+        device=device,
+        compute_type=compute_type,
+        use_diarization=use_diarization,
+        diar_backend=diar_backend,
+        max_speakers=max_speakers,
+        use_visual_analysis=use_visual_analysis,
+        visual_profile=visual_profile,
+        visual_ocr_backend=visual_ocr_backend,
+        visual_sample_seconds=visual_sample_seconds,
+        run_mode=run_mode,
+    )
+
+    run_mode = str(run_mode or "full").strip().lower()
+    if run_mode not in {"full", "transcribe_only", "visual_only"}:
+        run_mode = "full"
+
+    if run_mode == "visual_only":
+        visual = analyze_video_stream(
+            media_path,
+            ocr_backend=visual_ocr_backend,
+            visual_profile=visual_profile,
+            sample_seconds=visual_sample_seconds,
+            cancel_event=cancel_event,
+            on_status=on_status,
+            on_progress=on_visual_progress,
+        )
+        text = visual.report if visual.report else ""
+        LOGGER.info(
+            "Job[%s] visual-only completed cancelled=%s visual_available=%s visual_seconds=%.2f",
+            job_id,
+            visual.cancelled,
+            visual.available,
+            visual.elapsed_seconds,
+        )
+        return TranscriptionResult(
+            transcript=text,
+            transcript_only="",
+            visual_report=visual.report,
+            segments=[],
+            cancelled=visual.cancelled,
+            duration_seconds=0.0,
+            transcription_seconds=0.0,
+            diarization_seconds=0.0,
+            visual_analysis_seconds=visual.elapsed_seconds,
+        )
+
     ffmpeg_cmd = get_ffmpeg_cmd(tool="ffmpeg")
     if not ffmpeg_cmd:
         raise FileNotFoundError("ffmpeg not found.")
@@ -264,7 +341,7 @@ def transcribe_media_file(
 
         if on_status:
             on_status(f"Transcribing with '{model_name}'...")
-        return transcribe_prepared_audio(
+        result = transcribe_prepared_audio(
             wav_path=wav_path,
             model=model,
             language=language,
@@ -278,3 +355,94 @@ def transcribe_media_file(
             on_progress=on_progress,
             on_diar_progress=on_diar_progress,
         )
+
+        if run_mode == "transcribe_only" or not use_visual_analysis or result.cancelled:
+            LOGGER.info("Job[%s] completed without visual analysis cancelled=%s", job_id, result.cancelled)
+            return result
+
+        visual = analyze_video_stream(
+            media_path,
+            ocr_backend=visual_ocr_backend,
+            visual_profile=visual_profile,
+            sample_seconds=visual_sample_seconds,
+            cancel_event=cancel_event,
+            on_status=on_status,
+            on_progress=on_visual_progress,
+        )
+        if on_status and visual.available and not visual.cancelled:
+            on_status("Visual analysis complete.")
+        transcript_with_visual = result.transcript
+        if visual.report:
+            transcript_with_visual = f"{result.transcript}\n\n{visual.report}".strip()
+
+        LOGGER.info(
+            "Job[%s] completed cancelled=%s visual_available=%s visual_seconds=%.2f",
+            job_id,
+            result.cancelled or visual.cancelled,
+            visual.available,
+            visual.elapsed_seconds,
+        )
+
+        return TranscriptionResult(
+            transcript=transcript_with_visual,
+            transcript_only=result.transcript,
+            visual_report=visual.report,
+            segments=result.segments,
+            cancelled=result.cancelled or visual.cancelled,
+            duration_seconds=result.duration_seconds,
+            transcription_seconds=result.transcription_seconds,
+            diarization_seconds=result.diarization_seconds,
+            visual_analysis_seconds=visual.elapsed_seconds,
+        )
+
+
+def _log_job_technical_header(
+    *,
+    job_id: str,
+    media_path: str,
+    model_name: str,
+    device: str,
+    compute_type: str,
+    use_diarization: bool,
+    diar_backend: str,
+    max_speakers: int | None,
+    use_visual_analysis: bool,
+    visual_profile: str,
+    visual_ocr_backend: str,
+    visual_sample_seconds: float,
+    run_mode: str,
+) -> None:
+    lines = [
+        f"=== Job Technical [{job_id}] ===",
+        f"media_path={media_path}",
+        f"model={model_name} device={device} compute_type={compute_type}",
+        f"diarization={use_diarization} backend={diar_backend} max_speakers={max_speakers}",
+        (
+            f"visual={use_visual_analysis} profile={visual_profile} backend={visual_ocr_backend} "
+            f"sample_seconds={visual_sample_seconds}"
+        ),
+        f"run_mode={run_mode}",
+        f"python={sys.version.splitlines()[0]} executable={sys.executable}",
+        f"platform={platform.platform()}",
+        f"cwd={os.getcwd()}",
+        f"env.HF_HOME={_short_env('HF_HOME')}",
+        f"env.HUGGINGFACE_HUB_CACHE={_short_env('HUGGINGFACE_HUB_CACHE')}",
+        f"env.PADDLE_HOME={_short_env('PADDLE_HOME')}",
+        f"env.PADDLE_PDX_CACHE_HOME={_short_env('PADDLE_PDX_CACHE_HOME')}",
+        f"env.PADDLE_PDX_MODEL_SOURCE={_short_env('PADDLE_PDX_MODEL_SOURCE')}",
+        f"env.PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK={_short_env('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK')}",
+        f"env.PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT={_short_env('PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT')}",
+        f"env.FLAGS_enable_pir_in_executor={_short_env('FLAGS_enable_pir_in_executor')}",
+        f"env.LD_LIBRARY_PATH={_short_env('LD_LIBRARY_PATH', max_len=280)}",
+        "=== End Job Technical ===",
+    ]
+    LOGGER.info("\n%s", "\n".join(lines))
+
+
+def _short_env(name: str, *, max_len: int = 180) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        return "<unset>"
+    if len(value) <= max_len:
+        return value
+    return value[: max_len - 3] + "..."

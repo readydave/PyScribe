@@ -9,8 +9,14 @@ import sys
 import warnings
 from services.logging_service import configure_logging
 from services.runtime_compat import ensure_platform_sys_version_compat
+from services.runtime_env_service import (
+    configure_runtime_environment,
+    reexec_if_loader_env_changed,
+)
 
 ensure_platform_sys_version_compat()
+RUNTIME_ENV = configure_runtime_environment()
+reexec_if_loader_env_changed()
 LOG_PATH = configure_logging()
 LOGGER = logging.getLogger(__name__)
 
@@ -158,7 +164,12 @@ def prompt_launch_mode() -> str:
 
 
 def main():
-    LOGGER.info("PyScribe startup argv=%s log_path=%s", sys.argv, LOG_PATH)
+    LOGGER.info(
+        "PyScribe startup argv=%s log_path=%s cache_root=%s",
+        sys.argv,
+        LOG_PATH,
+        RUNTIME_ENV.get("cache_root"),
+    )
     args = parse_args()
     if len(sys.argv) == 1:
         selected = prompt_launch_mode()

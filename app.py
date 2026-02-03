@@ -12,11 +12,18 @@ from typing import Callable
 import gradio as gr
 import pyperclip
 from services.runtime_compat import ensure_platform_sys_version_compat
+from services.runtime_env_service import (
+    configure_runtime_environment,
+    reexec_if_loader_env_changed,
+)
 
 ensure_platform_sys_version_compat()
+configure_runtime_environment()
+reexec_if_loader_env_changed()
 
 from services import (
     AppConfig,
+    check_ocr_backend_ready,
     detect_runtime,
     get_available_diarization_backends,
     get_backend_label,
@@ -142,6 +149,13 @@ def _progress_badge(pct: float) -> str:
     return "🔴"
 
 
+def _normalize_run_mode(value: str) -> str:
+    mode = str(value or "full").strip().lower()
+    if mode in {"full", "transcribe_only", "visual_only"}:
+        return mode
+    return "full"
+
+
 def find_open_port(host: str, preferred_port: int, max_tries: int = 50) -> int:
     """
     Returns the preferred port if available, otherwise the first open port in range.
@@ -159,7 +173,19 @@ def find_open_port(host: str, preferred_port: int, max_tries: int = 50) -> int:
         f"No open port found between {preferred_port} and {preferred_port + max_tries}."
     )
 
-def transcribe(audio_path, model_name, use_diarization, diar_backend, max_speakers_text, progress=gr.Progress()):
+def transcribe(
+    audio_path,
+    model_name,
+    run_mode,
+    use_diarization,
+    diar_backend,
+    max_speakers_text,
+    use_visual_analysis,
+    visual_profile,
+    visual_ocr_backend,
+    visual_sample_seconds,
+    progress=gr.Progress(),
+):
     """
     The main transcription function for the Gradio interface.
     """
@@ -170,15 +196,43 @@ def transcribe(audio_path, model_name, use_diarization, diar_backend, max_speake
         return
 
     media_path = audio_path.name if hasattr(audio_path, "name") else str(audio_path)
+    run_mode = _normalize_run_mode(run_mode)
+    should_transcribe = run_mode in {"full", "transcribe_only"}
+    should_run_visual = run_mode in {"full", "visual_only"}
 
     model_name = normalize_model_name(model_name)
-    if not model_name:
+    if should_transcribe and not model_name:
         yield "Status: No model selected.", "", gr.update(visible=True), gr.update(visible=False), ""
         return
 
     max_speakers = int(max_speakers_text) if str(max_speakers_text).strip().isdigit() else None
+    use_diarization = bool(use_diarization and should_transcribe)
     if not use_diarization:
         diar_backend = "off"
+    use_visual_analysis = bool(use_visual_analysis and should_run_visual)
+    if run_mode == "visual_only" and not use_visual_analysis:
+        yield (
+            "Status: Visual-only mode requires enabling 'Analyze visuals'.",
+            "",
+            gr.update(visible=True),
+            gr.update(visible=False),
+            "",
+        )
+        return
+    visual_profile = str(visual_profile or "balanced").lower()
+    visual_ocr_backend = str(visual_ocr_backend or "paddleocr").lower()
+    if use_visual_analysis:
+        ready, reason = check_ocr_backend_ready(visual_ocr_backend)
+        if not ready:
+            use_visual_analysis = False
+            yield (
+                f"Status: Visual backend '{visual_ocr_backend}' unavailable ({reason}). "
+                "Continuing transcription without visual analysis.",
+                "",
+                gr.update(visible=True),
+                gr.update(visible=False),
+                "",
+            )
     try:
         save_config(
             AppConfig(
@@ -186,12 +240,18 @@ def transcribe(audio_path, model_name, use_diarization, diar_backend, max_speake
                 use_diarization=bool(use_diarization),
                 max_speakers=max_speakers,
                 diar_backend=diar_backend,
+                run_mode=run_mode,
+                use_visual_analysis=bool(use_visual_analysis),
+                visual_profile=visual_profile,
+                visual_ocr_backend=visual_ocr_backend,
+                visual_sample_seconds=float(visual_sample_seconds or 1.0),
             )
         )
     except Exception:
         pass
         
-    yield "Status: Transcription starting...", "", gr.update(visible=False), gr.update(visible=True, value="Cancel"), ""
+    status_prefix = "Visual analysis" if run_mode == "visual_only" else "Transcription"
+    yield f"Status: {status_prefix} starting...", "", gr.update(visible=False), gr.update(visible=True, value="Cancel"), ""
         
     full_transcript = ""
     was_cancelled = False
@@ -207,7 +267,8 @@ def transcribe(audio_path, model_name, use_diarization, diar_backend, max_speake
             nonlocal last_pct
             last_pct = min(max(pct, 0.0), 100.0)
             badge = _progress_badge(last_pct)
-            desc = f"{badge} Transcribing {last_pct:.0f}%"
+            step_label = "Analyzing visuals" if run_mode == "visual_only" else "Transcribing"
+            desc = f"{badge} {step_label} {last_pct:.0f}%"
             progress(min(max(last_pct / 100.0, 0.0), 1.0), desc=desc)
 
         def _on_model_download_progress(pct: float):
@@ -221,6 +282,7 @@ def transcribe(audio_path, model_name, use_diarization, diar_backend, max_speake
         result = transcribe_media_file(
             media_path=media_path,
             model_name=model_name,
+            run_mode=run_mode,
             device=DEVICE,
             compute_type=COMPUTE_TYPE,
             language=None,
@@ -228,6 +290,10 @@ def transcribe(audio_path, model_name, use_diarization, diar_backend, max_speake
             use_diarization=use_diarization,
             diar_backend=diar_backend,
             max_speakers=max_speakers,
+            use_visual_analysis=use_visual_analysis,
+            visual_profile=visual_profile,
+            visual_ocr_backend=visual_ocr_backend,
+            visual_sample_seconds=float(visual_sample_seconds or 1.0),
             on_status=_on_status,
             on_text=_on_text,
             on_progress=_on_progress,
@@ -242,11 +308,12 @@ def transcribe(audio_path, model_name, use_diarization, diar_backend, max_speake
 
     if was_cancelled or _cancel_event.is_set():
         _cancel_event.clear()
-        yield "Status: Transcription cancelled.", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), "Cancelled."
+        yield f"Status: {status_prefix} cancelled.", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), "Cancelled."
         return
 
     final_badge = _progress_badge(100.0)
-    yield f"Status: {final_badge} {last_phase}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), "Transcription complete!"
+    final_done = "Visual analysis complete!" if run_mode == "visual_only" else "Transcription complete!"
+    yield f"Status: {final_badge} {last_phase}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), final_done
 
 def save_transcript(transcript, audio_path, model_name):
     if not transcript:
@@ -286,7 +353,38 @@ def set_cancel_flag():
 
 # --- Gradio Interface Definition ---
 def create_interface() -> gr.Blocks:
-    with gr.Blocks(title="PyScribe Listener", css=CUSTOM_CSS, head=CUSTOM_HEAD) as iface:
+    initial_run_mode = _normalize_run_mode(APP_CONFIG.run_mode)
+    initial_allow_transcription = initial_run_mode in {"full", "transcribe_only"}
+    initial_allow_visual = initial_run_mode in {"full", "visual_only"}
+
+    def _update_mode_visibility(run_mode, use_diarization, use_visual_analysis):
+        mode = _normalize_run_mode(run_mode)
+        allow_transcription = mode in {"full", "transcribe_only"}
+        allow_visual = mode in {"full", "visual_only"}
+        return (
+            gr.update(visible=allow_transcription),  # model
+            gr.update(visible=allow_transcription),  # diar checkbox
+            gr.update(visible=allow_transcription and bool(use_diarization)),  # diar backend
+            gr.update(visible=allow_transcription and bool(use_diarization)),  # max speakers
+            gr.update(visible=allow_visual),  # visual checkbox
+            gr.update(visible=allow_visual and bool(use_visual_analysis)),  # visual profile
+            gr.update(visible=allow_visual and bool(use_visual_analysis)),  # visual backend
+            gr.update(visible=allow_visual and bool(use_visual_analysis)),  # visual interval
+        )
+
+    def _update_diar_fields(use_diarization, run_mode):
+        allow_diar = bool(use_diarization) and _normalize_run_mode(run_mode) in {"full", "transcribe_only"}
+        return gr.update(visible=allow_diar), gr.update(visible=allow_diar)
+
+    def _update_visual_fields(use_visual_analysis, run_mode):
+        allow_visual_controls = bool(use_visual_analysis) and _normalize_run_mode(run_mode) in {"full", "visual_only"}
+        return (
+            gr.update(visible=allow_visual_controls),
+            gr.update(visible=allow_visual_controls),
+            gr.update(visible=allow_visual_controls),
+        )
+
+    with gr.Blocks(title="PyScribe Listener") as iface:
         gr.Markdown(
             """
             # PyScribe Listener
@@ -298,6 +396,7 @@ def create_interface() -> gr.Blocks:
             **Model tips:** use built-in choices or a custom Hugging Face repo ID (`owner/repo`).
             If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
             For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
+            Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
             """
         )
 
@@ -314,8 +413,19 @@ def create_interface() -> gr.Blocks:
                     label="Select Transcription Model",
                     info=f"Recommended for your hardware ({DEVICE.upper()}): {RECOMMENDED_MODEL}",
                     allow_custom_value=True,
+                    visible=initial_allow_transcription,
                 )
-                diar_checkbox = gr.Checkbox(label="Identify speakers", value=APP_CONFIG.use_diarization)
+                run_mode_dropdown = gr.Dropdown(
+                    choices=["full", "transcribe_only", "visual_only"],
+                    value=initial_run_mode,
+                    label="Run mode",
+                    info="full = transcript + optional OCR, transcribe_only = transcript only, visual_only = OCR only",
+                )
+                diar_checkbox = gr.Checkbox(
+                    label="Identify speakers",
+                    value=APP_CONFIG.use_diarization,
+                    visible=initial_allow_transcription,
+                )
                 default_backend = (
                     APP_CONFIG.diar_backend
                     if APP_CONFIG.diar_backend in AVAILABLE_DIAR_BACKENDS
@@ -326,11 +436,41 @@ def create_interface() -> gr.Blocks:
                     value=default_backend,
                     label="Diarization mode",
                     info=get_backend_label(default_backend),
+                    visible=initial_allow_transcription and APP_CONFIG.use_diarization,
                 )
                 max_speakers_input = gr.Textbox(
                     label="Max speakers (optional)",
                     value="" if APP_CONFIG.max_speakers is None else str(APP_CONFIG.max_speakers),
                     placeholder="e.g. 2",
+                    visible=initial_allow_transcription and APP_CONFIG.use_diarization,
+                )
+                visual_checkbox = gr.Checkbox(
+                    label="Analyze visuals (slides/chat OCR, beta)",
+                    value=APP_CONFIG.use_visual_analysis,
+                    visible=initial_allow_visual,
+                )
+                visual_profile_dropdown = gr.Dropdown(
+                    choices=["fast", "balanced", "accurate"],
+                    value=str(APP_CONFIG.visual_profile or "balanced").lower(),
+                    label="Visual mode",
+                    info="fast = quickest, balanced = default, accurate = most thorough.",
+                    visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
+                )
+                visual_backend_dropdown = gr.Dropdown(
+                    choices=["paddleocr", "surya", "pytesseract", "auto"],
+                    value=str(APP_CONFIG.visual_ocr_backend or "paddleocr").lower(),
+                    label="Visual OCR backend",
+                    info="paddleocr/surya may download OCR models on first run.",
+                    visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
+                )
+                visual_interval = gr.Slider(
+                    minimum=0.5,
+                    maximum=10.0,
+                    step=0.5,
+                    value=float(APP_CONFIG.visual_sample_seconds or 1.0),
+                    label="Visual sample interval (seconds)",
+                    info="Lower values capture more slide/chat changes but use more compute.",
+                    visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
                 )
 
                 submit_btn = gr.Button("Transcribe", variant="primary")
@@ -348,8 +488,43 @@ def create_interface() -> gr.Blocks:
 
         click_event = submit_btn.click(
             fn=transcribe,
-            inputs=[audio_input, model_dropdown, diar_checkbox, diar_backend_dropdown, max_speakers_input],
+            inputs=[
+                audio_input,
+                model_dropdown,
+                run_mode_dropdown,
+                diar_checkbox,
+                diar_backend_dropdown,
+                max_speakers_input,
+                visual_checkbox,
+                visual_profile_dropdown,
+                visual_backend_dropdown,
+                visual_interval,
+            ],
             outputs=[status_output, transcript_output, submit_btn, completion_btn, final_status_output],
+        )
+        run_mode_dropdown.change(
+            fn=_update_mode_visibility,
+            inputs=[run_mode_dropdown, diar_checkbox, visual_checkbox],
+            outputs=[
+                model_dropdown,
+                diar_checkbox,
+                diar_backend_dropdown,
+                max_speakers_input,
+                visual_checkbox,
+                visual_profile_dropdown,
+                visual_backend_dropdown,
+                visual_interval,
+            ],
+        )
+        diar_checkbox.change(
+            fn=_update_diar_fields,
+            inputs=[diar_checkbox, run_mode_dropdown],
+            outputs=[diar_backend_dropdown, max_speakers_input],
+        )
+        visual_checkbox.change(
+            fn=_update_visual_fields,
+            inputs=[visual_checkbox, run_mode_dropdown],
+            outputs=[visual_profile_dropdown, visual_backend_dropdown, visual_interval],
         )
         completion_btn.click(
             fn=set_cancel_flag,
@@ -390,7 +565,15 @@ def launch_listener(
     auth = None
     if auth_user and auth_pass:
         auth = (auth_user, auth_pass)
-    iface.launch(server_name=host, server_port=chosen_port, share=share, show_error=True, auth=auth)
+    iface.launch(
+        server_name=host,
+        server_port=chosen_port,
+        share=share,
+        show_error=True,
+        auth=auth,
+        css=CUSTOM_CSS,
+        head=CUSTOM_HEAD,
+    )
     return chosen_port
 
 

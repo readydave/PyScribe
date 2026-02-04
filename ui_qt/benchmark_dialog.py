@@ -9,6 +9,7 @@ import time
 import logging
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -19,29 +20,36 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
-from services import get_model_choices, load_model
+from services import RuntimeInfo, get_model_choices, load_model
 from utils import convert_to_16k_mono, get_ffmpeg_cmd, load_audio_waveform
 LOGGER = logging.getLogger(__name__)
 
 
 class BenchmarkWorker(QObject):
-    status = Signal(str)
-    progress = Signal(int)
-    result_line = Signal(str)
-    finished = Signal()
-    failed = Signal(str)
+    status: Signal = Signal(str)
+    progress: Signal = Signal(int)
+    result_line: Signal = Signal(str)
+    finished: Signal = Signal()
+    failed: Signal = Signal(str)
 
-    def __init__(self, selected_models: list[str], runtime, cancel_event: threading.Event, audio_language: str):
+    def __init__(
+        self,
+        selected_models: list[str],
+        runtime: RuntimeInfo,
+        cancel_event: threading.Event,
+        audio_language: str,
+    ) -> None:
         super().__init__()
-        self.selected_models = selected_models
-        self.runtime = runtime
-        self.cancel_event = cancel_event
-        self.audio_language = audio_language
+        self.selected_models: list[str] = selected_models
+        self.runtime: RuntimeInfo = runtime
+        self.cancel_event: threading.Event = cancel_event
+        self.audio_language: str = audio_language
 
     @Slot()
-    def run(self):
+    def run(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         try:
             benchmark_files = {
@@ -90,20 +98,20 @@ class BenchmarkWorker(QObject):
 
 
 class BenchmarkDialog(QDialog):
-    def __init__(self, parent, runtime):
+    def __init__(self, parent: QWidget | None, runtime: RuntimeInfo) -> None:
         super().__init__(parent)
-        self.runtime = runtime
-        self.cancel_event = threading.Event()
+        self.runtime: RuntimeInfo = runtime
+        self.cancel_event: threading.Event = threading.Event()
         self.worker_thread: QThread | None = None
         self.worker: BenchmarkWorker | None = None
         self.model_checks: dict[str, QCheckBox] = {}
-        self.audio_language = "en"
+        self.audio_language: str = "en"
 
         self.setWindowTitle("PyScribe Benchmark")
         self.resize(700, 560)
         self._build_ui()
 
-    def _build_ui(self):
+    def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
         lang_row = QHBoxLayout()
@@ -147,12 +155,12 @@ class BenchmarkDialog(QDialog):
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.results_area, 1)
 
-    def _set_language(self, lang: str):
+    def _set_language(self, lang: str) -> None:
         self.audio_language = lang
         self.status_label.setText(f"Language set: {lang}")
 
     @Slot()
-    def start_benchmark(self):
+    def start_benchmark(self) -> None:
         selected = [name for name, cb in self.model_checks.items() if cb.isChecked()]
         if not selected:
             QMessageBox.warning(self, "No models", "Select at least one model.")
@@ -178,30 +186,30 @@ class BenchmarkDialog(QDialog):
         LOGGER.info("Benchmark started models=%s lang=%s", selected, self.audio_language)
 
     @Slot()
-    def cancel_benchmark(self):
+    def cancel_benchmark(self) -> None:
         self.cancel_event.set()
         self.cancel_btn.setEnabled(False)
         self.status_label.setText("Cancelling...")
         LOGGER.info("Benchmark cancel requested")
 
     @Slot(str)
-    def _append_result_line(self, line: str):
+    def _append_result_line(self, line: str) -> None:
         self.results_area.append(line)
 
     @Slot()
-    def _finish(self):
+    def _finish(self) -> None:
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.status_label.setText("Benchmark complete.")
 
     @Slot(str)
-    def _fail(self, error_msg: str):
+    def _fail(self, error_msg: str) -> None:
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.status_label.setText("Benchmark failed.")
         QMessageBox.critical(self, "Benchmark error", error_msg)
 
-    def _cleanup_worker(self):
+    def _cleanup_worker(self) -> None:
         if not self.worker_thread:
             return
         self.worker_thread.quit()
@@ -210,7 +218,7 @@ class BenchmarkDialog(QDialog):
         self.worker = None
         LOGGER.info("Benchmark worker cleaned up")
 
-    def closeEvent(self, event):  # noqa: N802
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if self.worker_thread and self.worker_thread.isRunning():
             LOGGER.warning("Benchmark dialog close requested while running; cancelling worker.")
             self.cancel_event.set()

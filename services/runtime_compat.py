@@ -24,7 +24,7 @@ def ensure_platform_sys_version_compat() -> None:
 
     original = platform._sys_version  # type: ignore[attr-defined]
 
-    def _safe_sys_version(sys_version=None):
+    def _safe_sys_version(sys_version: str | None = None) -> tuple[str, str, str, str, str, str, str]:
         try:
             return original(sys_version)
         except ValueError:

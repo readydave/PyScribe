@@ -105,7 +105,7 @@ def format_bytes(num_bytes: int | None) -> str:
         size /= 1024
 
 
-def _estimate_size_via_head(repo_id: str, token: str | None, siblings) -> int | None:
+def _estimate_size_via_head(repo_id: str, token: str | None, siblings: list[object]) -> int | None:
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -153,13 +153,13 @@ def ensure_model_cached(
     token = get_hf_token()
 
     class _ProgressTqdm(tqdm):
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: object, **kwargs: object) -> None:
             kwargs["disable"] = True
             super().__init__(*args, **kwargs)
             if on_status and getattr(self, "desc", None):
                 on_status(f"Downloading model: {self.desc}")
 
-        def update(self, n=1):
+        def update(self, n: int = 1) -> bool | None:
             result = super().update(n)
             if on_progress and self.total:
                 on_progress((self.n / self.total) * 100.0)

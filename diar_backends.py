@@ -11,7 +11,7 @@ ProgressCB = Optional[Callable[[float], None]]
 StatusCB = Optional[Callable[[str], None]]
 
 
-def _bump(cb: ProgressCB, value: float):
+def _bump(cb: ProgressCB, value: float) -> None:
     if cb:
         cb(min(max(value, 0), 100))
 

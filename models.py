@@ -112,7 +112,7 @@ def get_ranked_models(
             }
         )
 
-    def sort_key(item):
+    def sort_key(item: Dict) -> tuple[bool, int, str]:
         return (not item["fits"], TIER_ORDER.get(item["tier"], 9), item["name"])
 
     entries.sort(key=sort_key)

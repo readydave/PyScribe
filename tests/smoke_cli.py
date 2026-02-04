@@ -16,16 +16,16 @@ def run_cmd(*args: str) -> None:
         raise AssertionError(f"Command failed: {' '.join(args)}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
 
 
-def test_main_help():
+def test_main_help() -> None:
     run_cmd(sys.executable, "main.py", "--help")
 
 
-def test_mode_helps():
+def test_mode_helps() -> None:
     run_cmd(sys.executable, "main.py", "serve", "--help")
     run_cmd(sys.executable, "main.py", "qt", "--help")
 
 
-def test_py_compile_core_files():
+def test_py_compile_core_files() -> None:
     run_cmd(
         sys.executable,
         "-m",

@@ -2,6 +2,7 @@
 # Gradio-based listener UI for PyScribe.
 
 import argparse
+from collections.abc import Iterator
 import datetime
 import getpass
 import os
@@ -9,7 +10,7 @@ import socket
 import sys
 import tempfile
 import threading
-from typing import Callable
+from typing import Any, Callable
 
 import gradio as gr
 import pyperclip
@@ -137,6 +138,8 @@ CUSTOM_HEAD = """
 
 # --- State for Cancellation ---
 _cancel_event = threading.Event()
+GradioUpdate = dict[str, object]
+TranscribeYield = tuple[str, str, GradioUpdate, GradioUpdate, str]
 
 
 def _progress_badge(pct: float) -> str:
@@ -176,18 +179,18 @@ def find_open_port(host: str, preferred_port: int, max_tries: int = 50) -> int:
     )
 
 def transcribe(
-    audio_path,
-    model_name,
-    run_mode,
-    use_diarization,
-    diar_backend,
-    max_speakers_text,
-    use_visual_analysis,
-    visual_profile,
-    visual_ocr_backend,
-    visual_sample_seconds,
-    progress=gr.Progress(),
-):
+    audio_path: Any,
+    model_name: str,
+    run_mode: str,
+    use_diarization: bool,
+    diar_backend: str,
+    max_speakers_text: str,
+    use_visual_analysis: bool,
+    visual_profile: str,
+    visual_ocr_backend: str,
+    visual_sample_seconds: float,
+    progress: gr.Progress = gr.Progress(),
+) -> Iterator[TranscribeYield]:
     """
     The main transcription function for the Gradio interface.
     """
@@ -260,12 +263,12 @@ def transcribe(
     last_phase = "Transcribing"
     last_pct = 0.0
     try:
-        def _on_status(msg: str):
+        def _on_status(msg: str) -> None:
             nonlocal last_phase
             last_phase = msg
             progress(None, desc=msg)
 
-        def _on_progress(pct: float):
+        def _on_progress(pct: float) -> None:
             nonlocal last_pct
             last_pct = min(max(pct, 0.0), 100.0)
             badge = _progress_badge(last_pct)
@@ -273,11 +276,11 @@ def transcribe(
             desc = f"{badge} {step_label} {last_pct:.0f}%"
             progress(min(max(last_pct / 100.0, 0.0), 1.0), desc=desc)
 
-        def _on_model_download_progress(pct: float):
+        def _on_model_download_progress(pct: float) -> None:
             badge = _progress_badge(min(max(pct, 0.0), 100.0))
             progress(min(max(pct / 100.0, 0.0), 1.0), desc=f"{badge} Downloading model files...")
 
-        def _on_text(text: str):
+        def _on_text(text: str) -> None:
             nonlocal full_transcript
             full_transcript = text
 
@@ -317,7 +320,7 @@ def transcribe(
     final_done = "Visual analysis complete!" if run_mode == "visual_only" else "Transcription complete!"
     yield f"Status: {final_badge} {last_phase}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), final_done
 
-def save_transcript(transcript, audio_path, model_name):
+def save_transcript(transcript: str, audio_path: Any, model_name: str) -> str | None:
     if not transcript:
         gr.Info("Nothing to save.")
         return None
@@ -337,8 +340,8 @@ def save_transcript(transcript, audio_path, model_name):
         temp_dir = tempfile.gettempdir()
         save_path = os.path.join(temp_dir, f"{base_name}_{ts}_{safe_model_name}.txt")
 
-        with open(save_path, "w", encoding="utf-8") as f:
-            f.write(transcript)
+        with open(save_path, "w", encoding="utf-8") as transcript_file:
+            transcript_file.write(transcript)
         
         gr.Info(f"Transcript ready for download.")
         return save_path
@@ -346,11 +349,11 @@ def save_transcript(transcript, audio_path, model_name):
     except (OSError, AttributeError) as e:
         raise gr.Error(f"Could not save file: {e}")
 
-def copy_to_clipboard(text):
+def copy_to_clipboard(text: str) -> None:
     pyperclip.copy(text)
     gr.Info("Copied to clipboard!")
 
-def set_cancel_flag():
+def set_cancel_flag() -> None:
     _cancel_event.set()
 
 # --- Gradio Interface Definition ---
@@ -359,7 +362,11 @@ def create_interface() -> gr.Blocks:
     initial_allow_transcription = initial_run_mode in {"full", "transcribe_only"}
     initial_allow_visual = initial_run_mode in {"full", "visual_only"}
 
-    def _update_mode_visibility(run_mode, use_diarization, use_visual_analysis):
+    def _update_mode_visibility(
+        run_mode: str,
+        use_diarization: bool,
+        use_visual_analysis: bool,
+    ) -> tuple[GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate]:
         mode = _normalize_run_mode(run_mode)
         allow_transcription = mode in {"full", "transcribe_only"}
         allow_visual = mode in {"full", "visual_only"}
@@ -374,11 +381,14 @@ def create_interface() -> gr.Blocks:
             gr.update(visible=allow_visual and bool(use_visual_analysis)),  # visual interval
         )
 
-    def _update_diar_fields(use_diarization, run_mode):
+    def _update_diar_fields(use_diarization: bool, run_mode: str) -> tuple[GradioUpdate, GradioUpdate]:
         allow_diar = bool(use_diarization) and _normalize_run_mode(run_mode) in {"full", "transcribe_only"}
         return gr.update(visible=allow_diar), gr.update(visible=allow_diar)
 
-    def _update_visual_fields(use_visual_analysis, run_mode):
+    def _update_visual_fields(
+        use_visual_analysis: bool,
+        run_mode: str,
+    ) -> tuple[GradioUpdate, GradioUpdate, GradioUpdate]:
         allow_visual_controls = bool(use_visual_analysis) and _normalize_run_mode(run_mode) in {"full", "visual_only"}
         return (
             gr.update(visible=allow_visual_controls),
@@ -557,7 +567,7 @@ def launch_listener(
     auth_user: str | None = None,
     auth_pass: str | None = None,
     on_start: Callable[[int], None] | None = None,
-):
+) -> int:
     iface = create_interface()
     # Serialize jobs so only one transcription runs at a time on the host.
     iface.queue(default_concurrency_limit=1, max_size=queue_size)
@@ -638,7 +648,7 @@ def _reject_legacy_auth_pass_flag(argv: list[str]) -> None:
             )
 
 
-def _parse_args():
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run PyScribe as a Gradio listener.")
     parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=7860, help="Preferred port (default: 7860)")

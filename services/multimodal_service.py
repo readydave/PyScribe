@@ -14,7 +14,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from threading import Event
-from typing import Callable
+from typing import Callable, Iterable
 
 import ffmpeg
 
@@ -23,6 +23,9 @@ from utils import get_ffmpeg_cmd
 
 StatusCallback = Callable[[str], None]
 ProgressCallback = Callable[[float], None]
+OcrFunction = Callable[..., str]
+OcrBuildResult = tuple[OcrFunction | None, str, str | None, str | None]
+OcrBackendBuildResult = tuple[OcrFunction | None, str | None]
 _UI_NOISE_TERMS = (
     "chat people raise react",
     "camera mic share leave",
@@ -390,12 +393,12 @@ def _extract_sampled_frames(
     return frames
 
 
-def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None):
+def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None) -> OcrBuildResult:
     requested = (backend or "auto").strip().lower()
     attempts: list[str] = []
     attempt_reason_by_backend: dict[str, str] = {}
 
-    backend_builders: dict[str, Callable[..., tuple[Callable | None, str | None]]] = {
+    backend_builders: dict[str, Callable[..., OcrBackendBuildResult]] = {
         "paddleocr": _build_paddle_ocr_fn,
         "surya": _build_surya_ocr_fn,
         "pytesseract": lambda **_: _build_tesseract_ocr_fn(),
@@ -445,7 +448,7 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None):
     return None, "", reason or "No OCR backend available.", None
 
 
-def _build_tesseract_ocr_fn():
+def _build_tesseract_ocr_fn() -> OcrBackendBuildResult:
     try:
         import pytesseract
 
@@ -464,7 +467,7 @@ def _build_tesseract_ocr_fn():
         return None, f"{reason} ({exc})"
 
 
-def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None):
+def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBackendBuildResult:
     global _PADDLE_OCR
     configure_runtime_environment()
     _sanitize_ld_library_path(on_status=on_status)
@@ -552,10 +555,10 @@ def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None):
         return None, f"PaddleOCR init/runtime error: {exc}"
 
 
-def _extract_paddle_lines(result, *, min_conf: float) -> list[str]:
+def _extract_paddle_lines(result: object, *, min_conf: float) -> list[str]:
     lines: list[str] = []
 
-    def _append_text(text, conf):
+    def _append_text(text: object, conf: object) -> None:
         text_val = str(text or "").strip()
         if not text_val:
             return
@@ -566,7 +569,7 @@ def _extract_paddle_lines(result, *, min_conf: float) -> list[str]:
         if conf_val >= min_conf:
             lines.append(text_val)
 
-    def _consume(item):
+    def _consume(item: object) -> None:
         if item is None:
             return
 
@@ -637,7 +640,7 @@ def _sanitize_ld_library_path(*, on_status: StatusCallback | None = None) -> Non
             on_status("Detected conflicting LD_LIBRARY_PATH entries; using a cleaned runtime library path for OCR.")
 
 
-def _build_surya_ocr_fn(*, on_status: StatusCallback | None = None):
+def _build_surya_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBackendBuildResult:
     global _SURYA_DET_PREDICTOR, _SURYA_REC_PREDICTOR
     try:
         from surya.detection import DetectionPredictor
@@ -687,7 +690,7 @@ def _normalize_visual_profile(profile: str) -> str:
     return "balanced"
 
 
-def _roi_signature(image: "Image.Image"):
+def _roi_signature(image: "Image.Image") -> "np.ndarray":
     import numpy as np
 
     # Small grayscale signature for cheap change detection.
@@ -695,7 +698,7 @@ def _roi_signature(image: "Image.Image"):
     return np.asarray(sig, dtype=np.uint8)
 
 
-def _signature_changed(prev_sig, cur_sig, threshold: float) -> bool:
+def _signature_changed(prev_sig: "np.ndarray | None", cur_sig: "np.ndarray", threshold: float) -> bool:
     if prev_sig is None:
         return True
     try:
@@ -749,7 +752,7 @@ def _line_key(line: str) -> str:
     return key
 
 
-def _canonicalize_key(key: str, existing_keys) -> str:
+def _canonicalize_key(key: str, existing_keys: Iterable[str]) -> str:
     for existing in existing_keys:
         if key == existing:
             return existing

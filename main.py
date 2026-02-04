@@ -156,7 +156,7 @@ def run_listener(
     queue_size: int,
     auth_user: str | None,
     auth_pass: str | None,
-):
+) -> None:
     """Launches the Gradio listener with automatic port fallback."""
     LOGGER.info(
         "Launching listener host=%s port=%s max_port_tries=%s share=%s queue_size=%s auth=%s",
@@ -170,7 +170,7 @@ def run_listener(
     if bool(auth_user) != bool(auth_pass):
         raise SystemExit("Both auth username and password must be provided together.")
 
-    def _announce_listener(chosen_port: int):
+    def _announce_listener(chosen_port: int) -> None:
         print("PyScribe listener running:")
         if host in {"0.0.0.0", "::"}:
             lan_ip = _resolve_lan_ip()
@@ -212,7 +212,7 @@ def _resolve_lan_ip() -> str:
     return "localhost"
 
 
-def run_qt():
+def run_qt() -> None:
     """Launches the PySide6 desktop UI."""
     LOGGER.info("Launching Qt desktop UI")
     from ui_qt import run_qt_app
@@ -220,7 +220,7 @@ def run_qt():
     run_qt_app()
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PyScribe entry point.")
     subparsers = parser.add_subparsers(dest="mode")
 
@@ -257,7 +257,7 @@ def prompt_launch_mode() -> str:
         print("Please enter 1 or 2.")
 
 
-def main():
+def main() -> None:
     safe_argv = _redact_sensitive_argv(sys.argv)
     LOGGER.info(
         "PyScribe startup argv=%s log_path=%s cache_root=%s",

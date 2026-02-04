@@ -12,7 +12,7 @@ from tkinter import messagebox
 import ffmpeg
 import numpy as np
 
-def check_and_install_dependencies():
+def check_and_install_dependencies() -> bool:
     """Checks for required packages and offers to install them via pip."""
     required_packages = {
         "numpy": "numpy",
@@ -24,7 +24,7 @@ def check_and_install_dependencies():
         "pynvml": "pynvml"
     }
     
-    missing_packages = []
+    missing_packages: list[str] = []
     for import_name, install_name in required_packages.items():
         if not importlib.util.find_spec(import_name):
              missing_packages.append(install_name)
@@ -68,7 +68,7 @@ def get_available_hf_models() -> list[str]:
         "guillaumekln/whisper-large-v3-ct2",
     ]
     
-    local_models = []
+    local_models: list[str] = []
     cache_dir = os.path.expanduser("~/.cache/huggingface/hub/")
     if os.path.isdir(cache_dir):
         for item in os.listdir(cache_dir):

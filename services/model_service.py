@@ -83,7 +83,7 @@ def load_model(
     return model
 
 
-def detect_language(audio_np, *, device: str) -> tuple[str, float]:
+def detect_language(audio_np: object, *, device: str) -> tuple[str, float]:
     """Detects language using a small detector model."""
     detector = load_model(
         "tiny",

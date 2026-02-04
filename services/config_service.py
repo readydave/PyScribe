@@ -66,7 +66,7 @@ def save_config(config: AppConfig, path: Path = DEFAULT_CONFIG_PATH) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _as_optional_int(value) -> int | None:
+def _as_optional_int(value: object) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.isdigit():
@@ -74,13 +74,13 @@ def _as_optional_int(value) -> int | None:
     return None
 
 
-def _as_optional_str(value) -> str | None:
+def _as_optional_str(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value
     return None
 
 
-def _as_optional_float(value, default: float) -> float:
+def _as_optional_float(value: object, default: float) -> float:
     try:
         parsed = float(value)
         if parsed <= 0:
@@ -90,7 +90,7 @@ def _as_optional_float(value, default: float) -> float:
         return default
 
 
-def _as_ocr_backend(value) -> str:
+def _as_ocr_backend(value: object) -> str:
     allowed = {"auto", "paddleocr", "surya", "pytesseract"}
     normalized = str(value or "").strip().lower()
     if normalized in allowed:
@@ -98,7 +98,7 @@ def _as_ocr_backend(value) -> str:
     return "paddleocr"
 
 
-def _as_visual_profile(value) -> str:
+def _as_visual_profile(value: object) -> str:
     allowed = {"fast", "balanced", "accurate"}
     normalized = str(value or "").strip().lower()
     if normalized in allowed:
@@ -106,7 +106,7 @@ def _as_visual_profile(value) -> str:
     return "balanced"
 
 
-def _as_run_mode(value) -> str:
+def _as_run_mode(value: object) -> str:
     allowed = {"full", "transcribe_only", "visual_only"}
     normalized = str(value or "").strip().lower()
     if normalized in allowed:
@@ -114,7 +114,7 @@ def _as_run_mode(value) -> str:
     return "full"
 
 
-def _as_theme_mode(value) -> str:
+def _as_theme_mode(value: object) -> str:
     allowed = {"system", "light", "dark"}
     normalized = str(value or "").strip().lower()
     if normalized in allowed:
@@ -122,7 +122,7 @@ def _as_theme_mode(value) -> str:
     return "system"
 
 
-def _as_backend_list(value) -> list[str]:
+def _as_backend_list(value: object) -> list[str]:
     allowed = {"paddleocr", "surya", "pytesseract", "auto"}
     if not isinstance(value, list):
         return []

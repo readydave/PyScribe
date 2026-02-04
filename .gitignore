@@ -30,6 +30,21 @@ dist/
 .pyscribe_logs/
 launch.bat
 
+# Runtime/tooling artifacts
+.gradio/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.tox/
+.nox/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
 
 .continue/mcpServers/searxng.yaml
 .python-version

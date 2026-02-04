@@ -4,16 +4,19 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Dict, Optional
+from typing import Callable
 from huggingface_hub import HfFolder
 import torchaudio
 import numpy as np
 import torch
 from services.runtime_compat import ensure_platform_sys_version_compat
 LOGGER = logging.getLogger(__name__)
+ProgressCallback = Callable[[float], None]
+StatusCallback = Callable[[str], None]
+Segment = dict[str, object]
 
 
-def _lazy_import_pyannote():
+def _lazy_import_pyannote() -> object:
     try:
         from pyannote.audio import Pipeline  # type: ignore
     except ImportError as e:
@@ -26,10 +29,10 @@ def _lazy_import_pyannote():
 def run_diarization(
     audio_path: str,
     device: str = "cpu",
-    max_speakers: Optional[int] = None,
-    progress_cb=None,
-    status_cb=None,
-) -> List[Dict]:
+    max_speakers: int | None = None,
+    progress_cb: ProgressCallback | None = None,
+    status_cb: StatusCallback | None = None,
+) -> list[Segment]:
     """
     Runs diarization on the provided audio file.
     Returns a list of segments: [{"start": float, "end": float, "speaker": "S1"}, ...]
@@ -38,7 +41,7 @@ def run_diarization(
     Pipeline = _lazy_import_pyannote()
     # Some torchaudio builds dropped set_audio_backend; provide a no-op to avoid pipeline errors.
     if not hasattr(torchaudio, "set_audio_backend"):
-        def _noop_backend(name=None):
+        def _noop_backend(name: str | None = None) -> None:
             return None
         torchaudio.set_audio_backend = _noop_backend  # type: ignore
     # Numpy 2.x removed np.NaN alias; guard for older code paths in dependencies.
@@ -78,8 +81,8 @@ def run_diarization(
             progress_cb(95)
         except Exception:
             pass
-    segments = []
-    speaker_map = {}
+    segments: list[Segment] = []
+    speaker_map: dict[object, str] = {}
     speaker_idx = 1
     for turn, _, speaker in diarization.itertracks(yield_label=True):
         if speaker not in speaker_map:
@@ -101,12 +104,12 @@ def run_diarization(
     return segments
 
 
-def assign_speakers(asr_segments: List[Dict], spk_segments: List[Dict]) -> List[Dict]:
+def assign_speakers(asr_segments: list[Segment], spk_segments: list[Segment]) -> list[Segment]:
     """
     Assigns a speaker label to each ASR segment based on maximum overlap.
     Returns updated ASR segments with 'speaker' key.
     """
-    def overlap(a_start, a_end, b_start, b_end):
+    def overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
         return max(0.0, min(a_end, b_end) - max(a_start, b_start))
 
     for seg in asr_segments:

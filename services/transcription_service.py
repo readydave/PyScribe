@@ -157,7 +157,7 @@ def transcribe_prepared_audio(
             if on_diar_progress:
                 on_diar_progress(25)
 
-            def _diar_progress(value: float):
+            def _diar_progress(value: float) -> None:
                 if cancel_event and cancel_event.is_set():
                     raise InterruptedError("Cancelled during diarization.")
                 if on_diar_progress:

@@ -16,6 +16,23 @@ StatusCallback = Callable[[str], None]
 Segment = dict[str, object]
 
 
+def _torch_cuda_snapshot() -> str:
+    """Returns concise torch/CUDA runtime diagnostics for logs."""
+    parts = [
+        f"torch={getattr(torch, '__version__', '<unknown>')}",
+        f"torch.version.cuda={getattr(getattr(torch, 'version', object()), 'cuda', None)}",
+    ]
+    try:
+        parts.append(f"cuda_available={torch.cuda.is_available()}")
+    except Exception as exc:
+        parts.append(f"cuda_available_error={exc}")
+    try:
+        parts.append(f"cuda_device_count={torch.cuda.device_count()}")
+    except Exception as exc:
+        parts.append(f"cuda_device_count_error={exc}")
+    return " | ".join(parts)
+
+
 def _lazy_import_pyannote() -> object:
     try:
         from pyannote.audio import Pipeline  # type: ignore
@@ -49,14 +66,33 @@ def run_diarization(
         np.NaN = np.nan  # type: ignore
 
     token = HfFolder.get_token()
+    LOGGER.info(
+        "Loading pyannote diarization pipeline preferred=3.1 fallback=3.0 token_present=%s requested_device=%s",
+        bool(token),
+        device,
+    )
     try:
         pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
-    except Exception:
+        pipeline_version = "3.1"
+    except Exception as e1:
+        LOGGER.warning("Failed to load pyannote pipeline 3.1; trying 3.0. reason=%s", e1, exc_info=True)
         # fallback to 3.0 if 3.1 still gated or unavailable
         try:
             pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.0", use_auth_token=token)
+            pipeline_version = "3.0"
         except Exception as e2:
+            LOGGER.error(
+                "Failed to load pyannote pipeline versions 3.1 and 3.0 requested_device=%s torch_diag=%s",
+                device,
+                _torch_cuda_snapshot(),
+                exc_info=True,
+            )
             raise RuntimeError(f"Failed to load pyannote pipeline (3.1 then 3.0): {e2}")
+    LOGGER.info(
+        "Loaded pyannote diarization pipeline version=%s token_present=%s",
+        pipeline_version,
+        bool(token),
+    )
 
     requested_device = device
     effective_device = "cpu"
@@ -70,12 +106,33 @@ def run_diarization(
         if status_cb:
             status_cb(f"Diarization backend fallback to CPU (requested {requested_device.upper()})")
         LOGGER.warning(
-            "Diarization pipeline.to(%s) failed; using CPU fallback. reason=%s",
+            "Diarization pipeline.to(%s) failed; using CPU fallback. reason=%s torch_diag=%s",
             requested_device,
             exc,
+            _torch_cuda_snapshot(),
+            exc_info=True,
         )
 
-    diarization = pipeline(audio_path, num_speakers=max_speakers)
+    LOGGER.info(
+        "Running diarization inference backend=accurate model=%s requested_device=%s effective_device=%s max_speakers=%s",
+        pipeline_version,
+        requested_device,
+        effective_device,
+        max_speakers,
+    )
+    try:
+        diarization = pipeline(audio_path, num_speakers=max_speakers)
+    except Exception:
+        LOGGER.error(
+            "Diarization inference failed backend=accurate model=%s requested_device=%s effective_device=%s max_speakers=%s torch_diag=%s",
+            pipeline_version,
+            requested_device,
+            effective_device,
+            max_speakers,
+            _torch_cuda_snapshot(),
+            exc_info=True,
+        )
+        raise
     if progress_cb:
         try:
             progress_cb(95)

@@ -82,12 +82,13 @@ def configure_runtime_environment() -> dict[str, str]:
 
 def prepare_linux_dynamic_loader_environment() -> dict[str, str | bool]:
     """
-    On Linux, prepends Paddle's bundled `paddle/libs` path to LD_LIBRARY_PATH and
+    On Linux, prepends runtime library paths needed by OCR and CUDA diarization, and
     strips known conflicting library-injection paths. Returns change metadata.
     """
     result: dict[str, str | bool] = {
         "changed": False,
         "paddle_lib_dir": "",
+        "nvidia_lib_dirs": "",
         "ld_library_path": os.environ.get("LD_LIBRARY_PATH", ""),
     }
     if not sys.platform.startswith("linux"):
@@ -96,10 +97,18 @@ def prepare_linux_dynamic_loader_environment() -> dict[str, str | bool]:
     original_ld = os.environ.get("LD_LIBRARY_PATH", "")
     parts = [p for p in original_ld.split(":") if p]
     cleaned = _strip_conflicting_library_paths(parts)
+
+    nvidia_lib_dirs = _detect_nvidia_cuda_lib_dirs()
+    if nvidia_lib_dirs:
+        preferred = list(nvidia_lib_dirs)
+        cleaned = [p for p in cleaned if p not in preferred]
+        cleaned = preferred + cleaned
+        result["nvidia_lib_dirs"] = ":".join(preferred)
+
     paddle_lib_dir = _detect_paddle_libs_dir()
     if paddle_lib_dir:
         cleaned = [p for p in cleaned if p != paddle_lib_dir]
-        cleaned.insert(0, paddle_lib_dir)
+        cleaned = [paddle_lib_dir] + cleaned
         result["paddle_lib_dir"] = paddle_lib_dir
 
     new_ld = ":".join(cleaned)
@@ -167,6 +176,63 @@ def _detect_paddle_libs_dir() -> str:
         if os.path.isdir(candidate):
             return os.path.abspath(candidate)
     return ""
+
+
+def _detect_nvidia_cuda_lib_dirs() -> list[str]:
+    """
+    Detects venv/site-packages CUDA runtime library dirs installed via PyTorch wheels.
+    Returns directories in preferred lookup order.
+    """
+    pkg_order = (
+        "cuda_nvrtc",
+        "cuda_runtime",
+        "cudnn",
+        "cublas",
+        "cufft",
+        "curand",
+        "cusolver",
+        "cusparse",
+        "nccl",
+        "nvtx",
+        "cuda_cupti",
+    )
+    candidates: list[str] = []
+    search_roots: list[Path] = []
+
+    for entry in sys.path:
+        try:
+            root = Path(entry).resolve()
+        except Exception:
+            continue
+        if root.is_dir():
+            search_roots.append(root)
+
+    version_tag = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    prefix_site = Path(sys.prefix) / "lib" / version_tag / "site-packages"
+    if prefix_site.is_dir():
+        search_roots.insert(0, prefix_site)
+
+    seen_roots: set[str] = set()
+    unique_roots: list[Path] = []
+    for root in search_roots:
+        root_str = str(root)
+        if root_str in seen_roots:
+            continue
+        seen_roots.add(root_str)
+        unique_roots.append(root)
+
+    for root in unique_roots:
+        nvidia_root = root / "nvidia"
+        if not nvidia_root.is_dir():
+            continue
+        for pkg in pkg_order:
+            lib_dir = nvidia_root / pkg / "lib"
+            if lib_dir.is_dir():
+                lib_str = str(lib_dir)
+                if lib_str not in candidates:
+                    candidates.append(lib_str)
+
+    return candidates
 
 
 def _strip_conflicting_library_paths(parts: list[str]) -> list[str]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+from pathlib import Path
 import sys
 import tempfile
 import time
@@ -41,6 +42,60 @@ class TranscriptionResult:
     transcription_seconds: float
     diarization_seconds: float
     visual_analysis_seconds: float
+
+
+def _should_retry_diarization_on_cpu(exc: Exception, *, backend: str, device: str) -> bool:
+    """Returns True when diarization failed due to likely CUDA runtime/linker issues."""
+    if device.lower() != "cuda":
+        return False
+    if backend not in {"accurate", "fast"}:
+        # sortformer is CUDA-only; don't auto-switch backend implicitly.
+        return False
+    message = str(exc).lower()
+    cuda_linker_markers = (
+        "libnvrtc",
+        "libcudart",
+        "cuda failed",
+        "cuda error",
+        "cuda initialization",
+        "failed call to cuinit",
+        "no cuda gpus are available",
+        "torch.cuda",
+    )
+    return any(marker in message for marker in cuda_linker_markers)
+
+
+def _collect_cuda_diagnostics() -> str:
+    """Collect lightweight CUDA runtime diagnostics for fallback logging."""
+    parts: list[str] = [f"env.LD_LIBRARY_PATH={_short_env('LD_LIBRARY_PATH', max_len=280)}"]
+    try:
+        import torch  # local import to keep startup costs unchanged
+
+        parts.append(f"torch={getattr(torch, '__version__', '<unknown>')}")
+        parts.append(f"torch.version.cuda={getattr(getattr(torch, 'version', object()), 'cuda', None)}")
+        try:
+            parts.append(f"torch.cuda.is_available={torch.cuda.is_available()}")
+        except Exception as exc:
+            parts.append(f"torch.cuda.is_available_error={exc}")
+        try:
+            parts.append(f"torch.cuda.device_count={torch.cuda.device_count()}")
+        except Exception as exc:
+            parts.append(f"torch.cuda.device_count_error={exc}")
+    except Exception as exc:
+        parts.append(f"torch_import_error={exc}")
+
+    try:
+        nvrtc_candidates = sorted(
+            str(path)
+            for path in Path(sys.prefix).glob("lib/python*/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so*")
+        )
+        if nvrtc_candidates:
+            parts.append(f"nvrtc_candidates={';'.join(nvrtc_candidates[:4])}")
+        else:
+            parts.append("nvrtc_candidates=<none-under-sys.prefix>")
+    except Exception as exc:
+        parts.append(f"nvrtc_scan_error={exc}")
+    return " | ".join(parts)
 
 
 def _probe_duration_seconds(wav_path: str) -> float:
@@ -163,14 +218,52 @@ def transcribe_prepared_audio(
                 if on_diar_progress:
                     on_diar_progress(value)
 
-            diar_segments = run_diarization_backend(
-                audio_path=wav_path,
-                backend=diar_backend,
-                device=device,
-                max_speakers=max_speakers,
-                progress_cb=_diar_progress,
-                status_cb=on_status,
-            )
+            try:
+                diar_segments = run_diarization_backend(
+                    audio_path=wav_path,
+                    backend=diar_backend,
+                    device=device,
+                    max_speakers=max_speakers,
+                    progress_cb=_diar_progress,
+                    status_cb=on_status,
+                )
+            except Exception as diar_exc:
+                if not _should_retry_diarization_on_cpu(diar_exc, backend=diar_backend, device=device):
+                    raise
+                LOGGER.warning(
+                    "Diarization on CUDA failed for backend=%s; retrying on CPU. reason=%s diagnostics=%s",
+                    diar_backend,
+                    diar_exc,
+                    _collect_cuda_diagnostics(),
+                    exc_info=True,
+                )
+                if on_status:
+                    on_status(
+                        "Diarization CUDA runtime unavailable. Retrying diarization on CPU (slower, keeps speakers)..."
+                    )
+                try:
+                    diar_segments = run_diarization_backend(
+                        audio_path=wav_path,
+                        backend=diar_backend,
+                        device="cpu",
+                        max_speakers=max_speakers,
+                        progress_cb=_diar_progress,
+                        status_cb=on_status,
+                    )
+                    LOGGER.info(
+                        "Diarization CPU retry succeeded backend=%s requested_device=%s",
+                        diar_backend,
+                        device,
+                    )
+                except Exception:
+                    LOGGER.error(
+                        "Diarization CPU retry failed backend=%s requested_device=%s diagnostics=%s",
+                        diar_backend,
+                        device,
+                        _collect_cuda_diagnostics(),
+                        exc_info=True,
+                    )
+                    raise
 
             if on_status:
                 on_status("Assigning speakers to transcript...")

@@ -29,6 +29,7 @@ dist/
 .cache/
 .pyscribe_logs/
 launch.bat
+scripts/launch_windows.bat
 
 # Runtime/tooling artifacts
 .gradio/

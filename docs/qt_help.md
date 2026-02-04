@@ -4,13 +4,17 @@
 
 1. Click **Browse** (or drag and drop a media file) to select audio/video.
 2. Pick a model in the **Model** dropdown.
-3. Click **Transcribe**.
-4. Save or copy the transcript when complete.
+3. Choose processing options (**Transcribe audio**, **Identify Speakers**, **Analyze visuals**).
+4. Click **Process File**.
+5. Save or copy the transcript when complete.
 
 ## Main Workflow
 
 - **Browse / Drop zone**: choose a local media file.
 - **Model**: supports built-in model names and custom Hugging Face repo IDs (`owner/repo`).
+- **Transcribe audio**:
+  - Enables/disables ASR transcription stage.
+  - If disabled while visual analysis is enabled, the run becomes visual-only.
 - **Speaker Identification**:
   - Turn on to enable diarization (speaker labels).
   - Choose backend mode and optional max speaker count.
@@ -53,7 +57,7 @@
 
 ## Transcription Controls
 
-- **Transcribe**: starts a new job.
+- **Process File**: starts a new job.
 - **Cancel**: cooperative stop (safe).
 - **Force Stop**: immediate stop if cancel is stuck.
 - **Save** (dropdown, default action = Save All):
@@ -67,6 +71,8 @@
 
 - **No output / error dialog**
   - Confirm FFmpeg is installed and available in PATH.
+- **No task selected**
+  - Enable at least one of **Transcribe audio** or **Analyze visuals**.
 - **Gated diarization errors**
   - Verify HF token and model access terms.
 - **GPU issues**
@@ -77,8 +83,11 @@
 
 ## Logging
 
-- Log file path defaults to:
-  - `%USERPROFILE%\\.pyscribe\\logs\\pyscribe.log`
+- Log file target order:
+  1. `PYSCRIBE_LOG_DIR/pyscribe.log` (if set)
+  2. `~/.pyscribe/logs/pyscribe.log`
+  3. `./.pyscribe_logs/pyscribe.log`
+  4. OS temp fallback
 - Optional environment overrides:
   - `PYSCRIBE_LOG_LEVEL=DEBUG`
   - `PYSCRIBE_LOG_STDOUT=1`

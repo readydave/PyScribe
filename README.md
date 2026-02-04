@@ -1,33 +1,42 @@
-# PyScribe - Local Transcription GUI
+# PyScribe
 
-PyScribe is a cross-platform local transcription app for Windows and Linux, powered by `faster-whisper`. It runs fully on your machine (desktop UI or browser listener mode) for privacy and high performance.
+PyScribe is a local transcription app for Windows and Linux built on `faster-whisper`.
+It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker diarization and optional visual OCR analysis for video files.
 
-## Key Features
-- High-speed transcription with `faster-whisper`
-- Hardware-aware model recommendations (GPU/CPU)
-- Live progress, live transcript, and hardware metrics
-- Optional speaker diarization with selectable backends
-- Optional multimodal visual analysis (OCR on sampled video frames for slides/chat text)
-- Qt desktop UI and Gradio listener mode
-- Model download confirmation + in-app progress
-- Hugging Face token support for gated diarization models
-- Interactive launcher menu (`python main.py`) so users can choose Qt desktop or listener mode without remembering commands
-- Qt quality-of-life controls: `Cancel`, `Force Stop`, and `Exit`
-- Save dialog defaults to source media folder and remembers the last browse/save location
-- Save dropdown modes: `Save All (Transcript + OCR)`, `Save Transcript Only`, `Save OCR Only`
-- Qt menu bar with `Tools` (HF Token, Benchmark) and `Help` (PyScribe Help, Model Help, Open Logs Folder, About)
+## Documentation
+
+- `docs/user_guide.md` - full feature guide for Qt, Listener, CLI, and environment settings.
+- `docs/qt_help.md` - in-app Qt help content.
+- `CONTRIBUTING.md` - development and contribution workflow.
+- `SECURITY.md` - vulnerability reporting and security guidance.
+- `CHANGELOG.md` - project change history.
+
+## Highlights
+
+- Local transcription using `faster-whisper`
+- Hardware-aware model recommendations
+- Qt desktop mode and Gradio listener mode
+- Optional speaker diarization with selectable backend
+- Optional visual analysis (OCR on sampled video frames)
+- Live status, progress, and transcript updates
+- Qt controls for cancel and force stop
+- Save modes: combined output, transcript-only, OCR-only
+- Optional Hugging Face token support for gated/private model access
 
 ## Requirements
-- Python 3.12 (recommended)
-- FFmpeg in PATH
+
+- Python 3.10+ (3.12 recommended)
+- FFmpeg available in PATH
   - Windows: `winget install Gyan.FFmpeg`
   - Ubuntu/Debian: `sudo apt install ffmpeg`
-- Optional for multimodal OCR:
-  - Windows: install Tesseract OCR and add to PATH
-  - Ubuntu/Debian: `sudo apt install tesseract-ocr`
-  - PaddleOCR model files are cached in a user-writable location by default (`~/.cache/pyscribe`)
+- Optional OCR runtime:
+  - `pytesseract` + OS `tesseract` executable
+  - or PaddleOCR runtime dependencies
 
-## Installation (Windows)
+## Installation
+
+### Windows
+
 ```bash
 py -3.12 -m venv C:\Code\_envs\pyscribe
 C:\Code\_envs\pyscribe\Scripts\activate
@@ -35,7 +44,8 @@ cd C:\Code\PyScribe
 pip install -r requirements.txt
 ```
 
-## Installation (Linux)
+### Linux
+
 ```bash
 sudo apt update
 sudo apt install -y ffmpeg python3.12 python3.12-venv
@@ -44,65 +54,73 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Usage
+## Quick Start
+
 ```bash
-# Interactive launcher (choose Qt / Listener)
+# Interactive launcher menu (choose mode)
 python main.py
 
-# Qt desktop UI
+# Qt desktop
 python main.py qt
 
-# Gradio listener mode (localhost-only default)
+# Listener mode (localhost by default)
 python main.py serve --port 7860
+```
 
-# Expose listener on LAN (explicit opt-in + auth required)
+Listener mode automatically moves to the next free port if the preferred port is occupied.
+
+## Listener Security
+
+Binding to non-local interfaces is intentionally restricted.
+
+- Local-only bind (safe default): `--host 127.0.0.1`
+- Non-local bind requires:
+  - `--allow-nonlocal-host`
+  - `--auth-user <username>`
+  - `PYSCRIBE_AUTH_PASS` environment variable
+
+Example:
+
+```bash
 PYSCRIBE_AUTH_USER=admin PYSCRIBE_AUTH_PASS=change-me \
 python main.py serve --host 0.0.0.0 --allow-nonlocal-host --port 7860
 ```
 
-Listener mode auto-falls to the next free port if `7860` is in use.
+## Models
 
-## Qt Notes
-- `Open Folder` opens the selected media folder (or last-opened folder if no media is selected).
-- Speaker identification toggle clearly shows on/off state.
-- Deselect speaker identification to disable diarization and its progress bar.
-- Enable **Analyze visuals (slides/chat OCR)** to append on-screen text highlights with timestamps.
-  - The OCR pass focuses on the shared-content area and separately attempts to capture right-panel chat text.
-  - Choose visual mode: `fast`, `balanced`, `accurate` (speed vs thoroughness).
-  - OCR backend can be selected (`paddleocr`, `surya`, `pytesseract`, `auto`).
-  - `paddleocr` may download OCR model files on first run (Qt prompts before first use).
-  - `surya` is experimental and may require a separate environment with newer Torch versions.
-  - Report includes both the requested backend and the backend actually used (including fallback reason when applicable).
-  - Visual analysis now skips OCR on unchanged frames (dedupe) for faster processing.
-- Save dropdown behavior:
-  - **Save All (Transcript + OCR)**: saves spoken transcript plus the visual/OCR section in one file.
-  - **Save Transcript Only**: saves only spoken transcript (including speaker labels when diarization is enabled).
-  - **Save OCR Only**: saves only visual analysis/OCR findings (if available).
-- See `docs/qt_help.md` for the in-app help content shown by **Help -> PyScribe Help**.
+- Built-in model choices are available in both UIs.
+- Custom Hugging Face repo IDs are supported (for example `owner/repo`).
+- Full Hugging Face model URLs are normalized to repo IDs.
+- Qt mode asks for model download confirmation with a size estimate before first download.
 
-## Hugging Face Token (Diarization)
-Some diarization pipelines are gated on Hugging Face. In Qt mode, click `HF Token` and paste your token. You may also need to accept terms on model pages (for example, `pyannote/speaker-diarization-3.1`).
+## Feature Notes
 
-## Custom Model Repos
-Users can choose built-in models or custom Hugging Face repos.
+- **Diarization:** optional; when unavailable/failing, transcription still completes without speaker labels.
+- **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and OCR backend selection.
+- **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`.
+- **Benchmarking:** Qt Tools menu includes benchmark runner for bundled sample media.
 
-- Preferred: `owner/repo`
-- Full HF URLs are accepted and auto-converted to `owner/repo`
-- App performs best-effort size estimation and asks before download
-- Private/gated repos require authentication and accepted model terms
+## CLI / Packaging
 
-## Packaging and Service Mode
-- Optional CLI install:
-  ```bash
-  pip install .
-  pyscribe --help
-  ```
-- Linux listener helper: `scripts/run_listener.sh`
-- systemd example: `deploy/systemd/pyscribe-listener.service.example`
-- AppImage/runtime note: PyScribe auto-sets OCR/model cache env defaults (`PADDLE_HOME`, `PADDLE_PDX_CACHE_HOME`, `HF_HOME`, `MODELSCOPE_CACHE`) to user-writable paths and enables direct source tries (`PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True`). Override root with `PYSCRIBE_CACHE_DIR` if desired.
+```bash
+pip install .
+pyscribe --help
+```
+
+- Listener helper script: `scripts/run_listener.sh`
+- systemd example unit: `deploy/systemd/pyscribe-listener.service.example`
+
+## Runtime Environment Defaults
+
+PyScribe configures writable cache defaults for OCR/model assets when needed, including:
+`PYSCRIBE_CACHE_DIR`, `PADDLE_HOME`, `PADDLE_PDX_CACHE_HOME`, `HF_HOME`, and `MODELSCOPE_CACHE`.
+
+See `docs/user_guide.md` for all environment variables and behavior.
 
 ## License
-GPLv3
+
+GPL-3.0-only
 
 ## Acknowledgments
-Benchmark audio from [LibriVox](https://librivox.org/).
+
+Benchmark audio source: [LibriVox](https://librivox.org/).

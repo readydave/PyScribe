@@ -58,6 +58,9 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+INTERACTIVE_LAN_AUTH_USER = os.environ.get("PYSCRIBE_LAN_AUTH_USER", "pyscribe")
+INTERACTIVE_LAN_AUTH_PASS = os.environ.get("PYSCRIBE_LAN_AUTH_PASS", "Pyscribe!")
+
 
 def _redact_sensitive_argv(argv: list[str]) -> list[str]:
     """Return argv with secret values redacted for logging."""
@@ -257,6 +260,21 @@ def prompt_launch_mode() -> str:
         print("Please enter 1 or 2.")
 
 
+def prompt_listener_scope() -> str:
+    """Interactive listener exposure menu for option 2 in launcher mode."""
+    LOGGER.info("Starting interactive listener scope menu")
+    print("\nListener mode")
+    print("  1) Localhost only (127.0.0.1)")
+    print(f"  2) LAN share (0.0.0.0, auth user '{INTERACTIVE_LAN_AUTH_USER}')")
+    while True:
+        choice = input("Choose listener scope [1/2] (default 1): ").strip() or "1"
+        if choice == "1":
+            return "local"
+        if choice == "2":
+            return "lan"
+        print("Please enter 1 or 2.")
+
+
 def main() -> None:
     safe_argv = _redact_sensitive_argv(sys.argv)
     LOGGER.info(
@@ -272,6 +290,31 @@ def main() -> None:
         if selected == "1":
             run_qt()
             return
+        scope = prompt_listener_scope()
+        if scope == "lan":
+            auth_user = INTERACTIVE_LAN_AUTH_USER
+            auth_pass = INTERACTIVE_LAN_AUTH_PASS
+            _validate_listener_security(
+                "0.0.0.0",
+                auth_user=auth_user,
+                auth_pass=auth_pass,
+                allow_nonlocal_host=True,
+            )
+            LOGGER.warning(
+                "Interactive LAN listener enabled with configured default credentials user=%s",
+                auth_user,
+            )
+            run_listener(
+                host="0.0.0.0",
+                port=7860,
+                max_port_tries=50,
+                share=False,
+                queue_size=16,
+                auth_user=auth_user,
+                auth_pass=auth_pass,
+            )
+            return
+
         auth_user, auth_pass = _resolve_listener_auth(None)
         _validate_listener_security(
             "127.0.0.1",

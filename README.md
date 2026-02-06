@@ -69,6 +69,18 @@ python main.py serve --port 7860
 
 Listener mode automatically moves to the next free port if the preferred port is occupied.
 
+Interactive launcher behavior:
+
+- Choose `2) Listener` and then:
+  - `1) Localhost only (127.0.0.1)` (default)
+  - `2) LAN share (0.0.0.0)` with auth enabled
+- Interactive LAN defaults:
+  - Username: `pyscribe`
+  - Password: `Pyscribe!`
+- Override those defaults with:
+  - `PYSCRIBE_LAN_AUTH_USER`
+  - `PYSCRIBE_LAN_AUTH_PASS`
+
 ## Listener Security
 
 Binding to non-local interfaces is intentionally restricted.
@@ -85,6 +97,10 @@ Example:
 PYSCRIBE_AUTH_USER=admin PYSCRIBE_AUTH_PASS=change-me \
 python main.py serve --host 0.0.0.0 --allow-nonlocal-host --port 7860
 ```
+
+Note: Interactive LAN mode uses built-in defaults unless overridden by
+`PYSCRIBE_LAN_AUTH_USER` and `PYSCRIBE_LAN_AUTH_PASS`. Change these for any
+network you do not fully trust.
 
 ## Models
 

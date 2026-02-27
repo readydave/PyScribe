@@ -111,6 +111,7 @@ Fallback behavior:
 ### Status + Timing
 
 - Main status label shows current stage and results.
+- HF token status label shows whether a token is configured.
 - Progress bars:
   - transcription progress
   - diarization progress
@@ -122,16 +123,29 @@ Fallback behavior:
 
 ### Menus
 
+Qt menu bar includes **Tools**, **View**, and **Help**.
+
 ### Tools
 
 - **HF Token...**
   - Save Hugging Face token for gated/private model access.
+  - Shortcut: `Ctrl+Shift+T`
 - **Benchmark...**
   - Benchmark selected models using bundled sample audio.
+  - Shortcut: `Ctrl+B`
+
+### View
+
+- **Theme**
+  - `System`
+  - `Light`
+  - `Dark`
+  - Theme preference is persisted across launches.
 
 ### Help
 
 - **PyScribe Help**
+  - Shortcut: Help key / `F1`
 - **Model Help**
 - **Open Logs Folder**
 - **About PyScribe**
@@ -139,7 +153,8 @@ Fallback behavior:
 ### Language Handling
 
 - Language auto-detection is attempted before run.
-- For `.en` models with non-English detected audio, Qt prompts for confirmation.
+- For `.en` models with non-English detected audio, Qt prompts to force English or cancel.
+- For non-English detected audio on non-`.en` models, Qt prompts to use detected language or force English.
 - If detection fails, run continues with model auto behavior.
 
 ## 4) Gradio Listener Features

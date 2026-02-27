@@ -12,7 +12,7 @@ Windows:
 
 ```bash
 py -3.12 -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -41,8 +41,13 @@ python main.py --help
 python main.py serve --help
 python main.py qt --help
 python -m py_compile main.py app.py services/logging_service.py services/config_service.py services/model_service.py services/transcription_service.py ui_qt/main_window.py ui_qt/benchmark_dialog.py
+bash -n scripts/run_listener.sh
+python -m pip install pytest
 python -m pytest -q tests/smoke_cli.py
 ```
+
+Note: `bash -n scripts/run_listener.sh` is the same syntax check CI runs on Linux.
+If you are on Windows without Bash, run this check in Git Bash/WSL or skip it locally.
 
 ## Code Guidelines
 

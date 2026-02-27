@@ -23,6 +23,28 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Save modes: combined output, transcript-only, OCR-only
 - Optional Hugging Face token support for gated/private model access
 
+## Screenshots
+
+### Qt Desktop Main Window
+
+![PyScribe Qt main window](assets/images/2026-02-27_08-59-56.png)
+
+### Qt Tools: Hugging Face Token
+
+![PyScribe Qt HF token dialog](assets/images/2026-02-27_09-00-05.png)
+
+### Qt Tools: Benchmark
+
+![PyScribe Qt benchmark dialog](assets/images/2026-02-27_09-00-12.png)
+
+### Qt View: Theme Menu
+
+![PyScribe Qt theme menu](assets/images/2026-02-27_09-00-41.png)
+
+### Listener (Gradio Web UI)
+
+![PyScribe Listener web UI](assets/images/2026-02-27-08_23_12.png)
+
 ## Recent Updates (Unreleased)
 
 - Shared listener security/auth logic between `main.py` and `app.py` via `services/listener_security_service.py`.
@@ -46,9 +68,8 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 ### Windows
 
 ```bash
-py -3.12 -m venv C:\Code\_envs\pyscribe
-C:\Code\_envs\pyscribe\Scripts\activate
-cd C:\Code\PyScribe
+py -3.12 -m venv .venv
+.\.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 

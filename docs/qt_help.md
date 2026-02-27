@@ -57,7 +57,8 @@ Run mode is inferred automatically:
   - Run staged connection tests with pass/fail diagnostics and suggested fixes.
 - **LLM Post-Process...** (`Ctrl+Shift+P`)
   - Run prompt-template-based post-processing on the current transcript.
-  - Optionally include current OCR context and additional notes.
+  - Optionally include current OCR context, additional notes, and pasted context.
+  - Includes payload preview so you can review exactly what will be sent.
 - **Process Existing Transcript...**
   - Open the same post-processing workflow, starting in file-load mode for saved transcript files.
   - Useful when transcription was completed in an earlier session.
@@ -125,6 +126,9 @@ Before transcription, PyScribe may detect language and prompt:
 - **Post-process blocked while transcription is running**
   - Local profiles are blocked during active local transcription to avoid GPU/compute contention.
   - Use a LAN profile with concurrent mode enabled, or wait for transcription to finish.
+- **Template editing**
+  - Built-in templates are read-only.
+  - Create/edit/delete custom templates from within the LLM Post-Process dialog.
 
 ## Logging
 

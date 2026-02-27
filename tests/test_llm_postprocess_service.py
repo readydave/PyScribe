@@ -9,7 +9,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 from services.llm_connection_service import LLMConnectionProfile
-from services.llm_postprocess_service import LLMPostprocessRequest, run_llm_postprocess
+from services.llm_postprocess_service import LLMPostprocessRequest, build_llm_payload_preview, run_llm_postprocess
 from services.prompt_template_service import PromptTemplate
 
 
@@ -115,6 +115,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
                     transcript_text="Speaker A: status update",
                     ocr_text="Slide: Q1 metrics",
                     notes_text="Keep it to 5 bullets.",
+                    extra_context_text="Prior sprint summary pasted by user.",
                     selected_model=None,
                 ),
             )
@@ -123,6 +124,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
         self.assertEqual(result.output_text, "Summary output")
         self.assertIn("OCR Report:", captured_prompt["value"])
         self.assertIn("Additional Notes:", captured_prompt["value"])
+        self.assertIn("Pasted Context:", captured_prompt["value"])
 
     def test_openai_compatible_success(self) -> None:
         def _mock_urlopen(request, timeout=8):  # noqa: ANN001, ARG001
@@ -186,6 +188,21 @@ class LLMPostprocessServiceTests(unittest.TestCase):
 
         self.assertEqual(result.status, "fail")
         self.assertEqual(result.error_code, "api_mismatch")
+
+    def test_payload_preview_builder(self) -> None:
+        payload = build_llm_payload_preview(
+            template=_template(),
+            request=LLMPostprocessRequest(
+                transcript_text="Line one",
+                ocr_text="Slide note",
+                notes_text="Use bullets",
+                extra_context_text="Company policy text",
+            ),
+        )
+        self.assertIn("Transcript:", payload)
+        self.assertIn("OCR Report:", payload)
+        self.assertIn("Additional Notes:", payload)
+        self.assertIn("Pasted Context:", payload)
 
 
 if __name__ == "__main__":

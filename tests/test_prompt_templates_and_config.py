@@ -8,26 +8,78 @@ import tempfile
 import unittest
 
 from services.config_service import AppConfig, load_config, save_config
-from services.prompt_template_service import get_default_prompt_template_id, get_prompt_template, load_prompt_templates
+from services.prompt_template_service import (
+    create_user_prompt_template,
+    delete_user_prompt_template,
+    get_default_prompt_template_id,
+    get_prompt_template,
+    load_prompt_templates,
+    update_user_prompt_template,
+)
 
 
 class PromptTemplateServiceTests(unittest.TestCase):
     def test_load_prompt_templates_returns_builtins(self) -> None:
-        templates, default_template_id = load_prompt_templates()
+        templates, default_template_id = load_prompt_templates(include_user_templates=False)
         template_ids = {template.id for template in templates}
         self.assertIn("meeting-summary", template_ids)
         self.assertIn("action-items", template_ids)
         self.assertEqual(default_template_id, "meeting-summary")
 
     def test_get_prompt_template_by_id(self) -> None:
-        template = get_prompt_template("decision-log")
+        template = get_prompt_template("decision-log", include_user_templates=False)
         self.assertIsNotNone(template)
         assert template is not None
         self.assertEqual(template.name, "Decision Log")
         self.assertEqual(template.output_format, "markdown")
 
     def test_get_default_prompt_template_id(self) -> None:
-        self.assertEqual(get_default_prompt_template_id(), "meeting-summary")
+        self.assertEqual(get_default_prompt_template_id(include_user_templates=False), "meeting-summary")
+
+    def test_user_template_crud(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            user_index = Path(temp_dir) / "index.yaml"
+            created = create_user_prompt_template(
+                name="Weekly Team Summary",
+                description="Custom summary template",
+                tags=["weekly", "team"],
+                output_format="markdown",
+                system_prompt="You are concise.",
+                user_prompt_scaffold="Summarize this update.",
+                enabled=True,
+                user_index_path=user_index,
+            )
+            self.assertFalse(created.built_in)
+            self.assertEqual(created.id, "weekly-team-summary")
+
+            templates, default_template_id = load_prompt_templates(
+                include_user_templates=True,
+                user_index_path=user_index,
+            )
+            self.assertIn("weekly-team-summary", {template.id for template in templates})
+            self.assertEqual(default_template_id, "weekly-team-summary")
+
+            updated = update_user_prompt_template(
+                template_id=created.id,
+                name="Weekly Team Summary v2",
+                description="Updated",
+                tags=["weekly"],
+                output_format="json",
+                system_prompt="System v2",
+                user_prompt_scaffold="Scaffold v2",
+                enabled=True,
+                user_index_path=user_index,
+            )
+            self.assertEqual(updated.output_format, "json")
+            self.assertGreaterEqual(updated.version, 2)
+
+            removed = delete_user_prompt_template(created.id, user_index_path=user_index)
+            self.assertTrue(removed)
+            templates_after_delete, _ = load_prompt_templates(
+                include_user_templates=True,
+                user_index_path=user_index,
+            )
+            self.assertNotIn("weekly-team-summary", {template.id for template in templates_after_delete})
 
 
 class ConfigServiceAdditiveFieldsTests(unittest.TestCase):

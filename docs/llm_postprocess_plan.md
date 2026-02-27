@@ -39,11 +39,11 @@ reversible milestones.
 
 ## Milestone 5: Templates + Context Enrichment
 
-- [ ] Add built-in prompt templates and user template CRUD.
-- [ ] Add optional pasted text context.
+- [x] Add built-in prompt templates and user template CRUD.
+- [x] Add optional pasted text context.
 - [ ] Add optional screenshot/image attachments.
 - [ ] Add multimodal capability check + OCR fallback for image context.
-- [ ] Add payload preview ("what will be sent").
+- [x] Add payload preview ("what will be sent").
 
 ## Milestone 6: Docs + Hardening
 

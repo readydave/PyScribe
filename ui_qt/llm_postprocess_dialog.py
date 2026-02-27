@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTextEdit,
@@ -27,12 +28,94 @@ from services import (
     AppConfig,
     LLMConnectionProfile,
     LLMPostprocessRequest,
+    PromptTemplate,
+    build_llm_payload_preview,
+    create_user_prompt_template,
+    delete_user_prompt_template,
     get_enabled_llm_profiles,
     get_prompt_template,
     load_prompt_templates,
     run_llm_postprocess,
     test_connection,
+    update_user_prompt_template,
 )
+
+
+class PromptTemplateEditorDialog(QDialog):
+    def __init__(self, *, template: PromptTemplate | None = None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._editing = template is not None
+        self._template = template
+        self.setWindowTitle("Edit Template" if self._editing else "New Template")
+        self.resize(760, 640)
+
+        root = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
+        self.id_input = QLineEdit()
+        self.id_input.setPlaceholderText("meeting-summary-custom")
+        self.name_input = QLineEdit()
+        self.description_box = QTextEdit()
+        self.description_box.setMaximumHeight(90)
+        self.tags_input = QLineEdit()
+        self.tags_input.setPlaceholderText("meetings, summary")
+        self.output_format_combo = QComboBox()
+        self.output_format_combo.addItems(["markdown", "json"])
+        self.enabled_checkbox = QCheckBox("Template enabled")
+
+        form.addRow("Template ID", self.id_input)
+        form.addRow("Name", self.name_input)
+        form.addRow("Description", self.description_box)
+        form.addRow("Tags (comma-separated)", self.tags_input)
+        form.addRow("Output format", self.output_format_combo)
+        form.addRow("", self.enabled_checkbox)
+
+        root.addLayout(form)
+        root.addWidget(QLabel("System Prompt"))
+        self.system_prompt_box = QTextEdit()
+        self.system_prompt_box.setMinimumHeight(130)
+        root.addWidget(self.system_prompt_box)
+        root.addWidget(QLabel("User Prompt Scaffold"))
+        self.user_prompt_box = QTextEdit()
+        self.user_prompt_box.setMinimumHeight(130)
+        root.addWidget(self.user_prompt_box)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        actions.addWidget(save_btn)
+        actions.addWidget(cancel_btn)
+        root.addLayout(actions)
+
+        if template is not None:
+            self.id_input.setText(template.id)
+            self.id_input.setEnabled(False)
+            self.name_input.setText(template.name)
+            self.description_box.setPlainText(template.description)
+            self.tags_input.setText(", ".join(template.tags))
+            self.output_format_combo.setCurrentText(template.output_format)
+            self.enabled_checkbox.setChecked(template.enabled)
+            self.system_prompt_box.setPlainText(template.system_prompt)
+            self.user_prompt_box.setPlainText(template.user_prompt_scaffold)
+        else:
+            self.enabled_checkbox.setChecked(True)
+
+    def payload(self) -> dict[str, object]:
+        raw_tags = [part.strip() for part in (self.tags_input.text() or "").split(",") if part.strip()]
+        return {
+            "template_id": (self.id_input.text() or "").strip().lower(),
+            "name": (self.name_input.text() or "").strip(),
+            "description": (self.description_box.toPlainText() or "").strip(),
+            "tags": raw_tags,
+            "output_format": (self.output_format_combo.currentText() or "markdown").strip().lower(),
+            "enabled": self.enabled_checkbox.isChecked(),
+            "system_prompt": (self.system_prompt_box.toPlainText() or "").strip(),
+            "user_prompt_scaffold": (self.user_prompt_box.toPlainText() or "").strip(),
+        }
 
 
 class LLMPostprocessDialog(QDialog):
@@ -48,10 +131,12 @@ class LLMPostprocessDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("LLM Post-Process")
-        self.resize(980, 700)
+        self.resize(980, 760)
 
+        self._config = config
         self._profiles: list[LLMConnectionProfile] = get_enabled_llm_profiles(config.llm_profiles)
         self._templates, self._default_template_id = load_prompt_templates()
+        self._template_by_id: dict[str, PromptTemplate] = {template.id: template for template in self._templates}
         self._current_transcript_text = (current_transcript_text or "").strip()
         self._current_ocr_text = (current_ocr_text or "").strip()
         self._loaded_transcript_path: str | None = None
@@ -60,6 +145,8 @@ class LLMPostprocessDialog(QDialog):
         self._loaded_ocr_text: str = ""
         self._is_transcription_running = is_transcription_running
         self._prefer_loaded_transcript = bool(prefer_loaded_transcript)
+        self._payload_preview_required = bool(config.llm_payload_preview_required)
+        self._last_payload_preview: str = ""
         self._last_output_text: str = ""
 
         self._build_ui()
@@ -82,17 +169,30 @@ class LLMPostprocessDialog(QDialog):
         self.profile_combo = QComboBox()
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         self.template_combo = QComboBox()
+        self.template_combo.currentIndexChanged.connect(self._on_template_changed)
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
         self.refresh_btn = QPushButton("Refresh Connection + Models")
         self.refresh_btn.clicked.connect(self._on_refresh_connection)
+        self.template_new_btn = QPushButton("New...")
+        self.template_new_btn.clicked.connect(self._on_new_template)
+        self.template_edit_btn = QPushButton("Edit...")
+        self.template_edit_btn.clicked.connect(self._on_edit_template)
+        self.template_delete_btn = QPushButton("Delete")
+        self.template_delete_btn.clicked.connect(self._on_delete_template)
 
         profile_row = QHBoxLayout()
         profile_row.addWidget(self.profile_combo, 1)
         profile_row.addWidget(self.refresh_btn)
 
+        template_row = QHBoxLayout()
+        template_row.addWidget(self.template_combo, 1)
+        template_row.addWidget(self.template_new_btn)
+        template_row.addWidget(self.template_edit_btn)
+        template_row.addWidget(self.template_delete_btn)
+
         config_form.addRow("Profile", self._wrap_layout(profile_row))
-        config_form.addRow("Template", self.template_combo)
+        config_form.addRow("Template", self._wrap_layout(template_row))
         config_form.addRow("Model", self.model_combo)
         root.addLayout(config_form)
 
@@ -114,15 +214,35 @@ class LLMPostprocessDialog(QDialog):
         root.addWidget(self.source_label)
         root.addWidget(self.ocr_label)
 
-        self.notes_box = QTextEdit()
-        self.notes_box.setPlaceholderText("Additional notes/context to include in post-processing (optional).")
-        self.notes_box.setMinimumHeight(100)
         root.addWidget(QLabel("Additional Notes"))
+        self.notes_box = QTextEdit()
+        self.notes_box.setPlaceholderText("Short notes/instructions to include in post-processing (optional).")
+        self.notes_box.setMinimumHeight(80)
         root.addWidget(self.notes_box)
+
+        root.addWidget(QLabel("Pasted Context"))
+        self.extra_context_box = QTextEdit()
+        self.extra_context_box.setPlaceholderText("Paste additional context text (optional).")
+        self.extra_context_box.setMinimumHeight(90)
+        root.addWidget(self.extra_context_box)
 
         self.connection_status = QLabel("Connection test not run yet.")
         self.connection_status.setWordWrap(True)
         root.addWidget(self.connection_status)
+
+        preview_row = QHBoxLayout()
+        preview_row.addWidget(QLabel("Payload Preview"))
+        preview_row.addStretch(1)
+        self.preview_btn = QPushButton("Preview Payload")
+        self.preview_btn.clicked.connect(self._on_preview_payload)
+        preview_row.addWidget(self.preview_btn)
+        root.addLayout(preview_row)
+
+        self.preview_box = QTextEdit()
+        self.preview_box.setReadOnly(True)
+        self.preview_box.setPlaceholderText("Preview of request payload sent to the LLM.")
+        self.preview_box.setMinimumHeight(140)
+        root.addWidget(self.preview_box)
 
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel("LLM Output"))
@@ -173,14 +293,35 @@ class LLMPostprocessDialog(QDialog):
     def _populate_templates(self, *, default_template_id: str | None) -> None:
         self.template_combo.clear()
         for template in self._templates:
-            self.template_combo.addItem(template.name, template.id)
-        if default_template_id:
+            suffix = " (built-in)" if template.built_in else ""
+            self.template_combo.addItem(f"{template.name}{suffix}", template.id)
+        target = (default_template_id or "").strip().lower()
+        if target:
             for idx in range(self.template_combo.count()):
-                if self.template_combo.itemData(idx) == default_template_id:
+                if self.template_combo.itemData(idx) == target:
                     self.template_combo.setCurrentIndex(idx)
+                    self._on_template_changed()
                     return
         if self.template_combo.count() > 0:
             self.template_combo.setCurrentIndex(0)
+        self._on_template_changed()
+
+    def _selected_template_id(self) -> str | None:
+        value = self.template_combo.currentData()
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    def _selected_template(self) -> PromptTemplate | None:
+        template_id = self._selected_template_id()
+        if not template_id:
+            return None
+        return self._template_by_id.get(template_id)
+
+    def _refresh_templates(self, *, selected_template_id: str | None = None) -> None:
+        self._templates, self._default_template_id = load_prompt_templates()
+        self._template_by_id = {template.id: template for template in self._templates}
+        self._populate_templates(default_template_id=selected_template_id or self._default_template_id)
 
     def _refresh_source_labels(self) -> None:
         if self._current_transcript_text:
@@ -205,11 +346,49 @@ class LLMPostprocessDialog(QDialog):
                 return profile
         return None
 
-    def _selected_template_id(self) -> str | None:
-        value = self.template_combo.currentData()
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        return None
+    def _resolve_input_context(self) -> tuple[str, str]:
+        if self.use_current_checkbox.isChecked() and self._current_transcript_text:
+            transcript_text = self._current_transcript_text
+            ocr_text = self._loaded_ocr_text or self._current_ocr_text
+            return transcript_text, ocr_text
+        transcript_text = self._loaded_transcript_text.strip()
+        if not transcript_text and self._current_transcript_text:
+            transcript_text = self._current_transcript_text
+        ocr_text = self._loaded_ocr_text.strip() or ""
+        return transcript_text, ocr_text
+
+    def _build_request(self, transcript_text: str, ocr_text: str) -> LLMPostprocessRequest:
+        return LLMPostprocessRequest(
+            transcript_text=transcript_text,
+            ocr_text=ocr_text,
+            notes_text=(self.notes_box.toPlainText() or "").strip(),
+            selected_model=(self.model_combo.currentText() or "").strip() or None,
+            extra_context_text=(self.extra_context_box.toPlainText() or "").strip(),
+        )
+
+    def _render_payload_preview(self) -> tuple[PromptTemplate | None, LLMPostprocessRequest | None]:
+        transcript_text, ocr_text = self._resolve_input_context()
+        if not transcript_text:
+            QMessageBox.warning(
+                self,
+                "Transcript required",
+                "No transcript text is available. Use the current transcript or load a transcript file.",
+            )
+            return None, None
+        template_id = self._selected_template_id()
+        if not template_id:
+            QMessageBox.warning(self, "Template required", "Choose a prompt template.")
+            return None, None
+        template = get_prompt_template(template_id)
+        if template is None:
+            QMessageBox.warning(self, "Template unavailable", f"Template '{template_id}' could not be loaded.")
+            return None, None
+        request = self._build_request(transcript_text, ocr_text)
+        payload_preview = build_llm_payload_preview(template=template, request=request)
+        self._last_payload_preview = payload_preview
+        self.preview_box.setPlainText(payload_preview)
+        self._config.llm_default_template_id = template.id
+        return template, request
 
     @Slot()
     def _on_profile_changed(self) -> None:
@@ -224,6 +403,13 @@ class LLMPostprocessDialog(QDialog):
             return
         if current_text:
             self.model_combo.setEditText(current_text)
+
+    @Slot()
+    def _on_template_changed(self) -> None:
+        template = self._selected_template()
+        editable = bool(template is not None and not template.built_in)
+        self.template_edit_btn.setEnabled(editable)
+        self.template_delete_btn.setEnabled(editable)
 
     @Slot()
     def _on_refresh_connection(self) -> None:
@@ -257,7 +443,6 @@ class LLMPostprocessDialog(QDialog):
         if result.status == "pass":
             self.connection_status.setText("Connection test: PASS")
             return
-
         lines = [f"Connection test: FAIL ({result.failure_code})"]
         for stage in result.stages:
             if stage.status == "fail":
@@ -296,16 +481,88 @@ class LLMPostprocessDialog(QDialog):
         self._loaded_ocr_text = text.strip()
         self._refresh_source_labels()
 
-    def _resolve_input_context(self) -> tuple[str, str]:
-        if self.use_current_checkbox.isChecked() and self._current_transcript_text:
-            transcript_text = self._current_transcript_text
-            ocr_text = self._loaded_ocr_text or self._current_ocr_text
-            return transcript_text, ocr_text
-        transcript_text = self._loaded_transcript_text.strip()
-        if not transcript_text and self._current_transcript_text:
-            transcript_text = self._current_transcript_text
-        ocr_text = self._loaded_ocr_text.strip() or ""
-        return transcript_text, ocr_text
+    @Slot()
+    def _on_new_template(self) -> None:
+        editor = PromptTemplateEditorDialog(parent=self)
+        if editor.exec() != QDialog.Accepted:
+            return
+        payload = editor.payload()
+        try:
+            template = create_user_prompt_template(
+                name=str(payload["name"]),
+                description=str(payload["description"]),
+                tags=list(payload["tags"]),  # type: ignore[arg-type]
+                output_format=str(payload["output_format"]),
+                system_prompt=str(payload["system_prompt"]),
+                user_prompt_scaffold=str(payload["user_prompt_scaffold"]),
+                enabled=bool(payload["enabled"]),
+                template_id=str(payload["template_id"] or ""),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Template create failed", str(exc))
+            return
+        self._refresh_templates(selected_template_id=template.id)
+        self.connection_status.setText(f"Created template '{template.id}'.")
+
+    @Slot()
+    def _on_edit_template(self) -> None:
+        template = self._selected_template()
+        if template is None:
+            return
+        if template.built_in:
+            QMessageBox.information(
+                self,
+                "Built-in template",
+                "Built-in templates are read-only. Create a new template to customize prompts.",
+            )
+            return
+        editor = PromptTemplateEditorDialog(template=template, parent=self)
+        if editor.exec() != QDialog.Accepted:
+            return
+        payload = editor.payload()
+        try:
+            updated = update_user_prompt_template(
+                template_id=template.id,
+                name=str(payload["name"]),
+                description=str(payload["description"]),
+                tags=list(payload["tags"]),  # type: ignore[arg-type]
+                output_format=str(payload["output_format"]),
+                system_prompt=str(payload["system_prompt"]),
+                user_prompt_scaffold=str(payload["user_prompt_scaffold"]),
+                enabled=bool(payload["enabled"]),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Template update failed", str(exc))
+            return
+        self._refresh_templates(selected_template_id=updated.id)
+        self.connection_status.setText(f"Updated template '{updated.id}'.")
+
+    @Slot()
+    def _on_delete_template(self) -> None:
+        template = self._selected_template()
+        if template is None or template.built_in:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete template",
+            f"Delete user template '{template.id}'?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        if not delete_user_prompt_template(template.id):
+            QMessageBox.warning(self, "Delete failed", "Template could not be deleted.")
+            return
+        self._refresh_templates()
+        self.connection_status.setText(f"Deleted template '{template.id}'.")
+
+    @Slot()
+    def _on_preview_payload(self) -> None:
+        template, request = self._render_payload_preview()
+        if template is None or request is None:
+            return
+        self.connection_status.setText(f"Payload preview ready for template '{template.id}'.")
 
     @Slot()
     def _on_run_postprocess(self) -> None:
@@ -338,34 +595,24 @@ class LLMPostprocessDialog(QDialog):
                 )
                 return
 
-        transcript_text, ocr_text = self._resolve_input_context()
-        if not transcript_text:
-            QMessageBox.warning(
+        template, request = self._render_payload_preview()
+        if template is None or request is None:
+            return
+        if self._payload_preview_required:
+            answer = QMessageBox.question(
                 self,
-                "Transcript required",
-                "No transcript text is available. Use the current transcript or load a transcript file.",
+                "Confirm payload",
+                "Payload preview is required. Continue and send this payload to the model?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
             )
-            return
-        template_id = self._selected_template_id()
-        if not template_id:
-            QMessageBox.warning(self, "Template required", "Choose a prompt template.")
-            return
-        template = get_prompt_template(template_id)
-        if template is None:
-            QMessageBox.warning(self, "Template unavailable", f"Template '{template_id}' could not be loaded.")
-            return
+            if answer != QMessageBox.Yes:
+                self.connection_status.setText("Post-processing canceled before send.")
+                return
 
-        selected_model = (self.model_combo.currentText() or "").strip() or None
-        notes_text = (self.notes_box.toPlainText() or "").strip()
-        req = LLMPostprocessRequest(
-            transcript_text=transcript_text,
-            ocr_text=ocr_text,
-            notes_text=notes_text,
-            selected_model=selected_model,
-        )
         self.setCursor(Qt.WaitCursor)
         try:
-            result = run_llm_postprocess(profile, template, req)
+            result = run_llm_postprocess(profile, template, request)
         finally:
             self.unsetCursor()
 
@@ -397,7 +644,12 @@ class LLMPostprocessDialog(QDialog):
             return
         template_id = self._selected_template_id() or "template"
         suggested = f"postprocess_{template_id}.md"
-        path, _ = QFileDialog.getSaveFileName(self, "Save Post-Processed Output", suggested, "Markdown Files (*.md);;Text Files (*.txt)")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Post-Processed Output",
+            suggested,
+            "Markdown Files (*.md);;Text Files (*.txt)",
+        )
         if not path:
             return
         try:

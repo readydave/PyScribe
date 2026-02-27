@@ -1737,6 +1737,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dlg.exec()
+        self._save_config()
 
     def _is_transcription_running(self) -> bool:
         return bool(self.worker_thread and self.worker_thread.isRunning())

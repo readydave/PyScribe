@@ -19,9 +19,10 @@ LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class LLMPostprocessRequest:
     transcript_text: str
-    ocr_text: str
-    notes_text: str
-    selected_model: str | None
+    ocr_text: str = ""
+    notes_text: str = ""
+    selected_model: str | None = None
+    extra_context_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ def run_llm_postprocess(
             error_detail="No model is selected/configured for this profile.",
         )
 
-    user_payload = _build_user_payload(template=template, request=request)
+    user_payload = build_llm_payload_preview(template=template, request=request)
     LOGGER.info(
         "llm.run.start provider=%s scope=%s model=%s template_id=%s input_chars=%d",
         profile.provider,
@@ -159,7 +160,8 @@ def _run_openai_compatible(
     )
 
 
-def _build_user_payload(*, template: PromptTemplate, request: LLMPostprocessRequest) -> str:
+def build_llm_payload_preview(*, template: PromptTemplate, request: LLMPostprocessRequest) -> str:
+    """Build the exact user payload that will be sent to the model."""
     sections: list[str] = []
     sections.append(template.user_prompt_scaffold.strip())
     sections.append("")
@@ -176,6 +178,11 @@ def _build_user_payload(*, template: PromptTemplate, request: LLMPostprocessRequ
         sections.append("")
         sections.append("Additional Notes:")
         sections.append(notes_text)
+    extra_context = (request.extra_context_text or "").strip()
+    if extra_context:
+        sections.append("")
+        sections.append("Pasted Context:")
+        sections.append(extra_context)
     sections.append("")
     sections.append("Keep output concise and faithful to provided context.")
     return "\n".join(sections).strip()

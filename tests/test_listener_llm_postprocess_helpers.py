@@ -70,6 +70,8 @@ class ListenerLLMPostprocessHelperTests(unittest.TestCase):
                     pasted_transcript="",
                     uploaded_ocr_file=None,
                     notes_text="",
+                    extra_context_text="",
+                    payload_preview_text="ready",
                     profile_name="listener-profile",
                     template_id="meeting-summary",
                     selected_model="",
@@ -100,12 +102,29 @@ class ListenerLLMPostprocessHelperTests(unittest.TestCase):
                         pasted_transcript="",
                         uploaded_ocr_file=None,
                         notes_text="",
+                        extra_context_text="",
+                        payload_preview_text="ready",
                         profile_name="listener-profile",
                         template_id="meeting-summary",
                         selected_model="",
                     )
         self.assertIn("complete", status.lower())
         self.assertEqual(output, "Summary text")
+
+    def test_preview_payload(self) -> None:
+        with patch("app.pyscribe_services.get_prompt_template", return_value=_template()):
+            status, payload = app.preview_listener_llm_payload(
+                current_transcript="hello",
+                source_mode="Current transcript",
+                uploaded_transcript_file=None,
+                pasted_transcript="",
+                uploaded_ocr_file=None,
+                notes_text="note",
+                extra_context_text="extra",
+                template_id="meeting-summary",
+            )
+        self.assertIn("ready", status.lower())
+        self.assertIn("Transcript:", payload)
 
 
 if __name__ == "__main__":

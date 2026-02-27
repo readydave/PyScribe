@@ -174,6 +174,8 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 - Open **Tools > LLM Post-Process...** for the current transcript, or
   **Tools > Process Existing Transcript...** to load a saved transcript file.
 - Select profile, template, and model, then run post-processing.
+- You can create/edit/delete custom user templates in the same dialog (built-ins remain read-only).
+- Use **Pasted Context** and **Payload Preview** to review exactly what will be sent before execution.
 - Concurrency policy:
   - Local profiles are blocked while local transcription is in progress.
   - LAN profiles may run concurrently only if profile concurrent mode is enabled.
@@ -209,7 +211,8 @@ Visibility of controls adapts to run mode and toggles.
   - Pick configured LLM profile + prompt template.
   - Test connection and fetch model list.
   - Choose transcript source (`Current transcript` or `Upload/paste transcript`).
-  - Optionally upload OCR/context text and extra notes.
+  - Optionally upload OCR/context text, add extra notes, and include pasted context.
+  - Preview final request payload before sending to the configured model.
   - Run post-processing and save/copy generated output.
 
 ### Listener Outputs

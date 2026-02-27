@@ -264,6 +264,8 @@ def run_listener_llm_postprocess(
     pasted_transcript: str,
     uploaded_ocr_file: Any,
     notes_text: str,
+    extra_context_text: str,
+    payload_preview_text: str,
     profile_name: str,
     template_id: str,
     selected_model: str,
@@ -284,19 +286,16 @@ def run_listener_llm_postprocess(
                 "",
             )
 
-    mode = str(source_mode or "").strip().lower()
-    transcript_text = ""
-    if mode == "current transcript":
-        transcript_text = str(current_transcript or "").strip()
-    else:
-        transcript_text = _read_uploaded_text(uploaded_transcript_file) or str(pasted_transcript or "").strip()
-        if not transcript_text:
-            transcript_text = str(current_transcript or "").strip()
-
+    transcript_text, ocr_text = _resolve_listener_postprocess_context(
+        current_transcript=current_transcript,
+        source_mode=source_mode,
+        uploaded_transcript_file=uploaded_transcript_file,
+        pasted_transcript=pasted_transcript,
+        uploaded_ocr_file=uploaded_ocr_file,
+    )
     if not transcript_text:
         return "Post-process failed: transcript text is required (current or uploaded/pasted).", ""
 
-    ocr_text = _read_uploaded_text(uploaded_ocr_file)
     template = pyscribe_services.get_prompt_template(str(template_id or "").strip().lower())
     if template is None:
         return "Post-process failed: selected prompt template is unavailable.", ""
@@ -306,7 +305,10 @@ def run_listener_llm_postprocess(
         ocr_text=ocr_text,
         notes_text=str(notes_text or "").strip(),
         selected_model=str(selected_model or "").strip() or None,
+        extra_context_text=str(extra_context_text or "").strip(),
     )
+    if APP_CONFIG.llm_payload_preview_required and not str(payload_preview_text or "").strip():
+        return "Post-process blocked: payload preview is required. Click 'Preview Payload' first.", ""
     result = pyscribe_services.run_llm_postprocess(profile, template, request)
     if result.status != "pass":
         return (
@@ -316,6 +318,58 @@ def run_listener_llm_postprocess(
 
     used_model = result.model or profile.default_model or "unknown"
     return f"Post-process complete ({profile.name}, model: {used_model}).", result.output_text
+
+
+def preview_listener_llm_payload(
+    current_transcript: str,
+    source_mode: str,
+    uploaded_transcript_file: Any,
+    pasted_transcript: str,
+    uploaded_ocr_file: Any,
+    notes_text: str,
+    extra_context_text: str,
+    template_id: str,
+) -> tuple[str, str]:
+    transcript_text, ocr_text = _resolve_listener_postprocess_context(
+        current_transcript=current_transcript,
+        source_mode=source_mode,
+        uploaded_transcript_file=uploaded_transcript_file,
+        pasted_transcript=pasted_transcript,
+        uploaded_ocr_file=uploaded_ocr_file,
+    )
+    if not transcript_text:
+        return "Payload preview failed: transcript text is required.", ""
+    template = pyscribe_services.get_prompt_template(str(template_id or "").strip().lower())
+    if template is None:
+        return "Payload preview failed: selected prompt template is unavailable.", ""
+    request = pyscribe_services.LLMPostprocessRequest(
+        transcript_text=transcript_text,
+        ocr_text=ocr_text,
+        notes_text=str(notes_text or "").strip(),
+        extra_context_text=str(extra_context_text or "").strip(),
+    )
+    payload = pyscribe_services.build_llm_payload_preview(template=template, request=request)
+    return "Payload preview ready.", payload
+
+
+def _resolve_listener_postprocess_context(
+    *,
+    current_transcript: str,
+    source_mode: str,
+    uploaded_transcript_file: Any,
+    pasted_transcript: str,
+    uploaded_ocr_file: Any,
+) -> tuple[str, str]:
+    mode = str(source_mode or "").strip().lower()
+    transcript_text = ""
+    if mode == "current transcript":
+        transcript_text = str(current_transcript or "").strip()
+    else:
+        transcript_text = _read_uploaded_text(uploaded_transcript_file) or str(pasted_transcript or "").strip()
+        if not transcript_text:
+            transcript_text = str(current_transcript or "").strip()
+    ocr_text = _read_uploaded_text(uploaded_ocr_file)
+    return transcript_text, ocr_text
 
 
 def find_open_port(host: str, preferred_port: int, max_tries: int = 50) -> int:
@@ -712,6 +766,7 @@ def create_interface() -> gr.Blocks:
                     )
                     with gr.Row():
                         llm_test_btn = gr.Button("Test LLM Connection")
+                        llm_preview_btn = gr.Button("Preview Payload")
                         llm_run_btn = gr.Button("Run LLM Post-Process", variant="primary")
                     llm_source_mode = gr.Radio(
                         choices=["Current transcript", "Upload/paste transcript"],
@@ -738,7 +793,13 @@ def create_interface() -> gr.Blocks:
                         lines=4,
                         max_lines=8,
                     )
+                    llm_extra_context_input = gr.Textbox(
+                        label="Pasted context (optional)",
+                        lines=4,
+                        max_lines=8,
+                    )
                     llm_status_output = gr.Textbox(label="LLM status", interactive=False, lines=6, max_lines=12)
+                    llm_payload_preview_output = gr.Textbox(label="LLM payload preview", interactive=True, lines=10, max_lines=16)
                     llm_output = gr.Textbox(label="LLM output", interactive=True, lines=12, max_lines=18)
                     with gr.Row():
                         llm_copy_btn = gr.Button("Copy LLM Output")
@@ -813,6 +874,20 @@ def create_interface() -> gr.Blocks:
             inputs=[llm_profile_dropdown, llm_model_dropdown],
             outputs=[llm_status_output, llm_model_dropdown],
         )
+        llm_preview_btn.click(
+            fn=preview_listener_llm_payload,
+            inputs=[
+                transcript_output,
+                llm_source_mode,
+                llm_transcript_file,
+                llm_transcript_paste,
+                llm_ocr_file,
+                llm_notes_input,
+                llm_extra_context_input,
+                llm_template_dropdown,
+            ],
+            outputs=[llm_status_output, llm_payload_preview_output],
+        )
         llm_run_btn.click(
             fn=run_listener_llm_postprocess,
             inputs=[
@@ -822,6 +897,8 @@ def create_interface() -> gr.Blocks:
                 llm_transcript_paste,
                 llm_ocr_file,
                 llm_notes_input,
+                llm_extra_context_input,
+                llm_payload_preview_output,
                 llm_profile_dropdown,
                 llm_template_dropdown,
                 llm_model_dropdown,

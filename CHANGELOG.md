@@ -22,6 +22,9 @@ The format is inspired by Keep a Changelog.
 - `tests/test_llm_postprocess_service.py` covering request validation, provider success paths, and failure-code mapping.
 - Listener LLM Post-Processing panel in `app.py` with connection test, template/model selection, and current-vs-upload transcript source controls.
 - `tests/test_listener_llm_postprocess_helpers.py` covering listener LLM helper behaviors and concurrency policy checks.
+- User prompt template CRUD support in `services/prompt_template_service.py` (create/update/delete + user default) with templates stored under `~/.pyscribe/prompts`.
+- Qt LLM Post-Process dialog now includes user template management (new/edit/delete), optional pasted context, and explicit payload preview.
+- Listener LLM Post-Processing panel now includes pasted context and payload preview before run.
 
 ### Changed
 
@@ -37,6 +40,7 @@ The format is inspired by Keep a Changelog.
 - Qt Tools menu now includes **LLM Post-Process...** (`Ctrl+Shift+P`) and **Process Existing Transcript...** flows.
 - LLM post-processing now blocks concurrent runs for local profiles while local transcription is active; LAN profiles must explicitly allow concurrency.
 - Listener config saves now load-and-update existing config fields to preserve additive settings (including LLM profile data).
+- LLM post-processing request model now supports separate `extra_context_text` and explicit payload preview generation.
 
 ### Fixed
 

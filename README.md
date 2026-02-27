@@ -25,6 +25,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt LLM connection profiles (local/LAN) with connection diagnostics
 - Qt LLM post-processing for current transcript or previously saved transcript files
 - Listener LLM post-processing panel for template-based processing of current or uploaded transcripts
+- User template management (custom prompt templates) and payload preview before send
 
 ## Screenshots
 

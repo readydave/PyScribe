@@ -22,6 +22,8 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt controls for cancel and force stop
 - Save modes: combined output, transcript-only, OCR-only
 - Optional Hugging Face token support for gated/private model access
+- Qt LLM connection profiles (local/LAN) with connection diagnostics
+- Qt LLM post-processing for current transcript or previously saved transcript files
 
 ## Screenshots
 
@@ -146,6 +148,7 @@ network you do not fully trust.
 - **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and OCR backend selection.
 - **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`.
 - **Benchmarking:** Qt Tools menu includes benchmark runner for bundled sample media.
+- **LLM post-processing:** Qt Tools menu includes connection management plus post-process actions.
 
 ## Testing
 

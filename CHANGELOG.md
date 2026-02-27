@@ -17,6 +17,9 @@ The format is inspired by Keep a Changelog.
 - LLM connection diagnostics service in `services/llm_connection_service.py` with profile normalization and staged connection tests.
 - `tests/test_llm_connection_service.py` covering local/LAN policy checks, provider smoke tests, and failure mappings.
 - Qt LLM Connections dialog in `ui_qt/llm_connection_dialog.py` for profile editing and staged connection test results.
+- LLM post-processing execution service in `services/llm_postprocess_service.py` for Ollama and OpenAI-compatible endpoints.
+- Qt LLM Post-Process dialog in `ui_qt/llm_postprocess_dialog.py` with template/profile/model selection and transcript file loading.
+- `tests/test_llm_postprocess_service.py` covering request validation, provider success paths, and failure-code mapping.
 
 ### Changed
 
@@ -29,6 +32,8 @@ The format is inspired by Keep a Changelog.
 - `services/config_service.py` now includes additive LLM/template defaults for upcoming post-processing features.
 - `services/__init__.py` now exports LLM prompt and connection services for both frontends.
 - Qt Tools menu now includes **LLM Connections...** (`Ctrl+Shift+L`) for in-app connection configuration/testing.
+- Qt Tools menu now includes **LLM Post-Process...** (`Ctrl+Shift+P`) and **Process Existing Transcript...** flows.
+- LLM post-processing now blocks concurrent runs for local profiles while local transcription is active; LAN profiles must explicitly allow concurrency.
 
 ### Fixed
 

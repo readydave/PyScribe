@@ -133,6 +133,16 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 - **Benchmark...**
   - Benchmark selected models using bundled sample audio.
   - Shortcut: `Ctrl+B`
+- **LLM Connections...**
+  - Configure enabled local/LAN LLM profiles.
+  - Supports `ollama` and OpenAI-compatible endpoints.
+  - Shortcut: `Ctrl+Shift+L`
+- **LLM Post-Process...**
+  - Run prompt-template post-processing against the current transcript/OCR context.
+  - Shortcut: `Ctrl+Shift+P`
+- **Process Existing Transcript...**
+  - Open post-processing workflow for previously saved transcript files.
+  - This is useful for offline or delayed summarization/review.
 
 ### View
 
@@ -156,6 +166,17 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 - For `.en` models with non-English detected audio, Qt prompts to force English or cancel.
 - For non-English detected audio on non-`.en` models, Qt prompts to use detected language or force English.
 - If detection fails, run continues with model auto behavior.
+
+### LLM Post-Processing Workflow (Qt)
+
+- Open **Tools > LLM Connections...** and configure at least one enabled profile.
+- Optionally run **Test Connection** to validate endpoint reachability/auth/model discovery.
+- Open **Tools > LLM Post-Process...** for the current transcript, or
+  **Tools > Process Existing Transcript...** to load a saved transcript file.
+- Select profile, template, and model, then run post-processing.
+- Concurrency policy:
+  - Local profiles are blocked while local transcription is in progress.
+  - LAN profiles may run concurrently only if profile concurrent mode is enabled.
 
 ## 4) Gradio Listener Features
 

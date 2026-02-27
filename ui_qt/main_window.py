@@ -45,6 +45,7 @@ from services import (
     detect_language,
     get_available_diarization_backends,
     get_backend_label,
+    get_enabled_llm_profiles,
     get_hf_token,
     get_model_choices,
     normalize_model_name,
@@ -62,6 +63,7 @@ from services import (
 from services.logging_service import configure_logging, get_log_path
 from ui_qt.benchmark_dialog import BenchmarkDialog
 from ui_qt.llm_connection_dialog import LLMConnectionsDialog
+from ui_qt.llm_postprocess_dialog import LLMPostprocessDialog
 from utils import load_audio_waveform
 AUDIO_VIDEO_FILTER = (
     "Media Files (*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.wma *.mp4 *.mov *.mkv *.avi *.flv);;All Files (*.*)"
@@ -646,6 +648,17 @@ class MainWindow(QMainWindow):
         llm_connections_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
         llm_connections_action.triggered.connect(self.open_llm_connections_dialog)
         tools_menu.addAction(llm_connections_action)
+
+        llm_postprocess_action = QAction("LLM Post-Process...", self)
+        llm_postprocess_action.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        llm_postprocess_action.triggered.connect(lambda _checked=False: self.open_llm_postprocess_dialog())
+        tools_menu.addAction(llm_postprocess_action)
+
+        process_existing_action = QAction("Process Existing Transcript...", self)
+        process_existing_action.triggered.connect(
+            lambda _checked=False: self.open_llm_postprocess_dialog(prefer_loaded_transcript=True)
+        )
+        tools_menu.addAction(process_existing_action)
 
         theme_menu = view_menu.addMenu("Theme")
         self.theme_action_group = QActionGroup(self)
@@ -1688,6 +1701,45 @@ class MainWindow(QMainWindow):
         self.config.llm_default_profile = dlg.default_profile()
         self._save_config()
         self.status_label.setText("LLM connection profiles saved.")
+
+    def open_llm_postprocess_dialog(self, prefer_loaded_transcript: bool = False) -> None:
+        enabled_profiles = get_enabled_llm_profiles(self.config.llm_profiles)
+        if not enabled_profiles:
+            answer = QMessageBox.question(
+                self,
+                "No LLM profiles",
+                (
+                    "No enabled LLM profiles are configured.\n\n"
+                    "Open LLM Connections now?"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if answer == QMessageBox.Yes:
+                self.open_llm_connections_dialog()
+                enabled_profiles = get_enabled_llm_profiles(self.config.llm_profiles)
+            if not enabled_profiles:
+                self.status_label.setText("LLM post-process canceled: no enabled profiles.")
+                return
+
+        current_transcript = ""
+        current_ocr = ""
+        if not prefer_loaded_transcript:
+            current_transcript = (self.transcript_only_text or self.transcript_text or "").strip()
+            current_ocr = (self.visual_report_text or "").strip()
+
+        dlg = LLMPostprocessDialog(
+            config=self.config,
+            current_transcript_text=current_transcript,
+            current_ocr_text=current_ocr,
+            is_transcription_running=self._is_transcription_running,
+            prefer_loaded_transcript=prefer_loaded_transcript,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _is_transcription_running(self) -> bool:
+        return bool(self.worker_thread and self.worker_thread.isRunning())
 
     def _save_config(
         self,

@@ -27,9 +27,9 @@ reversible milestones.
 ## Milestone 3: Qt Workflow Integration
 
 - [x] Add LLM post-process controls to Qt.
-- [ ] Enforce sequencing policy for local GPU reuse.
+- [x] Enforce sequencing policy for local GPU reuse.
 - [x] Add profile/model selection and connection test in Qt.
-- [ ] Add "Process Existing Transcript" flow in Qt.
+- [x] Add "Process Existing Transcript" flow in Qt.
 
 ## Milestone 4: Listener Workflow Integration
 

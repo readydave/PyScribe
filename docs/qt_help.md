@@ -52,6 +52,15 @@ Run mode is inferred automatically:
   - Compare selected models using bundled benchmark audio.
   - Supports English and Spanish sample sets.
   - Allows multi-model selection with Start/Cancel controls.
+- **LLM Connections...** (`Ctrl+Shift+L`)
+  - Add/edit local or LAN LLM profiles (Ollama or OpenAI-compatible APIs).
+  - Run staged connection tests with pass/fail diagnostics and suggested fixes.
+- **LLM Post-Process...** (`Ctrl+Shift+P`)
+  - Run prompt-template-based post-processing on the current transcript.
+  - Optionally include current OCR context and additional notes.
+- **Process Existing Transcript...**
+  - Open the same post-processing workflow, starting in file-load mode for saved transcript files.
+  - Useful when transcription was completed in an earlier session.
 
 ## View Menu
 
@@ -113,6 +122,9 @@ Before transcription, PyScribe may detect language and prompt:
   - Retry with a smaller model or disable diarization.
 - **Visual analysis unavailable**
   - Install OCR runtime (`pytesseract` + OS package `tesseract-ocr`), or configure another backend.
+- **Post-process blocked while transcription is running**
+  - Local profiles are blocked during active local transcription to avoid GPU/compute contention.
+  - Use a LAN profile with concurrent mode enabled, or wait for transcription to finish.
 
 ## Logging
 

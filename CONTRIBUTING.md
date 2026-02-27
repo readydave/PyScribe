@@ -40,7 +40,7 @@ Run the same smoke checks CI runs:
 python main.py --help
 python main.py serve --help
 python main.py qt --help
-python -m py_compile main.py app.py services/logging_service.py services/config_service.py services/model_service.py services/transcription_service.py services/prompt_template_service.py services/llm_connection_service.py ui_qt/main_window.py ui_qt/benchmark_dialog.py ui_qt/llm_connection_dialog.py
+python -m py_compile main.py app.py services/logging_service.py services/config_service.py services/model_service.py services/transcription_service.py services/prompt_template_service.py services/llm_connection_service.py services/llm_postprocess_service.py ui_qt/main_window.py ui_qt/benchmark_dialog.py ui_qt/llm_connection_dialog.py ui_qt/llm_postprocess_dialog.py
 bash -n scripts/run_listener.sh
 python -m pip install pytest
 python -m pytest -q tests/smoke_cli.py

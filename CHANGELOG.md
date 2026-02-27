@@ -14,6 +14,9 @@ The format is inspired by Keep a Changelog.
 - Prompt template loading/validation service in `services/prompt_template_service.py`.
 - `tests/test_prompt_templates_and_config.py` covering prompt template loading and additive config behavior.
 - Implementation task tracker for LLM post-processing in `docs/llm_postprocess_plan.md`.
+- LLM connection diagnostics service in `services/llm_connection_service.py` with profile normalization and staged connection tests.
+- `tests/test_llm_connection_service.py` covering local/LAN policy checks, provider smoke tests, and failure mappings.
+- Qt LLM Connections dialog in `ui_qt/llm_connection_dialog.py` for profile editing and staged connection test results.
 
 ### Changed
 
@@ -24,6 +27,8 @@ The format is inspired by Keep a Changelog.
 - Streaming transcript text updates are throttled in `services/transcription_service.py` to reduce UI churn while preserving final output.
 - Qt transcript text area behavior in `ui_qt/main_window.py` updated for wrapping, sizing, and scroll behavior.
 - `services/config_service.py` now includes additive LLM/template defaults for upcoming post-processing features.
+- `services/__init__.py` now exports LLM prompt and connection services for both frontends.
+- Qt Tools menu now includes **LLM Connections...** (`Ctrl+Shift+L`) for in-app connection configuration/testing.
 
 ### Fixed
 

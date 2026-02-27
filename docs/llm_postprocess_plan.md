@@ -19,16 +19,16 @@ reversible milestones.
 
 ## Milestone 2: Connection Profiles + Testing
 
-- [ ] Add local/remote LLM profile data model and persistence.
-- [ ] Add endpoint test pipeline (reachability/auth/models/smoke test).
-- [ ] Add pass/fail diagnostics and suggested fixes structure.
-- [ ] Add logging events for test and run metadata (no content logging).
+- [x] Add local/remote LLM profile data model and persistence.
+- [x] Add endpoint test pipeline (reachability/auth/models/smoke test).
+- [x] Add pass/fail diagnostics and suggested fixes structure.
+- [x] Add logging events for test and run metadata (no content logging).
 
 ## Milestone 3: Qt Workflow Integration
 
-- [ ] Add LLM post-process controls to Qt.
+- [x] Add LLM post-process controls to Qt.
 - [ ] Enforce sequencing policy for local GPU reuse.
-- [ ] Add profile/model selection and connection test in Qt.
+- [x] Add profile/model selection and connection test in Qt.
 - [ ] Add "Process Existing Transcript" flow in Qt.
 
 ## Milestone 4: Listener Workflow Integration

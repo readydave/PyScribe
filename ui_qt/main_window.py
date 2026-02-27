@@ -61,6 +61,7 @@ from services import (
 )
 from services.logging_service import configure_logging, get_log_path
 from ui_qt.benchmark_dialog import BenchmarkDialog
+from ui_qt.llm_connection_dialog import LLMConnectionsDialog
 from utils import load_audio_waveform
 AUDIO_VIDEO_FILTER = (
     "Media Files (*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.wma *.mp4 *.mov *.mkv *.avi *.flv);;All Files (*.*)"
@@ -640,6 +641,11 @@ class MainWindow(QMainWindow):
         benchmark_action.setShortcut(QKeySequence("Ctrl+B"))
         benchmark_action.triggered.connect(self.open_benchmark_dialog)
         tools_menu.addAction(benchmark_action)
+
+        llm_connections_action = QAction("LLM Connections...", self)
+        llm_connections_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        llm_connections_action.triggered.connect(self.open_llm_connections_dialog)
+        tools_menu.addAction(llm_connections_action)
 
         theme_menu = view_menu.addMenu("Theme")
         self.theme_action_group = QActionGroup(self)
@@ -1672,6 +1678,16 @@ class MainWindow(QMainWindow):
     def open_benchmark_dialog(self) -> None:
         dlg = BenchmarkDialog(parent=self, runtime=self.runtime)
         dlg.exec()
+
+    @Slot()
+    def open_llm_connections_dialog(self) -> None:
+        dlg = LLMConnectionsDialog(config=self.config, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self.config.llm_profiles = dlg.profiles()
+        self.config.llm_default_profile = dlg.default_profile()
+        self._save_config()
+        self.status_label.setText("LLM connection profiles saved.")
 
     def _save_config(
         self,

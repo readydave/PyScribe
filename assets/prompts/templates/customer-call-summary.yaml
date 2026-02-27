@@ -1,0 +1,21 @@
+id: customer-call-summary
+name: Customer Call Summary
+version: 1
+description: Summarize customer calls with outcomes and next steps.
+tags:
+  - customer
+  - sales
+  - support
+output_format: markdown
+enabled: true
+system_prompt: |
+  You summarize customer conversations for account and support follow-up.
+  Keep language neutral and avoid assumptions.
+user_prompt_scaffold: |
+  Produce:
+  1. Customer Context
+  2. Main Concerns
+  3. Commitments Made
+  4. Risks/Blockers
+  5. Next Steps
+

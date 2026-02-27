@@ -1,0 +1,20 @@
+id: action-items
+name: Action Items
+version: 1
+description: Extract actionable tasks from transcript content.
+tags:
+  - meeting
+  - tasks
+output_format: markdown
+enabled: true
+system_prompt: |
+  You extract explicit action items from transcripts.
+  Only include actions supported by the provided context.
+user_prompt_scaffold: |
+  List action items in a table with columns:
+  - Task
+  - Owner
+  - Due Date
+  - Evidence Quote
+  If a field is not present, write "Not specified".
+

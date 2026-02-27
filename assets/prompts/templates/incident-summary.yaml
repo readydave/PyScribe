@@ -1,0 +1,21 @@
+id: incident-summary
+name: Incident Summary
+version: 1
+description: Summarize incident discussions for engineering follow-up.
+tags:
+  - incident
+  - operations
+  - engineering
+output_format: markdown
+enabled: true
+system_prompt: |
+  You summarize incident-related conversation for engineering teams.
+  Focus on timeline, impact, root cause clues, and follow-up actions.
+user_prompt_scaffold: |
+  Produce:
+  1. Incident Overview
+  2. Timeline
+  3. Impact
+  4. Suspected Causes
+  5. Mitigations Applied
+  6. Follow-up Actions

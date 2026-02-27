@@ -1,0 +1,20 @@
+id: meeting-summary
+name: Meeting Summary
+version: 1
+description: Summarize a meeting transcript into concise sections.
+tags:
+  - meeting
+  - summary
+output_format: markdown
+enabled: true
+system_prompt: |
+  You are an assistant that summarizes meeting transcripts.
+  Be accurate, concise, and explicit about uncertainty.
+  Do not invent facts that are not in the provided context.
+user_prompt_scaffold: |
+  Produce a meeting summary with these sections:
+  1. Overview
+  2. Key Discussion Points
+  3. Decisions
+  4. Action Items (owner and due date if present)
+  5. Open Questions

@@ -22,6 +22,14 @@ class AppConfig:
     confirmed_visual_backends: list[str] = field(default_factory=list)
     last_open_dir: str | None = None
     last_save_dir: str | None = None
+    llm_profiles: list[dict[str, object]] = field(default_factory=list)
+    llm_default_profile: str | None = None
+    llm_default_template_id: str = "meeting-summary"
+    llm_include_user_notes_default: bool = True
+    llm_include_images_default: bool = True
+    llm_ocr_fallback_for_images_default: bool = True
+    llm_payload_preview_required: bool = True
+    llm_allow_remote_lan: bool = False
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".pyscribe_config.json"
@@ -48,6 +56,17 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         confirmed_visual_backends=_as_backend_list(data.get("confirmed_visual_backends")),
         last_open_dir=_as_optional_str(data.get("last_open_dir")),
         last_save_dir=_as_optional_str(data.get("last_save_dir")),
+        llm_profiles=_as_profile_list(data.get("llm_profiles")),
+        llm_default_profile=_as_optional_str(data.get("llm_default_profile")),
+        llm_default_template_id=_as_prompt_template_id(data.get("llm_default_template_id")),
+        llm_include_user_notes_default=_as_bool(data.get("llm_include_user_notes_default"), default=True),
+        llm_include_images_default=_as_bool(data.get("llm_include_images_default"), default=True),
+        llm_ocr_fallback_for_images_default=_as_bool(
+            data.get("llm_ocr_fallback_for_images_default"),
+            default=True,
+        ),
+        llm_payload_preview_required=_as_bool(data.get("llm_payload_preview_required"), default=True),
+        llm_allow_remote_lan=_as_bool(data.get("llm_allow_remote_lan"), default=False),
     )
 
 
@@ -131,4 +150,35 @@ def _as_backend_list(value: object) -> list[str]:
         backend = str(item or "").strip().lower()
         if backend in allowed and backend not in normalized:
             normalized.append(backend)
+    return normalized
+
+
+def _as_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _as_prompt_template_id(value: object) -> str:
+    text = _as_optional_str(value)
+    if not text:
+        return "meeting-summary"
+    return text.lower()
+
+
+def _as_profile_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, object]] = []
+    for item in value:
+        if isinstance(item, dict):
+            normalized.append(dict(item))
     return normalized

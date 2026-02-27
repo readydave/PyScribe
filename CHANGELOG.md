@@ -10,6 +10,10 @@ The format is inspired by Keep a Changelog.
 
 - Shared listener auth/bind validation service in `services/listener_security_service.py`.
 - `tests/test_listener_and_diar_backends.py` covering listener security helpers and NeMo Sortformer compatibility paths.
+- Prompt template scaffold in `assets/prompts/` with YAML index and built-in templates for meeting summary workflows.
+- Prompt template loading/validation service in `services/prompt_template_service.py`.
+- `tests/test_prompt_templates_and_config.py` covering prompt template loading and additive config behavior.
+- Implementation task tracker for LLM post-processing in `docs/llm_postprocess_plan.md`.
 
 ### Changed
 
@@ -19,6 +23,7 @@ The format is inspired by Keep a Changelog.
 - Sortformer availability checks now require both NeMo ASR importability and CUDA availability.
 - Streaming transcript text updates are throttled in `services/transcription_service.py` to reduce UI churn while preserving final output.
 - Qt transcript text area behavior in `ui_qt/main_window.py` updated for wrapping, sizing, and scroll behavior.
+- `services/config_service.py` now includes additive LLM/template defaults for upcoming post-processing features.
 
 ### Fixed
 

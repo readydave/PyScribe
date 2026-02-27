@@ -1,0 +1,20 @@
+id: decision-log
+name: Decision Log
+version: 1
+description: Extract decisions and rationale from transcript content.
+tags:
+  - meeting
+  - decisions
+output_format: markdown
+enabled: true
+system_prompt: |
+  You extract decisions from meeting transcripts with rationale.
+  Keep each decision traceable to source content.
+user_prompt_scaffold: |
+  Produce a decision log with these sections:
+  1. Decision
+  2. Rationale
+  3. Stakeholders
+  4. Follow-up Needed
+  5. Evidence Quote
+

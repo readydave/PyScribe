@@ -23,6 +23,14 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Save modes: combined output, transcript-only, OCR-only
 - Optional Hugging Face token support for gated/private model access
 
+## Recent Updates (Unreleased)
+
+- Shared listener security/auth logic between `main.py` and `app.py` via `services/listener_security_service.py`.
+- Hardened listener credential handling: `--auth-pass` is rejected to avoid secret leakage in process lists/history.
+- Improved NeMo Sortformer compatibility across modern and legacy API paths, with CUDA-aware availability checks.
+- Throttled live transcript text updates in the transcription pipeline for smoother UI updates during long runs.
+- Added regression tests for listener security helpers and diarization backend compatibility.
+
 ## Requirements
 
 - Python 3.10+ (3.12 recommended)
@@ -90,6 +98,8 @@ Binding to non-local interfaces is intentionally restricted.
   - `--allow-nonlocal-host`
   - `--auth-user <username>`
   - `PYSCRIBE_AUTH_PASS` environment variable
+- Optional: set `PYSCRIBE_AUTH_USER` instead of passing `--auth-user`
+- Legacy `--auth-pass` CLI flag is intentionally unsupported
 
 Example:
 
@@ -115,6 +125,12 @@ network you do not fully trust.
 - **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and OCR backend selection.
 - **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`.
 - **Benchmarking:** Qt Tools menu includes benchmark runner for bundled sample media.
+
+## Testing
+
+```bash
+python -m unittest tests.test_listener_and_diar_backends
+```
 
 ## CLI / Packaging
 

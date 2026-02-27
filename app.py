@@ -4,7 +4,7 @@
 import argparse
 from collections.abc import Iterator
 import datetime
-import getpass
+import logging
 import os
 import socket
 import sys
@@ -14,40 +14,48 @@ from typing import Any, Callable
 
 import gradio as gr
 import pyperclip
+from services.listener_security_service import (
+    reject_legacy_auth_pass_flag,
+    resolve_listener_auth,
+    validate_listener_security,
+)
+import services as pyscribe_services
 from services.runtime_compat import ensure_platform_sys_version_compat
 from services.runtime_env_service import (
     configure_runtime_environment,
     reexec_if_loader_env_changed,
 )
+LOGGER = logging.getLogger(__name__)
 
-ensure_platform_sys_version_compat()
-configure_runtime_environment()
-reexec_if_loader_env_changed()
+_LISTENER_RUNTIME_READY = False
+RUNTIME = None
+DEVICE = "cpu"
+COMPUTE_TYPE = "int8"
+RECOMMENDED_MODEL = "small"
+ALL_MODELS: list[str] = []
+AVAILABLE_DIAR_BACKENDS: list[str] = []
+APP_CONFIG = pyscribe_services.AppConfig()
 
-from services import (
-    AppConfig,
-    check_ocr_backend_ready,
-    detect_runtime,
-    get_available_diarization_backends,
-    get_backend_label,
-    get_model_choices,
-    load_config,
-    normalize_model_name,
-    recommend_model,
-    save_config,
-    transcribe_media_file,
-)
 
-RUNTIME = detect_runtime()
-DEVICE = RUNTIME.device
-COMPUTE_TYPE = RUNTIME.compute_type
-RECOMMENDED_MODEL = recommend_model(RUNTIME)
-ALL_MODELS = get_model_choices()
-AVAILABLE_DIAR_BACKENDS = get_available_diarization_backends(include_off=False)
-if not AVAILABLE_DIAR_BACKENDS:
-    AVAILABLE_DIAR_BACKENDS = ["accurate"]
-
-APP_CONFIG = load_config()
+def _ensure_listener_runtime() -> None:
+    global _LISTENER_RUNTIME_READY
+    global RUNTIME, DEVICE, COMPUTE_TYPE, RECOMMENDED_MODEL
+    global ALL_MODELS, AVAILABLE_DIAR_BACKENDS, APP_CONFIG
+    if _LISTENER_RUNTIME_READY:
+        return
+    ensure_platform_sys_version_compat()
+    configure_runtime_environment()
+    reexec_if_loader_env_changed()
+    RUNTIME = pyscribe_services.detect_runtime()
+    DEVICE = RUNTIME.device
+    COMPUTE_TYPE = RUNTIME.compute_type
+    RECOMMENDED_MODEL = pyscribe_services.recommend_model(RUNTIME)
+    ALL_MODELS = pyscribe_services.get_model_choices()
+    AVAILABLE_DIAR_BACKENDS = pyscribe_services.get_available_diarization_backends(include_off=False)
+    if not AVAILABLE_DIAR_BACKENDS:
+        AVAILABLE_DIAR_BACKENDS = ["accurate"]
+    APP_CONFIG = pyscribe_services.load_config()
+    _LISTENER_RUNTIME_READY = True
 
 CUSTOM_CSS = """
 html.pyscribe-prog-red progress,
@@ -194,6 +202,7 @@ def transcribe(
     """
     The main transcription function for the Gradio interface.
     """
+    _ensure_listener_runtime()
     _cancel_event.clear()
 
     if audio_path is None:
@@ -205,7 +214,7 @@ def transcribe(
     should_transcribe = run_mode in {"full", "transcribe_only"}
     should_run_visual = run_mode in {"full", "visual_only"}
 
-    model_name = normalize_model_name(model_name)
+    model_name = pyscribe_services.normalize_model_name(model_name)
     if should_transcribe and not model_name:
         yield "Status: No model selected.", "", gr.update(visible=True), gr.update(visible=False), ""
         return
@@ -227,7 +236,7 @@ def transcribe(
     visual_profile = str(visual_profile or "balanced").lower()
     visual_ocr_backend = str(visual_ocr_backend or "paddleocr").lower()
     if use_visual_analysis:
-        ready, reason = check_ocr_backend_ready(visual_ocr_backend)
+        ready, reason = pyscribe_services.check_ocr_backend_ready(visual_ocr_backend)
         if not ready:
             use_visual_analysis = False
             yield (
@@ -239,8 +248,8 @@ def transcribe(
                 "",
             )
     try:
-        save_config(
-            AppConfig(
+        pyscribe_services.save_config(
+            pyscribe_services.AppConfig(
                 last_model=model_name,
                 use_diarization=bool(use_diarization),
                 max_speakers=max_speakers,
@@ -252,8 +261,8 @@ def transcribe(
                 visual_sample_seconds=float(visual_sample_seconds or 1.0),
             )
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("Failed to save listener config: %s", exc, exc_info=True)
         
     status_prefix = "Visual analysis" if run_mode == "visual_only" else "Transcription"
     yield f"Status: {status_prefix} starting...", "", gr.update(visible=False), gr.update(visible=True, value="Cancel"), ""
@@ -284,7 +293,7 @@ def transcribe(
             nonlocal full_transcript
             full_transcript = text
 
-        result = transcribe_media_file(
+        result = pyscribe_services.transcribe_media_file(
             media_path=media_path,
             model_name=model_name,
             run_mode=run_mode,
@@ -358,6 +367,7 @@ def set_cancel_flag() -> None:
 
 # --- Gradio Interface Definition ---
 def create_interface() -> gr.Blocks:
+    _ensure_listener_runtime()
     initial_run_mode = _normalize_run_mode(APP_CONFIG.run_mode)
     initial_allow_transcription = initial_run_mode in {"full", "transcribe_only"}
     initial_allow_visual = initial_run_mode in {"full", "visual_only"}
@@ -447,7 +457,7 @@ def create_interface() -> gr.Blocks:
                     choices=AVAILABLE_DIAR_BACKENDS,
                     value=default_backend,
                     label="Diarization mode",
-                    info=get_backend_label(default_backend),
+                    info=pyscribe_services.get_backend_label(default_backend),
                     visible=initial_allow_transcription and APP_CONFIG.use_diarization,
                 )
                 max_speakers_input = gr.Textbox(
@@ -489,7 +499,12 @@ def create_interface() -> gr.Blocks:
 
             with gr.Column(scale=2):
                 status_output = gr.Textbox(label="Status", interactive=False)
-                transcript_output = gr.Textbox(label="Transcription", interactive=True, lines=15)
+                transcript_output = gr.Textbox(
+                    label="Transcription",
+                    interactive=True,
+                    lines=15,
+                    max_lines=15,
+                )
                 with gr.Row():
                     copy_btn = gr.Button("Copy to Clipboard")
                     save_btn = gr.Button("Save Transcript")
@@ -568,6 +583,7 @@ def launch_listener(
     auth_pass: str | None = None,
     on_start: Callable[[int], None] | None = None,
 ) -> int:
+    _ensure_listener_runtime()
     iface = create_interface()
     # Serialize jobs so only one transcription runs at a time on the host.
     iface.queue(default_concurrency_limit=1, max_size=queue_size)
@@ -589,65 +605,6 @@ def launch_listener(
     return chosen_port
 
 
-def _is_loopback_host(host: str) -> bool:
-    normalized = (host or "").strip().lower()
-    return normalized in {"127.0.0.1", "localhost", "::1"}
-
-
-def _validate_nonlocal_bind(
-    host: str,
-    *,
-    auth_user: str | None,
-    auth_pass: str | None,
-    allow_nonlocal_host: bool,
-) -> None:
-    if _is_loopback_host(host):
-        return
-    if not allow_nonlocal_host:
-        raise SystemExit(
-            "Refusing non-local listener bind. Use --host 127.0.0.1, "
-            "or add --allow-nonlocal-host to explicitly expose the listener."
-        )
-    if not (auth_user and auth_pass):
-        raise SystemExit(
-            "Non-local listener bind requires authentication. "
-            "Provide --auth-user and set PYSCRIBE_AUTH_PASS, or set "
-            "PYSCRIBE_AUTH_USER/PYSCRIBE_AUTH_PASS."
-        )
-
-
-def _clean_env_value(name: str) -> str | None:
-    value = os.environ.get(name)
-    if value is None:
-        return None
-    value = value.strip()
-    return value or None
-
-
-def _resolve_listener_auth(auth_user: str | None) -> tuple[str | None, str | None]:
-    resolved_user = (auth_user or "").strip() or _clean_env_value("PYSCRIBE_AUTH_USER")
-    resolved_pass = _clean_env_value("PYSCRIBE_AUTH_PASS")
-    if resolved_user and not resolved_pass and sys.stdin and sys.stdin.isatty():
-        prompted = getpass.getpass("Listener auth password (input hidden): ").strip()
-        resolved_pass = prompted or None
-    if bool(resolved_user) != bool(resolved_pass):
-        raise SystemExit(
-            "Listener auth requires both username and password "
-            "(provide --auth-user and set PYSCRIBE_AUTH_PASS, or set both "
-            "PYSCRIBE_AUTH_USER/PYSCRIBE_AUTH_PASS)."
-        )
-    return resolved_user, resolved_pass
-
-
-def _reject_legacy_auth_pass_flag(argv: list[str]) -> None:
-    for arg in argv[1:]:
-        if arg == "--auth-pass" or arg.startswith("--auth-pass="):
-            raise SystemExit(
-                "`--auth-pass` is no longer supported to avoid credential leakage. "
-                "Set PYSCRIBE_AUTH_PASS instead."
-            )
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run PyScribe as a Gradio listener.")
     parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind (default: 127.0.0.1)")
@@ -665,10 +622,10 @@ def _parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    _reject_legacy_auth_pass_flag(sys.argv)
+    reject_legacy_auth_pass_flag(sys.argv)
     args = _parse_args()
-    auth_user, auth_pass = _resolve_listener_auth(args.auth_user)
-    _validate_nonlocal_bind(
+    auth_user, auth_pass = resolve_listener_auth(args.auth_user)
+    validate_listener_security(
         args.host,
         auth_user=auth_user,
         auth_pass=auth_pass,

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import List, Dict, Optional, Callable
 
 from diarization import run_diarization as run_pyannote
@@ -66,11 +67,45 @@ def run_nemo_sortformer(
             "NeMo Sortformer backend unavailable: your nemo_toolkit version does not provide a known diarizer class. "
             "Try installing a compatible version, e.g.: pip install 'nemo_toolkit[asr]==1.23.0'"
         )
-    diarizer.to(device)
-    diarizer.segmentation.parameters().device = torch.device(device)
-    diarizer.clustering.parameters().device = torch.device(device)
+    try:
+        diarizer.to(torch.device(device))
+    except Exception:
+        diarizer.to(device)
 
-    # Running diarization; NeMo writes RTTM, so we collect segments from output manifest.
+    # NeMo 2.x `NeuralDiarizer` exposes a callable inference API.
+    call_supports_audio = False
+    try:
+        call_sig = inspect.signature(type(diarizer).__call__)
+        call_supports_audio = "audio_filepath" in call_sig.parameters
+    except Exception:
+        call_supports_audio = False
+
+    if call_supports_audio:
+        # NeMo 2.x can fail with DataLoader worker spawning on Windows unless workers are disabled.
+        annotation = diarizer(
+            audio_path,
+            max_speakers=max_speakers,
+            num_workers=0,
+            verbose=False,
+        )
+        _bump(progress_cb, 90)
+        segments: List[Dict] = []
+        speaker_map: Dict[str, str] = {}
+        speaker_idx = 1
+        for turn, _, speaker in annotation.itertracks(yield_label=True):
+            spk_key = str(speaker)
+            if spk_key not in speaker_map:
+                speaker_map[spk_key] = f"S{speaker_idx}"
+                speaker_idx += 1
+            start = float(turn.start)
+            end = float(turn.end)
+            if end <= start:
+                continue
+            segments.append({"start": start, "end": end, "speaker": speaker_map[spk_key]})
+        _bump(progress_cb, 100)
+        return segments
+
+    # Legacy NeMo API path: diarizer writes RTTM directly.
     tmp_rttm = audio_path + ".nemo.rttm"
     diarizer.diarize(paths2audio_files=[audio_path], out_rttm_file=tmp_rttm, num_speakers=max_speakers)
     _bump(progress_cb, 90)
@@ -124,11 +159,31 @@ BACKENDS = {
 }
 
 
+def _is_sortformer_available() -> bool:
+    """Return True when NeMo ASR is importable and CUDA is available."""
+    import importlib
+
+    try:
+        importlib.import_module("nemo.collections.asr")
+    except ImportError:
+        return False
+
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def available_backends() -> Dict[str, bool]:
     """Return a map of backend_id -> available (installed)."""
     import importlib
     availability = {}
     for key, meta in BACKENDS.items():
+        if key == "sortformer":
+            availability[key] = _is_sortformer_available()
+            continue
         req = meta["requires"]
         if req is None:
             availability[key] = True

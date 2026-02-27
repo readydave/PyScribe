@@ -29,6 +29,7 @@ StatusCallback = Callable[[str], None]
 TextCallback = Callable[[str], None]
 ProgressCallback = Callable[[float], None]
 LOGGER = logging.getLogger(__name__)
+STREAM_TEXT_UPDATE_INTERVAL_SECONDS = 0.30
 
 
 @dataclass
@@ -137,8 +138,10 @@ def transcribe_prepared_audio(
     segments_generator, _ = model.transcribe(audio_np := load_audio_waveform(wav_path), task=task, language=language, beam_size=5)
 
     all_text_segments: list[str] = []
+    streamed_text = ""
     all_segments_struct: list[dict] = []
     transcription_started = time.perf_counter()
+    last_text_emit = transcription_started
     diarization_seconds = 0.0
 
     if on_diar_progress:
@@ -154,8 +157,8 @@ def transcribe_prepared_audio(
                 diarization_seconds,
             )
             return TranscriptionResult(
-                transcript=" ".join(all_text_segments).strip(),
-                transcript_only=" ".join(all_text_segments).strip(),
+                transcript=streamed_text,
+                transcript_only=streamed_text,
                 visual_report="",
                 segments=all_segments_struct,
                 cancelled=True,
@@ -167,6 +170,8 @@ def transcribe_prepared_audio(
 
         segment_text = segment.text.strip()
         all_text_segments.append(segment_text)
+        if segment_text:
+            streamed_text = f"{streamed_text} {segment_text}".strip() if streamed_text else segment_text
         all_segments_struct.append(
             {
                 "start": segment.start,
@@ -175,13 +180,17 @@ def transcribe_prepared_audio(
             }
         )
 
-        partial_text = " ".join(all_text_segments).strip()
-        if on_text:
-            on_text(partial_text)
+        now = time.perf_counter()
+        if on_text and (now - last_text_emit >= STREAM_TEXT_UPDATE_INTERVAL_SECONDS):
+            on_text(streamed_text)
+            last_text_emit = now
         if on_progress and duration > 0:
             on_progress((segment.end / duration) * 100)
 
-    transcript = " ".join(all_text_segments).strip()
+    if on_text and streamed_text:
+        on_text(streamed_text)
+
+    transcript = streamed_text
     final_segments = all_segments_struct
     transcription_seconds = time.perf_counter() - transcription_started
 

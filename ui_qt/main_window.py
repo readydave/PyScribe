@@ -14,6 +14,7 @@ from _thread import LockType
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QFont, QKeySequence, QPalette
 from PySide6.QtWidgets import (
+    QSizePolicy,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -601,6 +602,11 @@ class MainWindow(QMainWindow):
 
         self.text_area = QTextEdit()
         self.text_area.setPlaceholderText("Transcript appears here...")
+        self.text_area.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.text_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.text_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.text_area.setMinimumHeight(240)
+        self.text_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         layout.addLayout(top_row)
         layout.addLayout(model_row)
@@ -1706,8 +1712,8 @@ class MainWindow(QMainWindow):
             self.config.last_open_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
             self.config.last_save_dir = self.last_save_dir if self.last_save_dir and os.path.isdir(self.last_save_dir) else self.config.last_save_dir
             save_config(self.config)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("Qt config save failed: %s", exc, exc_info=True)
 
 
 def run_qt_app() -> None:

@@ -2,12 +2,17 @@
 # Entry point for PyScribe Qt desktop and listener modes.
 
 import argparse
-import getpass
 import logging
 import os
 import socket
 import sys
 import warnings
+from services.listener_security_service import (
+    clean_env_value,
+    reject_legacy_auth_pass_flag,
+    resolve_listener_auth,
+    validate_listener_security,
+)
 from services.logging_service import configure_logging
 from services.runtime_compat import ensure_platform_sys_version_compat
 from services.runtime_env_service import (
@@ -85,70 +90,11 @@ def _redact_sensitive_argv(argv: list[str]) -> list[str]:
     return redacted
 
 
-def _clean_env_value(name: str) -> str | None:
-    value = os.environ.get(name)
-    if value is None:
-        return None
-    value = value.strip()
-    return value or None
-
-
-def _resolve_listener_auth(auth_user: str | None) -> tuple[str | None, str | None]:
-    resolved_user = (auth_user or "").strip() or _clean_env_value("PYSCRIBE_AUTH_USER")
-    resolved_pass = _clean_env_value("PYSCRIBE_AUTH_PASS")
-    if resolved_user and not resolved_pass and sys.stdin and sys.stdin.isatty():
-        prompted = getpass.getpass("Listener auth password (input hidden): ").strip()
-        resolved_pass = prompted or None
-    if bool(resolved_user) != bool(resolved_pass):
-        raise SystemExit(
-            "Listener auth requires both username and password "
-            "(provide --auth-user and set PYSCRIBE_AUTH_PASS, or set both "
-            "PYSCRIBE_AUTH_USER/PYSCRIBE_AUTH_PASS)."
-        )
-    return resolved_user, resolved_pass
-
-
 def _as_bool_env(name: str) -> bool:
-    value = _clean_env_value(name)
+    value = clean_env_value(name)
     if value is None:
         return False
     return value.lower() in {"1", "true", "yes", "on"}
-
-
-def _is_loopback_host(host: str) -> bool:
-    normalized = (host or "").strip().lower()
-    return normalized in {"127.0.0.1", "localhost", "::1"}
-
-
-def _validate_listener_security(
-    host: str,
-    *,
-    auth_user: str | None,
-    auth_pass: str | None,
-    allow_nonlocal_host: bool,
-) -> None:
-    if _is_loopback_host(host):
-        return
-    if not allow_nonlocal_host:
-        raise SystemExit(
-            "Refusing non-local listener bind. Use --host 127.0.0.1 for local-only access, "
-            "or add --allow-nonlocal-host to explicitly expose the listener."
-        )
-    if not (auth_user and auth_pass):
-        raise SystemExit(
-            "Non-local listener bind requires authentication. "
-            "Provide --auth-user and set PYSCRIBE_AUTH_PASS, or set "
-            "PYSCRIBE_AUTH_USER/PYSCRIBE_AUTH_PASS."
-        )
-
-
-def _reject_legacy_auth_pass_flag(argv: list[str]) -> None:
-    for arg in argv[1:]:
-        if arg == "--auth-pass" or arg.startswith("--auth-pass="):
-            raise SystemExit(
-                "`--auth-pass` is no longer supported to avoid credential leakage. "
-                "Set PYSCRIBE_AUTH_PASS instead."
-            )
 
 
 def run_listener(
@@ -283,7 +229,7 @@ def main() -> None:
         LOG_PATH,
         RUNTIME_ENV.get("cache_root"),
     )
-    _reject_legacy_auth_pass_flag(sys.argv)
+    reject_legacy_auth_pass_flag(sys.argv)
     args = parse_args()
     if len(sys.argv) == 1:
         selected = prompt_launch_mode()
@@ -294,7 +240,7 @@ def main() -> None:
         if scope == "lan":
             auth_user = INTERACTIVE_LAN_AUTH_USER
             auth_pass = INTERACTIVE_LAN_AUTH_PASS
-            _validate_listener_security(
+            validate_listener_security(
                 "0.0.0.0",
                 auth_user=auth_user,
                 auth_pass=auth_pass,
@@ -315,8 +261,8 @@ def main() -> None:
             )
             return
 
-        auth_user, auth_pass = _resolve_listener_auth(None)
-        _validate_listener_security(
+        auth_user, auth_pass = resolve_listener_auth(None)
+        validate_listener_security(
             "127.0.0.1",
             auth_user=auth_user,
             auth_pass=auth_pass,
@@ -334,9 +280,9 @@ def main() -> None:
         return
 
     if args.mode == "serve":
-        auth_user, auth_pass = _resolve_listener_auth(args.auth_user)
+        auth_user, auth_pass = resolve_listener_auth(args.auth_user)
         allow_nonlocal_host = bool(args.allow_nonlocal_host or _as_bool_env("PYSCRIBE_ALLOW_NONLOCAL_HOST"))
-        _validate_listener_security(
+        validate_listener_security(
             args.host,
             auth_user=auth_user,
             auth_pass=auth_pass,

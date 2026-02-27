@@ -146,6 +146,7 @@ CUSTOM_HEAD = """
 
 # --- State for Cancellation ---
 _cancel_event = threading.Event()
+_transcription_active = threading.Event()
 GradioUpdate = dict[str, object]
 TranscribeYield = tuple[str, str, GradioUpdate, GradioUpdate, str]
 
@@ -167,6 +168,154 @@ def _normalize_run_mode(value: str) -> str:
     if mode in {"full", "transcribe_only", "visual_only"}:
         return mode
     return "full"
+
+
+def _reload_listener_config() -> None:
+    global APP_CONFIG
+    APP_CONFIG = pyscribe_services.load_config()
+
+
+def _enabled_llm_profiles() -> list[pyscribe_services.LLMConnectionProfile]:
+    _reload_listener_config()
+    return pyscribe_services.get_enabled_llm_profiles(APP_CONFIG.llm_profiles)
+
+
+def _find_enabled_llm_profile(profile_name: str) -> pyscribe_services.LLMConnectionProfile | None:
+    target = str(profile_name or "").strip()
+    if not target:
+        return None
+    for profile in _enabled_llm_profiles():
+        if profile.name == target:
+            return profile
+    return None
+
+
+def _llm_profile_name_choices() -> list[str]:
+    return [profile.name for profile in _enabled_llm_profiles()]
+
+
+def _llm_template_choices() -> tuple[list[tuple[str, str]], str | None]:
+    templates, fallback_default_id = pyscribe_services.load_prompt_templates()
+    choices = [(template.name, template.id) for template in templates]
+    default_id = str(APP_CONFIG.llm_default_template_id or "").strip().lower()
+    if default_id and any(template_id == default_id for _, template_id in choices):
+        return choices, default_id
+    if fallback_default_id and any(template_id == fallback_default_id for _, template_id in choices):
+        return choices, fallback_default_id
+    if choices:
+        return choices, choices[0][1]
+    return choices, None
+
+
+def _read_uploaded_text(file_obj: Any) -> str:
+    if file_obj is None:
+        return ""
+    path = file_obj.name if hasattr(file_obj, "name") else str(file_obj)
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError as exc:
+        raise gr.Error(f"Could not read file '{path}': {exc}")
+
+
+def _update_postprocess_source_fields(source_mode: str) -> tuple[GradioUpdate, GradioUpdate]:
+    use_current = str(source_mode or "").strip().lower() == "current transcript"
+    return gr.update(visible=not use_current), gr.update(visible=not use_current)
+
+
+def test_listener_llm_connection(profile_name: str, model_override: str) -> tuple[str, GradioUpdate]:
+    profile = _find_enabled_llm_profile(profile_name)
+    if profile is None:
+        return "Connection test: no enabled profile selected.", gr.update()
+
+    result = pyscribe_services.test_connection(profile)
+    lines: list[str] = [f"Overall: {result.status.upper()}"]
+    if result.selected_model:
+        lines.append(f"Selected model: {result.selected_model}")
+    if result.loaded_model:
+        lines.append(f"Loaded model: {result.loaded_model}")
+    lines.append("Stages:")
+    for stage in result.stages:
+        lines.append(f"- [{stage.status.upper()}] {stage.stage}: {stage.detail}")
+        for suggestion in stage.suggestions:
+            lines.append(f"  * {suggestion}")
+    if result.failure_code:
+        lines.append(f"Failure: {result.failure_code} - {result.failure_detail}")
+
+    model_choices = list(result.detected_models)
+    preferred_model = (
+        str(model_override or "").strip()
+        or result.selected_model
+        or profile.default_model
+        or ""
+    )
+    if preferred_model and preferred_model not in model_choices:
+        model_choices.append(preferred_model)
+
+    return "\n".join(lines), gr.update(choices=model_choices, value=preferred_model)
+
+
+def run_listener_llm_postprocess(
+    current_transcript: str,
+    source_mode: str,
+    uploaded_transcript_file: Any,
+    pasted_transcript: str,
+    uploaded_ocr_file: Any,
+    notes_text: str,
+    profile_name: str,
+    template_id: str,
+    selected_model: str,
+) -> tuple[str, str]:
+    profile = _find_enabled_llm_profile(profile_name)
+    if profile is None:
+        return "Post-process failed: no enabled profile selected.", ""
+
+    if _transcription_active.is_set():
+        if profile.scope == "local":
+            return (
+                "Post-process blocked: local profile cannot run while local transcription is active.",
+                "",
+            )
+        if not profile.allow_concurrent_with_local_transcription:
+            return (
+                "Post-process blocked: this profile is not marked concurrent-safe during local transcription.",
+                "",
+            )
+
+    mode = str(source_mode or "").strip().lower()
+    transcript_text = ""
+    if mode == "current transcript":
+        transcript_text = str(current_transcript or "").strip()
+    else:
+        transcript_text = _read_uploaded_text(uploaded_transcript_file) or str(pasted_transcript or "").strip()
+        if not transcript_text:
+            transcript_text = str(current_transcript or "").strip()
+
+    if not transcript_text:
+        return "Post-process failed: transcript text is required (current or uploaded/pasted).", ""
+
+    ocr_text = _read_uploaded_text(uploaded_ocr_file)
+    template = pyscribe_services.get_prompt_template(str(template_id or "").strip().lower())
+    if template is None:
+        return "Post-process failed: selected prompt template is unavailable.", ""
+
+    request = pyscribe_services.LLMPostprocessRequest(
+        transcript_text=transcript_text,
+        ocr_text=ocr_text,
+        notes_text=str(notes_text or "").strip(),
+        selected_model=str(selected_model or "").strip() or None,
+    )
+    result = pyscribe_services.run_llm_postprocess(profile, template, request)
+    if result.status != "pass":
+        return (
+            f"Post-process failed: {result.error_code or 'error'} - {result.error_detail or 'Unknown error'}",
+            "",
+        )
+
+    used_model = result.model or profile.default_model or "unknown"
+    return f"Post-process complete ({profile.name}, model: {used_model}).", result.output_text
 
 
 def find_open_port(host: str, preferred_port: int, max_tries: int = 50) -> int:
@@ -248,25 +397,26 @@ def transcribe(
                 "",
             )
     try:
-        pyscribe_services.save_config(
-            pyscribe_services.AppConfig(
-                last_model=model_name,
-                use_diarization=bool(use_diarization),
-                max_speakers=max_speakers,
-                diar_backend=diar_backend,
-                run_mode=run_mode,
-                use_visual_analysis=bool(use_visual_analysis),
-                visual_profile=visual_profile,
-                visual_ocr_backend=visual_ocr_backend,
-                visual_sample_seconds=float(visual_sample_seconds or 1.0),
-            )
-        )
+        global APP_CONFIG
+        listener_cfg = pyscribe_services.load_config()
+        listener_cfg.last_model = model_name
+        listener_cfg.use_diarization = bool(use_diarization)
+        listener_cfg.max_speakers = max_speakers
+        listener_cfg.diar_backend = diar_backend
+        listener_cfg.run_mode = run_mode
+        listener_cfg.use_visual_analysis = bool(use_visual_analysis)
+        listener_cfg.visual_profile = visual_profile
+        listener_cfg.visual_ocr_backend = visual_ocr_backend
+        listener_cfg.visual_sample_seconds = float(visual_sample_seconds or 1.0)
+        pyscribe_services.save_config(listener_cfg)
+        APP_CONFIG = listener_cfg
     except Exception as exc:
         LOGGER.warning("Failed to save listener config: %s", exc, exc_info=True)
         
     status_prefix = "Visual analysis" if run_mode == "visual_only" else "Transcription"
     yield f"Status: {status_prefix} starting...", "", gr.update(visible=False), gr.update(visible=True, value="Cancel"), ""
-        
+    _transcription_active.set()
+
     full_transcript = ""
     was_cancelled = False
     last_phase = "Transcribing"
@@ -319,6 +469,8 @@ def transcribe(
     except Exception as e:
         # Use gr.Error to properly raise exceptions in the Gradio UI
         raise gr.Error(f"An error occurred: {e}")
+    finally:
+        _transcription_active.clear()
 
     if was_cancelled or _cancel_event.is_set():
         _cancel_event.clear()
@@ -358,6 +510,23 @@ def save_transcript(transcript: str, audio_path: Any, model_name: str) -> str | 
     except (OSError, AttributeError) as e:
         raise gr.Error(f"Could not save file: {e}")
 
+
+def save_postprocess_output(postprocess_output: str, template_id: str) -> str | None:
+    if not postprocess_output:
+        gr.Info("Nothing to save.")
+        return None
+    try:
+        ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        safe_template = str(template_id or "postprocess").strip().replace("/", "-")
+        temp_dir = tempfile.gettempdir()
+        save_path = os.path.join(temp_dir, f"postprocess_{safe_template}_{ts}.md")
+        with open(save_path, "w", encoding="utf-8") as output_file:
+            output_file.write(postprocess_output)
+        gr.Info("Post-processed output ready for download.")
+        return save_path
+    except OSError as exc:
+        raise gr.Error(f"Could not save file: {exc}")
+
 def copy_to_clipboard(text: str) -> None:
     pyperclip.copy(text)
     gr.Info("Copied to clipboard!")
@@ -371,6 +540,12 @@ def create_interface() -> gr.Blocks:
     initial_run_mode = _normalize_run_mode(APP_CONFIG.run_mode)
     initial_allow_transcription = initial_run_mode in {"full", "transcribe_only"}
     initial_allow_visual = initial_run_mode in {"full", "visual_only"}
+    llm_profile_choices = _llm_profile_name_choices()
+    if APP_CONFIG.llm_default_profile in llm_profile_choices:
+        default_llm_profile = APP_CONFIG.llm_default_profile
+    else:
+        default_llm_profile = llm_profile_choices[0] if llm_profile_choices else None
+    llm_template_choices, default_template_id = _llm_template_choices()
 
     def _update_mode_visibility(
         run_mode: str,
@@ -419,6 +594,12 @@ def create_interface() -> gr.Blocks:
             If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
             For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
             Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
+            """
+        )
+        gr.Markdown(
+            """
+            **LLM post-processing:** configure profiles in Qt (`Tools > LLM Connections...`) and then use
+            the Listener's **LLM Post-Processing** section for connection tests and template-based summarization.
             """
         )
 
@@ -511,6 +692,59 @@ def create_interface() -> gr.Blocks:
                 download_file = gr.File(label="Download Transcript", interactive=False)
                 final_status_output = gr.Textbox(label="", interactive=False)
 
+                with gr.Accordion("LLM Post-Processing (Beta)", open=False):
+                    llm_profile_dropdown = gr.Dropdown(
+                        choices=llm_profile_choices,
+                        value=default_llm_profile,
+                        label="LLM profile",
+                        info="Configure profiles in Qt Tools > LLM Connections...",
+                    )
+                    llm_template_dropdown = gr.Dropdown(
+                        choices=llm_template_choices,
+                        value=default_template_id,
+                        label="Prompt template",
+                    )
+                    llm_model_dropdown = gr.Dropdown(
+                        choices=[],
+                        value="",
+                        allow_custom_value=True,
+                        label="LLM model override (optional)",
+                    )
+                    with gr.Row():
+                        llm_test_btn = gr.Button("Test LLM Connection")
+                        llm_run_btn = gr.Button("Run LLM Post-Process", variant="primary")
+                    llm_source_mode = gr.Radio(
+                        choices=["Current transcript", "Upload/paste transcript"],
+                        value="Current transcript",
+                        label="Transcript source",
+                    )
+                    llm_transcript_file = gr.File(
+                        label="Upload transcript text file (.txt/.md)",
+                        file_types=[".txt", ".md"],
+                        visible=False,
+                    )
+                    llm_transcript_paste = gr.Textbox(
+                        label="Paste transcript text",
+                        lines=8,
+                        max_lines=12,
+                        visible=False,
+                    )
+                    llm_ocr_file = gr.File(
+                        label="Upload OCR/context text file (optional)",
+                        file_types=[".txt", ".md"],
+                    )
+                    llm_notes_input = gr.Textbox(
+                        label="Additional notes/context (optional)",
+                        lines=4,
+                        max_lines=8,
+                    )
+                    llm_status_output = gr.Textbox(label="LLM status", interactive=False, lines=6, max_lines=12)
+                    llm_output = gr.Textbox(label="LLM output", interactive=True, lines=12, max_lines=18)
+                    with gr.Row():
+                        llm_copy_btn = gr.Button("Copy LLM Output")
+                        llm_save_btn = gr.Button("Save LLM Output")
+                    llm_download_file = gr.File(label="Download LLM Output", interactive=False)
+
         completion_btn = gr.Button("Cancel", variant="stop", visible=False)
 
         click_event = submit_btn.click(
@@ -568,6 +802,41 @@ def create_interface() -> gr.Blocks:
             fn=copy_to_clipboard,
             inputs=[transcript_output],
             outputs=[]
+        )
+        llm_source_mode.change(
+            fn=_update_postprocess_source_fields,
+            inputs=[llm_source_mode],
+            outputs=[llm_transcript_file, llm_transcript_paste],
+        )
+        llm_test_btn.click(
+            fn=test_listener_llm_connection,
+            inputs=[llm_profile_dropdown, llm_model_dropdown],
+            outputs=[llm_status_output, llm_model_dropdown],
+        )
+        llm_run_btn.click(
+            fn=run_listener_llm_postprocess,
+            inputs=[
+                transcript_output,
+                llm_source_mode,
+                llm_transcript_file,
+                llm_transcript_paste,
+                llm_ocr_file,
+                llm_notes_input,
+                llm_profile_dropdown,
+                llm_template_dropdown,
+                llm_model_dropdown,
+            ],
+            outputs=[llm_status_output, llm_output],
+        )
+        llm_copy_btn.click(
+            fn=copy_to_clipboard,
+            inputs=[llm_output],
+            outputs=[],
+        )
+        llm_save_btn.click(
+            fn=save_postprocess_output,
+            inputs=[llm_output, llm_template_dropdown],
+            outputs=[llm_download_file],
         )
 
     return iface

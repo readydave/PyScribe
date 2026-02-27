@@ -33,9 +33,9 @@ reversible milestones.
 
 ## Milestone 4: Listener Workflow Integration
 
-- [ ] Add LLM post-process controls to Listener UI.
-- [ ] Add profile/model selection and connection test in Listener UI.
-- [ ] Add "Process Existing Transcript" flow in Listener UI.
+- [x] Add LLM post-process controls to Listener UI.
+- [x] Add profile/model selection and connection test in Listener UI.
+- [x] Add "Process Existing Transcript" flow in Listener UI.
 
 ## Milestone 5: Templates + Context Enrichment
 

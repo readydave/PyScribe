@@ -20,6 +20,8 @@ The format is inspired by Keep a Changelog.
 - LLM post-processing execution service in `services/llm_postprocess_service.py` for Ollama and OpenAI-compatible endpoints.
 - Qt LLM Post-Process dialog in `ui_qt/llm_postprocess_dialog.py` with template/profile/model selection and transcript file loading.
 - `tests/test_llm_postprocess_service.py` covering request validation, provider success paths, and failure-code mapping.
+- Listener LLM Post-Processing panel in `app.py` with connection test, template/model selection, and current-vs-upload transcript source controls.
+- `tests/test_listener_llm_postprocess_helpers.py` covering listener LLM helper behaviors and concurrency policy checks.
 
 ### Changed
 
@@ -34,6 +36,7 @@ The format is inspired by Keep a Changelog.
 - Qt Tools menu now includes **LLM Connections...** (`Ctrl+Shift+L`) for in-app connection configuration/testing.
 - Qt Tools menu now includes **LLM Post-Process...** (`Ctrl+Shift+P`) and **Process Existing Transcript...** flows.
 - LLM post-processing now blocks concurrent runs for local profiles while local transcription is active; LAN profiles must explicitly allow concurrency.
+- Listener config saves now load-and-update existing config fields to preserve additive settings (including LLM profile data).
 
 ### Fixed
 

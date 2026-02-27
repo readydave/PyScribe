@@ -205,6 +205,12 @@ Visibility of controls adapts to run mode and toggles.
 - **Cancel** (shown during active run): sets cancellation flag.
 - **Copy to Clipboard**
 - **Save Transcript**: prepares downloadable text file.
+- **LLM Post-Processing (Beta)**:
+  - Pick configured LLM profile + prompt template.
+  - Test connection and fetch model list.
+  - Choose transcript source (`Current transcript` or `Upload/paste transcript`).
+  - Optionally upload OCR/context text and extra notes.
+  - Run post-processing and save/copy generated output.
 
 ### Listener Outputs
 
@@ -212,6 +218,9 @@ Visibility of controls adapts to run mode and toggles.
 - **Transcription**
 - **Final status** (completion/cancel summary)
 - **Download Transcript** file output
+- **LLM status**
+- **LLM output**
+- **Download LLM Output** file output
 
 ## 5) CLI Features
 

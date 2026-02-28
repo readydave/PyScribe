@@ -53,12 +53,17 @@ Run mode is inferred automatically:
   - Supports English and Spanish sample sets.
   - Allows multi-model selection with Start/Cancel controls.
 - **LLM Connections...** (`Ctrl+Shift+L`)
-  - Add/edit local or LAN LLM profiles (Ollama or OpenAI-compatible APIs).
+  - Add/edit local or LAN LLM profiles (`ollama`, `lm_studio`, `openai_compatible`).
+  - API key supports `env:VAR_NAME` for secure persisted configuration.
+  - Direct API key values are session-only and are not saved to disk.
   - Run staged connection tests with pass/fail diagnostics and suggested fixes.
+  - Detect local interfaces/subnets and scan selected networks for reachable LLM endpoints.
+  - Supports multi-network setups (for example LAN + VPN) by selecting a detected subnet before scan.
 - **LLM Post-Process...** (`Ctrl+Shift+P`)
   - Run prompt-template-based post-processing on the current transcript.
-  - Optionally include current OCR context, additional notes, and pasted context.
+  - Optionally include current OCR context, additional notes, pasted context, and image attachments.
   - Includes payload preview so you can review exactly what will be sent.
+  - If the selected model appears text-only, image context can fall back to OCR text.
 - **Process Existing Transcript...**
   - Open the same post-processing workflow, starting in file-load mode for saved transcript files.
   - Useful when transcription was completed in an earlier session.
@@ -126,9 +131,14 @@ Before transcription, PyScribe may detect language and prompt:
 - **Post-process blocked while transcription is running**
   - Local profiles are blocked during active local transcription to avoid GPU/compute contention.
   - Use a LAN profile with concurrent mode enabled, or wait for transcription to finish.
+- **Policy check failures at run time**
+  - Scope/CIDR policy is enforced when sending post-process requests, not only in connection tests.
+  - For `127.0.0.1`/`localhost` endpoints, use `local` scope.
 - **Template editing**
   - Built-in templates are read-only.
   - Create/edit/delete custom templates from within the LLM Post-Process dialog.
+- **Image context fallback**
+  - If image attachment send is blocked for a text-only model, enable OCR fallback and choose an OCR backend.
 
 ## Logging
 

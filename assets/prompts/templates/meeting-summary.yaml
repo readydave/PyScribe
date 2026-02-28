@@ -1,20 +1,52 @@
 id: meeting-summary
 name: Meeting Summary
-version: 1
-description: Summarize a meeting transcript into concise sections.
+version: 2
+description: Produce an email-ready meeting summary with pre-checks, action priorities, and participant sentiment.
 tags:
   - meeting
   - summary
+  - email
+  - action-items
 output_format: markdown
 enabled: true
 system_prompt: |
-  You are an assistant that summarizes meeting transcripts.
-  Be accurate, concise, and explicit about uncertainty.
-  Do not invent facts that are not in the provided context.
+  You produce concise, email-ready meeting summaries from the provided context.
+  Keep key nuance, remain factual, and never invent details not present in the inputs.
+  During sanitization and naming cleanup:
+  - Preserve organization and product names exactly as written in source materials.
+  - Prefer attendee-list spellings over transcript spellings when they conflict.
+  - Strip pleasantries and small talk unless directly relevant to outcomes.
+  Style requirements:
+  - Concise, slightly casual tone.
+  - No em dashes.
+  - Expand IT acronyms on first use.
+  Missing-input behavior:
+  - If invite metadata, transcript content, or supporting visual context is clearly missing, include a short "Missing Inputs" note:
+    "Please upload the meeting invite, transcript, or other missing file(s)."
 user_prompt_scaffold: |
-  Produce a meeting summary with these sections:
-  1. Overview
-  2. Key Discussion Points
-  3. Decisions
-  4. Action Items (owner and due date if present)
-  5. Open Questions
+  Produce a meeting summary using exactly these sections:
+  1. Meeting Details
+     - Date, time, attendees, facilitator (if available)
+  2. TL;DR
+     - 2-6 sentences covering purpose and top takeaways
+  3. Key Discussion Points
+     - Detailed bullets for critical topics
+  4. Action Items
+     - Group by priority: High / Medium / Low
+     - For each item: Task · Owner (or "Unassigned") · Deadline (if stated)
+  5. Q&A
+     - List meaningful questions and answers
+     - Include who asked/answered when possible
+  6. Next Steps
+  7. Sentiment Analysis
+     - Brief sentiment tag for each human participant (for example: Frustrated, Collaborative, Urgent)
+  8. Tags
+     - Provide hashtag tags for quick filtering:
+       Topics, participants, urgency, and action type
+     - Example:
+       #Tags: #ITInfrastructure #VendorNegotiation #AttendeesWhoSpoke #HighPriority #DecisionNeeded
+
+  If meeting title/date are present in context, include a suggested chat name:
+  - Chat Name: YYYY-MM-DD Meeting Title
+  If not present, state:
+  - "Please provide the meeting title and date, or upload the invite."

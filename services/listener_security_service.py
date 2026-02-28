@@ -41,7 +41,14 @@ def validate_listener_security(
     auth_user: str | None,
     auth_pass: str | None,
     allow_nonlocal_host: bool,
+    share: bool = False,
 ) -> None:
+    if share and not (auth_user and auth_pass):
+        raise SystemExit(
+            "Public share mode requires authentication. "
+            "Provide --auth-user and set PYSCRIBE_AUTH_PASS, or set "
+            "PYSCRIBE_AUTH_USER/PYSCRIBE_AUTH_PASS."
+        )
     if is_loopback_host(host):
         return
     if not allow_nonlocal_host:

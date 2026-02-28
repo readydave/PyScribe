@@ -104,6 +104,53 @@ def check_ocr_backend_ready(backend: str) -> tuple[bool, str | None]:
     return False, f"Unknown OCR backend '{backend}'."
 
 
+def extract_text_from_images(
+    image_paths: list[str] | tuple[str, ...],
+    *,
+    ocr_backend: str = "auto",
+    on_status: StatusCallback | None = None,
+) -> tuple[str, str | None, str | None]:
+    """Extract OCR text from a list of image files.
+
+    Returns:
+    - extracted_text: newline-joined text lines (can be empty)
+    - backend_used: resolved OCR backend name when available
+    - detail: fallback/info/error detail text
+    """
+    normalized_paths: list[str] = []
+    for path in image_paths:
+        candidate = str(path or "").strip()
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        if candidate not in normalized_paths:
+            normalized_paths.append(candidate)
+    if not normalized_paths:
+        return "", None, "No readable image files were provided."
+
+    ocr_fn, backend_used, reason, backend_note = _build_ocr_fn(ocr_backend, on_status=on_status)
+    if ocr_fn is None:
+        return "", None, reason or "No OCR backend available."
+
+    from PIL import Image
+
+    lines: list[str] = []
+    for image_path in normalized_paths:
+        try:
+            with Image.open(image_path) as image:
+                text = ocr_fn(image.convert("RGB"), mode="slide")
+        except Exception as exc:
+            if on_status:
+                on_status(f"Image OCR failed for '{os.path.basename(image_path)}': {exc}")
+            continue
+        for line in _extract_ocr_lines(text):
+            if line not in lines:
+                lines.append(line)
+    if not lines:
+        detail = backend_note or "OCR ran but no readable text was found in attached images."
+        return "", backend_used, detail
+    return "\n".join(lines), backend_used, backend_note
+
+
 def analyze_video_stream(
     media_path: str,
     *,

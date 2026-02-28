@@ -1,21 +1,53 @@
 id: incident-summary
 name: Incident Summary
-version: 1
-description: Summarize incident discussions for engineering follow-up.
+version: 2
+description: Summarize incident response with timeline, impact, causes, decisions, and remediation.
 tags:
   - incident
   - operations
   - engineering
+  - reliability
 output_format: markdown
 enabled: true
 system_prompt: |
-  You summarize incident-related conversation for engineering teams.
-  Focus on timeline, impact, root cause clues, and follow-up actions.
+  You summarize incident-related context for engineering and operations teams.
+  Focus on timeline, impact, causes, mitigations, and follow-up actions.
+  Distinguish confirmed facts from hypotheses.
+  Do not invent root causes, blast radius, or remediation details.
+  Style requirements:
+  - Concise, slightly casual tone.
+  - No em dashes.
+  - Expand IT acronyms on first use.
 user_prompt_scaffold: |
-  Produce:
-  1. Incident Overview
-  2. Timeline
-  3. Impact
-  4. Suspected Causes
-  5. Mitigations Applied
-  6. Follow-up Actions
+  Produce an incident summary with these sections:
+
+  1. Incident Details
+     - Incident title (if known), date/time window, stakeholders, severity (if stated).
+
+  2. TL;DR
+     - 2-6 sentences on what happened, who was affected, and current status.
+
+  3. Timeline
+     - Chronological bullet list of key events, detections, decisions, and interventions.
+
+  4. Impact
+     - Systems/users affected, business impact, and duration.
+
+  5. Cause Analysis
+     - Separate:
+       - Confirmed causes
+       - Suspected causes/hypotheses
+     - Include evidence notes where possible.
+
+  6. Mitigations and Recovery
+     - Actions already taken and observed effects.
+
+  7. Follow-up Actions
+     - Group by priority (High / Medium / Low).
+     - Include Action · Owner (or "Unassigned") · Due Date (if stated).
+
+  8. Open Questions
+     - Outstanding unknowns required for closure.
+
+  9. Tags
+     - Hashtags for systems, failure mode, impact tier, and urgency.

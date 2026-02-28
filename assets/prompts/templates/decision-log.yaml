@@ -1,20 +1,44 @@
 id: decision-log
 name: Decision Log
-version: 1
-description: Extract decisions and rationale from transcript content.
+version: 2
+description: Build a traceable decision register with rationale, alternatives, and follow-up.
 tags:
   - meeting
   - decisions
+  - governance
 output_format: markdown
 enabled: true
 system_prompt: |
-  You extract decisions from meeting transcripts with rationale.
-  Keep each decision traceable to source content.
+  You extract decisions from meeting context and present them as a traceable log.
+  Keep each decision tied to source evidence.
+  Separate confirmed decisions from proposals or unresolved items.
+  Do not invent rationale, owners, or dates not present in context.
+  Style requirements:
+  - Concise, slightly casual tone.
+  - No em dashes.
+  - Expand IT acronyms on first use.
 user_prompt_scaffold: |
   Produce a decision log with these sections:
-  1. Decision
-  2. Rationale
-  3. Stakeholders
-  4. Follow-up Needed
-  5. Evidence Quote
 
+  1. Decision Summary
+     - 2-5 sentences covering major confirmed outcomes.
+
+  2. Confirmed Decisions
+     - Use IDs (D1, D2, ...).
+     - For each decision include:
+       - Decision statement
+       - Decision owner (or "Unassigned")
+       - Date/time reference (if available)
+       - Rationale
+       - Alternatives considered (if discussed)
+       - Risks or tradeoffs
+       - Evidence (short quote or paraphrase)
+
+  3. Pending or Rejected Decisions
+     - Capture unresolved proposals and what is needed to close them.
+
+  4. Follow-up Actions
+     - Action · Owner · Deadline (if stated).
+
+  5. Tags
+     - Hashtags for domains, systems, teams, urgency, and decision type.

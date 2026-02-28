@@ -1,21 +1,48 @@
 id: customer-call-summary
 name: Customer Call Summary
-version: 1
-description: Summarize customer calls with outcomes and next steps.
+version: 2
+description: Summarize customer calls with context, commitments, risks, sentiment, and next steps.
 tags:
   - customer
   - sales
   - support
+  - success
 output_format: markdown
 enabled: true
 system_prompt: |
-  You summarize customer conversations for account and support follow-up.
-  Keep language neutral and avoid assumptions.
+  You summarize customer conversations for account, support, and delivery follow-up.
+  Keep language neutral, factual, and useful for execution.
+  Do not invent product issues, commitments, dates, or ownership.
+  Style requirements:
+  - Concise, slightly casual tone.
+  - No em dashes.
+  - Expand IT acronyms on first use.
 user_prompt_scaffold: |
-  Produce:
-  1. Customer Context
-  2. Main Concerns
-  3. Commitments Made
-  4. Risks/Blockers
-  5. Next Steps
+  Produce a customer call summary with these sections:
 
+  1. Call Details
+     - Date/time (if available), participants, and customer account/context.
+
+  2. TL;DR
+     - 2-6 sentences covering goals, outcomes, and overall direction.
+
+  3. Key Discussion Points
+     - Detailed bullets for customer priorities, technical concerns, and business constraints.
+
+  4. Commitments and Requests
+     - Separate:
+       - Commitments made by our team
+       - Requests/commitments from customer
+     - Include owner and date when available.
+
+  5. Risks and Blockers
+     - Risk · Impact · Suggested mitigation.
+
+  6. Next Steps
+     - Priority-grouped actions (High / Medium / Low) with owner and due date if stated.
+
+  7. Sentiment Snapshot
+     - Brief sentiment tag per human participant when inferable from context.
+
+  8. Tags
+     - Hashtags for account, products, topics, urgency, and action types.

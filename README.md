@@ -26,6 +26,8 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt LLM post-processing for current transcript or previously saved transcript files
 - Listener LLM post-processing panel for template-based processing of current or uploaded transcripts
 - User template management (custom prompt templates) and payload preview before send
+- Optional screenshot/image attachments with multimodal send or OCR fallback for text-only models
+- LLM connection manager with subnet detection + LAN scan and explicit LM Studio provider support
 
 ## Screenshots
 
@@ -107,10 +109,10 @@ Interactive launcher behavior:
 - Choose `2) Listener` and then:
   - `1) Localhost only (127.0.0.1)` (default)
   - `2) LAN share (0.0.0.0)` with auth enabled
-- Interactive LAN defaults:
-  - Username: `pyscribe`
-  - Password: `Pyscribe!`
-- Override those defaults with:
+- Interactive LAN uses:
+  - Username default: `pyscribe` (override with env var)
+  - Password: from `PYSCRIBE_LAN_AUTH_PASS` or secure prompt at launch
+- Override username/password with:
   - `PYSCRIBE_LAN_AUTH_USER`
   - `PYSCRIBE_LAN_AUTH_PASS`
 
@@ -123,6 +125,7 @@ Binding to non-local interfaces is intentionally restricted.
   - `--allow-nonlocal-host`
   - `--auth-user <username>`
   - `PYSCRIBE_AUTH_PASS` environment variable
+- Public share mode (`--share`) also requires auth credentials, even on localhost binds.
 - Optional: set `PYSCRIBE_AUTH_USER` instead of passing `--auth-user`
 - Legacy `--auth-pass` CLI flag is intentionally unsupported
 
@@ -133,9 +136,8 @@ PYSCRIBE_AUTH_USER=admin PYSCRIBE_AUTH_PASS=change-me \
 python main.py serve --host 0.0.0.0 --allow-nonlocal-host --port 7860
 ```
 
-Note: Interactive LAN mode uses built-in defaults unless overridden by
-`PYSCRIBE_LAN_AUTH_USER` and `PYSCRIBE_LAN_AUTH_PASS`. Change these for any
-network you do not fully trust.
+Note: Interactive LAN mode no longer uses a default password. Set
+`PYSCRIBE_LAN_AUTH_PASS` or enter a prompted password at launch.
 
 ## Models
 

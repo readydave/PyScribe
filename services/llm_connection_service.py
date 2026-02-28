@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import ipaddress
 import json
 import logging
+import os
+import socket
+import ssl
 from typing import Any
 from urllib import error as urlerror
 from urllib import parse as urlparse
@@ -15,9 +19,32 @@ from urllib import request as urlrequest
 LOGGER = logging.getLogger(__name__)
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_SUPPORTED_PROVIDERS = {"ollama", "openai_compatible"}
+_SUPPORTED_PROVIDERS = {"ollama", "openai_compatible", "lm_studio"}
 _SUPPORTED_SCOPES = {"local", "lan"}
 _DEFAULT_ALLOWED_CIDRS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+_SCAN_MAX_HOSTS_DEFAULT = 256
+
+
+@dataclass(frozen=True)
+class LocalNetworkInfo:
+    interface_name: str
+    ip_address: str
+    network_cidr: str
+    scan_cidr: str
+    is_private: bool
+    is_loopback: bool
+
+
+@dataclass(frozen=True)
+class DiscoveredLLMInstance:
+    provider: str
+    base_url: str
+    host: str
+    port: int
+    detected_models: tuple[str, ...]
+    scope_hint: str
+    network_cidr: str
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -72,6 +99,129 @@ def get_enabled_llm_profiles(raw_profiles: list[dict[str, object]]) -> list[LLMC
     return [profile for profile in load_llm_profiles(raw_profiles) if profile.enabled]
 
 
+def discover_local_networks(*, include_non_private: bool = False, include_loopback: bool = False) -> list[LocalNetworkInfo]:
+    """Detect local IPv4 interfaces and return normalized network details."""
+    discovered: list[LocalNetworkInfo] = []
+    seen_keys: set[tuple[str, str]] = set()
+
+    try:
+        import psutil  # type: ignore
+
+        if_addrs = psutil.net_if_addrs()
+    except Exception:
+        if_addrs = {}
+
+    if if_addrs:
+        for interface_name, addresses in if_addrs.items():
+            for addr in addresses:
+                if getattr(addr, "family", None) != socket.AF_INET:
+                    continue
+                ip_text = str(getattr(addr, "address", "") or "").strip()
+                mask_text = str(getattr(addr, "netmask", "") or "").strip()
+                info = _build_local_network_info(interface_name=interface_name, ip_text=ip_text, mask_text=mask_text)
+                if info is None:
+                    continue
+                if not include_loopback and info.is_loopback:
+                    continue
+                if not include_non_private and not info.is_private and not info.is_loopback:
+                    continue
+                key = (info.interface_name, info.ip_address)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                discovered.append(info)
+
+    # Fallback when psutil is unavailable or returns no entries.
+    if not discovered:
+        host = socket.gethostname()
+        for ip_text in _resolve_host_ips(host):
+            if ip_text.version != 4:
+                continue
+            if not include_loopback and ip_text.is_loopback:
+                continue
+            if not include_non_private and not ip_text.is_private and not ip_text.is_loopback:
+                continue
+            info = _build_local_network_info(
+                interface_name="host",
+                ip_text=str(ip_text),
+                mask_text="255.255.255.0",
+            )
+            if info is None:
+                continue
+            key = (info.interface_name, info.ip_address)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            discovered.append(info)
+
+    discovered.sort(key=lambda item: (item.interface_name.lower(), item.ip_address))
+    return discovered
+
+
+def scan_lan_for_llm_instances(
+    network_cidrs: list[str] | tuple[str, ...],
+    *,
+    include_ollama: bool = True,
+    include_openai_compatible: bool = True,
+    include_lm_studio: bool = True,
+    timeout_seconds: float = 0.35,
+    max_hosts_per_network: int = _SCAN_MAX_HOSTS_DEFAULT,
+) -> list[DiscoveredLLMInstance]:
+    """Scan selected LAN subnets for potential Ollama/LM Studio/OpenAI-compatible endpoints."""
+    scan_targets: list[tuple[str, str, int, str]] = []
+    cidr_by_host: dict[str, str] = {}
+    for cidr in network_cidrs:
+        network = _safe_parse_network(cidr)
+        if network is None or network.version != 4:
+            continue
+        hosts = list(network.hosts())
+        if len(hosts) > max_hosts_per_network:
+            hosts = hosts[:max_hosts_per_network]
+        for host_ip in hosts:
+            host = str(host_ip)
+            cidr_by_host[host] = str(network)
+            if include_ollama:
+                scan_targets.append(("ollama", host, 11434, "/api/tags"))
+            if include_lm_studio:
+                scan_targets.append(("lm_studio", host, 1234, "/v1/models"))
+            if include_openai_compatible:
+                if not include_lm_studio:
+                    scan_targets.append(("openai_compatible", host, 1234, "/v1/models"))
+                scan_targets.append(("openai_compatible", host, 8000, "/v1/models"))
+                scan_targets.append(("openai_compatible", host, 8080, "/v1/models"))
+
+    discovered: list[DiscoveredLLMInstance] = []
+    seen_urls: set[tuple[str, str]] = set()
+    if not scan_targets:
+        return discovered
+
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        futures = [
+            pool.submit(
+                _probe_scan_target,
+                provider=provider,
+                host=host,
+                port=port,
+                path=path,
+                timeout_seconds=timeout_seconds,
+                network_cidr=cidr_by_host.get(host, ""),
+            )
+            for provider, host, port, path in scan_targets
+        ]
+        for future in as_completed(futures):
+            result = future.result()
+            if result is None:
+                continue
+            key = (result.provider, result.base_url)
+            if key in seen_urls:
+                continue
+            seen_urls.add(key)
+            discovered.append(result)
+
+    discovered.sort(key=lambda item: (item.provider, item.host, item.port))
+    return discovered
+
+
 def test_connection(profile: LLMConnectionProfile) -> ConnectionTestResult:
     """Run staged diagnostics for an LLM profile and return pass/fail detail."""
     LOGGER.info(
@@ -93,7 +243,6 @@ def test_connection(profile: LLMConnectionProfile) -> ConnectionTestResult:
             detail="Base URL must be an absolute http/https URL.",
         )
     stages.append(ConnectionStageResult(stage="validate_url", status="pass", code=None, detail="URL is valid."))
-
     policy_error = _check_scope_policy(profile=profile, parsed_url=parsed)
     if policy_error is not None:
         return _fail_result(
@@ -107,6 +256,8 @@ def test_connection(profile: LLMConnectionProfile) -> ConnectionTestResult:
 
     if profile.provider == "ollama":
         return _test_ollama(profile=profile, stages=stages)
+    if profile.provider == "lm_studio":
+        return _test_openai_compatible(profile=profile, stages=stages)
     return _test_openai_compatible(profile=profile, stages=stages)
 
 
@@ -124,6 +275,11 @@ def get_failure_suggestions(code: str) -> tuple[str, ...]:
         "policy_blocked_non_lan": (
             "Use an IP in private LAN ranges (10.x, 172.16-31.x, 192.168.x).",
             "Update allowed CIDRs if your network uses a custom private range.",
+            "If the endpoint is localhost/127.0.0.1, switch scope to local.",
+        ),
+        "policy_loopback_with_lan": (
+            "LAN scope does not allow loopback addresses.",
+            "Use scope local for localhost/127.0.0.1 endpoints.",
         ),
         "dns_failure": (
             "Verify hostname spelling and local DNS resolution.",
@@ -168,7 +324,11 @@ def get_failure_suggestions(code: str) -> tuple[str, ...]:
 def _test_ollama(profile: LLMConnectionProfile, stages: list[ConnectionStageResult]) -> ConnectionTestResult:
     tags_url = _join_url(profile.base_url, "/api/tags")
     try:
-        tags_payload = _http_json_get(tags_url, timeout_seconds=profile.timeout_seconds)
+        tags_payload = _http_json_get(
+            tags_url,
+            timeout_seconds=profile.timeout_seconds,
+            verify_tls=profile.verify_tls,
+        )
     except _ConnectionException as exc:
         return _fail_result(profile=profile, stages=stages, stage="reachability", code=exc.code, detail=str(exc))
 
@@ -215,7 +375,12 @@ def _test_ollama(profile: LLMConnectionProfile, stages: list[ConnectionStageResu
     smoke_url = _join_url(profile.base_url, "/api/generate")
     payload = {"model": selected_model, "prompt": "Connection test. Reply with: OK", "stream": False}
     try:
-        smoke_payload = _http_json_post(smoke_url, payload=payload, timeout_seconds=profile.timeout_seconds)
+        smoke_payload = _http_json_post(
+            smoke_url,
+            payload=payload,
+            timeout_seconds=profile.timeout_seconds,
+            verify_tls=profile.verify_tls,
+        )
     except _ConnectionException as exc:
         return _fail_result(
             profile=profile,
@@ -273,7 +438,12 @@ def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[Connecti
     models_url = _join_url(profile.base_url, "/v1/models")
     headers = _auth_headers(profile.api_key)
     try:
-        models_payload = _http_json_get(models_url, timeout_seconds=profile.timeout_seconds, headers=headers)
+        models_payload = _http_json_get(
+            models_url,
+            timeout_seconds=profile.timeout_seconds,
+            headers=headers,
+            verify_tls=profile.verify_tls,
+        )
     except _ConnectionException as exc:
         return _fail_result(profile=profile, stages=stages, stage="reachability", code=exc.code, detail=str(exc))
 
@@ -320,6 +490,7 @@ def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[Connecti
             payload=payload,
             timeout_seconds=profile.timeout_seconds,
             headers=headers,
+            verify_tls=profile.verify_tls,
         )
     except _ConnectionException as exc:
         return _fail_result(
@@ -374,7 +545,11 @@ def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[Connecti
 def _get_ollama_loaded_model(profile: LLMConnectionProfile) -> str | None:
     ps_url = _join_url(profile.base_url, "/api/ps")
     try:
-        payload = _http_json_get(ps_url, timeout_seconds=profile.timeout_seconds)
+        payload = _http_json_get(
+            ps_url,
+            timeout_seconds=profile.timeout_seconds,
+            verify_tls=profile.verify_tls,
+        )
     except _ConnectionException:
         return None
     if not isinstance(payload, dict):
@@ -444,13 +619,14 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
     if not base_url:
         LOGGER.warning("Skipping profile '%s' with empty base_url", name)
         return None
+    base_url = _normalize_base_url_for_profile(provider, base_url)
     timeout_seconds = _as_float(raw.get("timeout_seconds"), default=8.0, min_value=1.0, max_value=120.0)
     return LLMConnectionProfile(
         name=name,
         provider=provider,
         scope=scope,
         base_url=base_url.rstrip("/"),
-        api_key=_as_optional_str(raw.get("api_key")),
+        api_key=_resolve_profile_api_key(raw),
         default_model=_as_optional_str(raw.get("default_model")),
         timeout_seconds=timeout_seconds,
         verify_tls=_as_bool(raw.get("verify_tls"), default=True),
@@ -461,6 +637,44 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
             default=(scope == "lan"),
         ),
     )
+
+
+def evaluate_profile_scope_policy(profile: LLMConnectionProfile) -> tuple[bool, str | None, str | None]:
+    """
+    Validate base URL shape and scope policy for runtime use (without network calls).
+    """
+    parsed = _parse_base_url(profile.base_url)
+    if parsed is None:
+        return False, "invalid_url", "Base URL must be an absolute http/https URL."
+    policy_error = _check_scope_policy(profile=profile, parsed_url=parsed)
+    if policy_error is not None:
+        return False, policy_error, _failure_detail(policy_error)
+    return True, None, None
+
+
+def _normalize_base_url_for_profile(provider: str, base_url: str) -> str:
+    """
+    Defensive wrapper around URL normalization used during profile parsing.
+
+    Some stale/hot-reload runtimes can surface NameError for helper symbols.
+    Keep parsing resilient so the UI can continue and report validation errors
+    instead of crashing.
+    """
+    normalizer = globals().get("_normalize_base_url")
+    if callable(normalizer):
+        return normalizer(provider, base_url)
+
+    LOGGER.warning("LLM base URL normalizer helper missing at runtime; using fallback parser.")
+    text = str(base_url or "").strip()
+    try:
+        parsed = urlparse.urlparse(text)
+    except Exception:
+        return text
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return text
+    if provider in {"openai_compatible", "lm_studio"} and parsed.path.rstrip("/") == "/v1":
+        return urlparse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+    return text
 
 
 def _check_scope_policy(*, profile: LLMConnectionProfile, parsed_url: urlparse.ParseResult) -> str | None:
@@ -480,6 +694,10 @@ def _check_scope_policy(*, profile: LLMConnectionProfile, parsed_url: urlparse.P
         return "policy_blocked_non_local"
 
     # LAN scope
+    if host in _LOCAL_HOSTS:
+        return "policy_loopback_with_lan"
+    if ip_obj is not None and ip_obj.is_loopback:
+        return "policy_loopback_with_lan"
     candidate_ips = _resolve_host_ips(host)
     if not candidate_ips:
         # If DNS fails we treat as DNS issue rather than policy block.
@@ -512,6 +730,96 @@ def _resolve_host_ips(host: str) -> list[ipaddress._BaseAddress]:
     return resolved
 
 
+def _build_local_network_info(*, interface_name: str, ip_text: str, mask_text: str) -> LocalNetworkInfo | None:
+    if not ip_text:
+        return None
+    try:
+        ip_obj = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return None
+    if ip_obj.version != 4:
+        return None
+    if not mask_text:
+        mask_text = "255.255.255.0"
+    try:
+        interface = ipaddress.ip_interface(f"{ip_text}/{mask_text}")
+    except ValueError:
+        try:
+            interface = ipaddress.ip_interface(f"{ip_text}/24")
+        except ValueError:
+            return None
+    network = interface.network
+    scan_network = network
+    if isinstance(scan_network, ipaddress.IPv4Network) and scan_network.prefixlen < 24:
+        try:
+            scan_network = ipaddress.ip_network(f"{ip_text}/24", strict=False)
+        except ValueError:
+            scan_network = network
+    return LocalNetworkInfo(
+        interface_name=interface_name,
+        ip_address=str(interface.ip),
+        network_cidr=str(network),
+        scan_cidr=str(scan_network),
+        is_private=interface.ip.is_private,
+        is_loopback=interface.ip.is_loopback,
+    )
+
+
+def _safe_parse_network(cidr: str) -> ipaddress._BaseNetwork | None:
+    text = str(cidr or "").strip()
+    if not text:
+        return None
+    try:
+        return ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return None
+
+
+def _probe_scan_target(
+    *,
+    provider: str,
+    host: str,
+    port: int,
+    path: str,
+    timeout_seconds: float,
+    network_cidr: str,
+) -> DiscoveredLLMInstance | None:
+    base_url = f"http://{host}:{port}"
+    probe_url = _join_url(base_url, path)
+    try:
+        payload = _http_json_get(probe_url, timeout_seconds=max(0.1, timeout_seconds), headers={})
+    except Exception:
+        return None
+
+    detected_models: list[str] = []
+    detail = ""
+    if provider == "ollama":
+        detected_models = _extract_ollama_models(payload)
+        if not detected_models and not isinstance(payload, dict):
+            return None
+        detail = f"Ollama endpoint responded at {base_url}."
+    else:
+        detected_models = _extract_openai_models(payload)
+        if not detected_models and not isinstance(payload, dict):
+            return None
+        if provider == "lm_studio":
+            detail = f"LM Studio-compatible endpoint responded at {base_url}/v1."
+        else:
+            detail = f"OpenAI-compatible endpoint responded at {base_url}/v1."
+
+    scope_hint = "local" if host in _LOCAL_HOSTS else "lan"
+    return DiscoveredLLMInstance(
+        provider=provider,
+        base_url=base_url,
+        host=host,
+        port=port,
+        detected_models=tuple(detected_models),
+        scope_hint=scope_hint,
+        network_cidr=network_cidr,
+        detail=detail,
+    )
+
+
 def _parse_allowed_networks(cidrs: tuple[str, ...]) -> tuple[ipaddress._BaseNetwork, ...]:
     nets: list[ipaddress._BaseNetwork] = []
     for cidr in cidrs:
@@ -540,15 +848,32 @@ def _parse_base_url(value: str) -> urlparse.ParseResult | None:
     return parsed
 
 
+def _normalize_base_url(provider: str, base_url: str) -> str:
+    text = str(base_url or "").strip()
+    parsed = _parse_base_url(text)
+    if parsed is None:
+        return text
+    if provider in {"openai_compatible", "lm_studio"} and parsed.path.rstrip("/") == "/v1":
+        rebuilt = urlparse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
+        return rebuilt
+    return text
+
+
 def _join_url(base_url: str, path: str) -> str:
     base = base_url.rstrip("/")
     suffix = path if path.startswith("/") else f"/{path}"
     return f"{base}{suffix}"
 
 
-def _http_json_get(url: str, *, timeout_seconds: float, headers: dict[str, str] | None = None) -> Any:
+def _http_json_get(
+    url: str,
+    *,
+    timeout_seconds: float,
+    headers: dict[str, str] | None = None,
+    verify_tls: bool = True,
+) -> Any:
     request = urlrequest.Request(url=url, method="GET", headers=headers or {})
-    return _http_json_request(request=request, timeout_seconds=timeout_seconds)
+    return _http_json_request(request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls)
 
 
 def _http_json_post(
@@ -557,18 +882,29 @@ def _http_json_post(
     payload: dict[str, Any],
     timeout_seconds: float,
     headers: dict[str, str] | None = None,
+    verify_tls: bool = True,
 ) -> Any:
     req_headers = {"Content-Type": "application/json"}
     if headers:
         req_headers.update(headers)
     data = json.dumps(payload).encode("utf-8")
     request = urlrequest.Request(url=url, method="POST", headers=req_headers, data=data)
-    return _http_json_request(request=request, timeout_seconds=timeout_seconds)
+    return _http_json_request(request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls)
 
 
-def _http_json_request(*, request: urlrequest.Request, timeout_seconds: float) -> Any:
+def _http_json_request(*, request: urlrequest.Request, timeout_seconds: float, verify_tls: bool) -> Any:
+    context: ssl.SSLContext | None = None
+    if request.full_url.lower().startswith("https://"):
+        if verify_tls:
+            context = ssl.create_default_context()
+        else:
+            context = ssl._create_unverified_context()
     try:
-        with urlrequest.urlopen(request, timeout=timeout_seconds) as response:
+        if context is None:
+            response_handle = urlrequest.urlopen(request, timeout=timeout_seconds)
+        else:
+            response_handle = urlrequest.urlopen(request, timeout=timeout_seconds, context=context)
+        with response_handle as response:
             body = response.read().decode("utf-8", errors="replace")
     except urlerror.HTTPError as exc:
         code = exc.code
@@ -637,11 +973,30 @@ def _auth_headers(api_key: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def _resolve_profile_api_key(raw: dict[str, object]) -> str | None:
+    runtime_key = _as_optional_str(raw.get("api_key_runtime"))
+    if runtime_key:
+        return runtime_key
+    api_key = _as_optional_str(raw.get("api_key"))
+    if api_key and api_key.lower().startswith("env:"):
+        env_name = api_key[4:].strip()
+        if not env_name:
+            return None
+        env_value = os.environ.get(env_name)
+        return _as_optional_str(env_value)
+    env_name = _as_optional_str(raw.get("api_key_env"))
+    if env_name:
+        env_value = os.environ.get(env_name)
+        return _as_optional_str(env_value)
+    return api_key
+
+
 def _failure_detail(code: str) -> str:
     details = {
         "invalid_url": "Base URL must be an absolute http/https URL.",
         "policy_blocked_non_local": "Local scope allows only localhost/loopback endpoints.",
         "policy_blocked_non_lan": "LAN scope allows only private network endpoints in allowed CIDRs.",
+        "policy_loopback_with_lan": "LAN scope cannot use localhost/loopback endpoints. Use local scope instead.",
         "dns_failure": "Host DNS resolution failed for endpoint.",
     }
     return details.get(code, "Connection test failed.")

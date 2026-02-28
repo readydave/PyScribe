@@ -135,7 +135,10 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
   - Shortcut: `Ctrl+B`
 - **LLM Connections...**
   - Configure enabled local/LAN LLM profiles.
-  - Supports `ollama` and OpenAI-compatible endpoints.
+  - Supports `ollama`, `lm_studio`, and OpenAI-compatible endpoints.
+  - API key field supports `env:VAR_NAME` references for secure persisted config.
+  - Direct API keys are treated as session-only and are not written to disk.
+  - Includes subnet detection and LAN scan utilities to discover reachable local-network endpoints.
   - Shortcut: `Ctrl+Shift+L`
 - **LLM Post-Process...**
   - Run prompt-template post-processing against the current transcript/OCR context.
@@ -170,12 +173,18 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 ### LLM Post-Processing Workflow (Qt)
 
 - Open **Tools > LLM Connections...** and configure at least one enabled profile.
+- Use **Detect Networks** and **Scan Selected Network** to find reachable endpoints on detected subnets.
+- In multi-network environments (for example LAN + VPN), pick the target detected subnet before scanning.
 - Optionally run **Test Connection** to validate endpoint reachability/auth/model discovery.
+- Scope policy is enforced at run time (not only during connection tests).
 - Open **Tools > LLM Post-Process...** for the current transcript, or
   **Tools > Process Existing Transcript...** to load a saved transcript file.
 - Select profile, template, and model, then run post-processing.
 - You can create/edit/delete custom user templates in the same dialog (built-ins remain read-only).
-- Use **Pasted Context** and **Payload Preview** to review exactly what will be sent before execution.
+- Use **Pasted Context**, optional image attachments, and **Payload Preview** to review exactly what will be sent before execution.
+- For image attachments:
+  - Multimodal-capable models receive image content directly.
+  - Text-only models can use OCR fallback to convert image context into text.
 - Concurrency policy:
   - Local profiles are blocked while local transcription is in progress.
   - LAN profiles may run concurrently only if profile concurrent mode is enabled.
@@ -211,7 +220,8 @@ Visibility of controls adapts to run mode and toggles.
   - Pick configured LLM profile + prompt template.
   - Test connection and fetch model list.
   - Choose transcript source (`Current transcript` or `Upload/paste transcript`).
-  - Optionally upload OCR/context text, add extra notes, and include pasted context.
+  - Optionally upload OCR/context text, add extra notes, include pasted context, and attach images.
+  - Enable/disable image include and OCR fallback behavior for text-only models.
   - Preview final request payload before sending to the configured model.
   - Run post-processing and save/copy generated output.
 
@@ -249,7 +259,9 @@ python main.py serve [options]
 
 - Non-local bind is rejected unless `--allow-nonlocal-host` is set.
 - Non-local bind also requires auth credentials.
+- `--share` also requires auth credentials, even on localhost binds.
 - Password must be supplied by environment variable (`PYSCRIBE_AUTH_PASS`).
+- Interactive LAN mode uses password from `PYSCRIBE_LAN_AUTH_PASS` or secure prompt input.
 - Legacy `--auth-pass` CLI argument is intentionally rejected.
 
 ## 6) Model Download + Auth Features

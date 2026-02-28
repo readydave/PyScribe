@@ -69,6 +69,10 @@ class ListenerLLMPostprocessHelperTests(unittest.TestCase):
                     uploaded_transcript_file=None,
                     pasted_transcript="",
                     uploaded_ocr_file=None,
+                    uploaded_images=None,
+                    include_images=False,
+                    image_ocr_backend="auto",
+                    ocr_fallback_for_images=True,
                     notes_text="",
                     extra_context_text="",
                     payload_preview_text="ready",
@@ -101,6 +105,10 @@ class ListenerLLMPostprocessHelperTests(unittest.TestCase):
                         uploaded_transcript_file=None,
                         pasted_transcript="",
                         uploaded_ocr_file=None,
+                        uploaded_images=None,
+                        include_images=False,
+                        image_ocr_backend="auto",
+                        ocr_fallback_for_images=True,
                         notes_text="",
                         extra_context_text="",
                         payload_preview_text="ready",
@@ -112,17 +120,24 @@ class ListenerLLMPostprocessHelperTests(unittest.TestCase):
         self.assertEqual(output, "Summary text")
 
     def test_preview_payload(self) -> None:
-        with patch("app.pyscribe_services.get_prompt_template", return_value=_template()):
-            status, payload = app.preview_listener_llm_payload(
-                current_transcript="hello",
-                source_mode="Current transcript",
-                uploaded_transcript_file=None,
-                pasted_transcript="",
-                uploaded_ocr_file=None,
-                notes_text="note",
-                extra_context_text="extra",
-                template_id="meeting-summary",
-            )
+        with patch("app._find_enabled_llm_profile", return_value=_profile(scope="lan", allow_concurrent=True)):
+            with patch("app.pyscribe_services.get_prompt_template", return_value=_template()):
+                status, payload = app.preview_listener_llm_payload(
+                    current_transcript="hello",
+                    source_mode="Current transcript",
+                    uploaded_transcript_file=None,
+                    pasted_transcript="",
+                    uploaded_ocr_file=None,
+                    uploaded_images=None,
+                    include_images=False,
+                    image_ocr_backend="auto",
+                    ocr_fallback_for_images=True,
+                    notes_text="note",
+                    extra_context_text="extra",
+                    template_id="meeting-summary",
+                    profile_name="listener-profile",
+                    selected_model="",
+                )
         self.assertIn("ready", status.lower())
         self.assertIn("Transcript:", payload)
 

@@ -28,7 +28,7 @@ class AppConfig:
     llm_include_user_notes_default: bool = True
     llm_include_images_default: bool = True
     llm_ocr_fallback_for_images_default: bool = True
-    llm_payload_preview_required: bool = True
+    llm_payload_preview_required: bool = False
     llm_allow_remote_lan: bool = False
 
 
@@ -65,7 +65,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             data.get("llm_ocr_fallback_for_images_default"),
             default=True,
         ),
-        llm_payload_preview_required=_as_bool(data.get("llm_payload_preview_required"), default=True),
+        llm_payload_preview_required=_as_bool(data.get("llm_payload_preview_required"), default=False),
         llm_allow_remote_lan=_as_bool(data.get("llm_allow_remote_lan"), default=False),
     )
 
@@ -82,6 +82,7 @@ def save_config(config: AppConfig, path: Path = DEFAULT_CONFIG_PATH) -> None:
         payload["last_open_dir"] = existing.get("last_open_dir")
     if not payload.get("last_save_dir"):
         payload["last_save_dir"] = existing.get("last_save_dir")
+    payload["llm_profiles"] = _sanitize_llm_profiles_for_storage(payload.get("llm_profiles"))
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -182,3 +183,19 @@ def _as_profile_list(value: object) -> list[dict[str, object]]:
         if isinstance(item, dict):
             normalized.append(dict(item))
     return normalized
+
+
+def _sanitize_llm_profiles_for_storage(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    sanitized: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        profile = dict(item)
+        api_key = str(profile.get("api_key") or "").strip()
+        if api_key and not api_key.lower().startswith("env:"):
+            profile["api_key"] = ""
+        profile.pop("api_key_runtime", None)
+        sanitized.append(profile)
+    return sanitized

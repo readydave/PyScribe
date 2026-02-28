@@ -46,6 +46,16 @@ class ListenerSecurityServiceTests(unittest.TestCase):
                 allow_nonlocal_host=True,
             )
 
+    def test_validate_listener_security_requires_auth_for_share(self) -> None:
+        with self.assertRaises(SystemExit):
+            listener_security_service.validate_listener_security(
+                "127.0.0.1",
+                auth_user=None,
+                auth_pass=None,
+                allow_nonlocal_host=False,
+                share=True,
+            )
+
 
 class DiarBackendsCompatibilityTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -41,13 +41,13 @@ reversible milestones.
 
 - [x] Add built-in prompt templates and user template CRUD.
 - [x] Add optional pasted text context.
-- [ ] Add optional screenshot/image attachments.
-- [ ] Add multimodal capability check + OCR fallback for image context.
+- [x] Add optional screenshot/image attachments.
+- [x] Add multimodal capability check + OCR fallback for image context.
 - [x] Add payload preview ("what will be sent").
 
 ## Milestone 6: Docs + Hardening
 
-- [ ] Update `README.md` for LLM setup and workflow.
-- [ ] Update `docs/user_guide.md` with post-processing flows.
-- [ ] Update `docs/qt_help.md` for new controls.
-- [ ] Add/extend tests for config, template loading, and connection diagnostics.
+- [x] Update `README.md` for LLM setup and workflow.
+- [x] Update `docs/user_guide.md` with post-processing flows.
+- [x] Update `docs/qt_help.md` for new controls.
+- [x] Add/extend tests for config, template loading, and connection diagnostics.

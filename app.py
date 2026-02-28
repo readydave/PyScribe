@@ -220,6 +220,24 @@ def _read_uploaded_text(file_obj: Any) -> str:
         raise gr.Error(f"Could not read file '{path}': {exc}")
 
 
+def _normalize_uploaded_image_paths(file_obj: Any) -> tuple[str, ...]:
+    if file_obj is None:
+        return ()
+    candidates: list[str] = []
+    if isinstance(file_obj, list):
+        raw_items = file_obj
+    else:
+        raw_items = [file_obj]
+    for item in raw_items:
+        path = item.name if hasattr(item, "name") else str(item)
+        normalized = str(path or "").strip()
+        if not normalized or not os.path.isfile(normalized):
+            continue
+        if normalized not in candidates:
+            candidates.append(normalized)
+    return tuple(candidates)
+
+
 def _update_postprocess_source_fields(source_mode: str) -> tuple[GradioUpdate, GradioUpdate]:
     use_current = str(source_mode or "").strip().lower() == "current transcript"
     return gr.update(visible=not use_current), gr.update(visible=not use_current)
@@ -263,6 +281,10 @@ def run_listener_llm_postprocess(
     uploaded_transcript_file: Any,
     pasted_transcript: str,
     uploaded_ocr_file: Any,
+    uploaded_images: Any,
+    include_images: bool,
+    image_ocr_backend: str,
+    ocr_fallback_for_images: bool,
     notes_text: str,
     extra_context_text: str,
     payload_preview_text: str,
@@ -299,6 +321,7 @@ def run_listener_llm_postprocess(
     template = pyscribe_services.get_prompt_template(str(template_id or "").strip().lower())
     if template is None:
         return "Post-process failed: selected prompt template is unavailable.", ""
+    image_paths = _normalize_uploaded_image_paths(uploaded_images)
 
     request = pyscribe_services.LLMPostprocessRequest(
         transcript_text=transcript_text,
@@ -306,10 +329,20 @@ def run_listener_llm_postprocess(
         notes_text=str(notes_text or "").strip(),
         selected_model=str(selected_model or "").strip() or None,
         extra_context_text=str(extra_context_text or "").strip(),
+        image_paths=image_paths,
+        include_images=bool(include_images),
+        image_ocr_backend=str(image_ocr_backend or "auto").strip().lower() or "auto",
+        ocr_fallback_for_images=bool(ocr_fallback_for_images),
     )
+    prepared = pyscribe_services.prepare_llm_postprocess_payload(profile, template, request)
+    if prepared.status != "pass":
+        return (
+            f"Post-process failed: {prepared.error_code or 'error'} - {prepared.error_detail or 'Unknown error'}",
+            "",
+        )
     if APP_CONFIG.llm_payload_preview_required and not str(payload_preview_text or "").strip():
         return "Post-process blocked: payload preview is required. Click 'Preview Payload' first.", ""
-    result = pyscribe_services.run_llm_postprocess(profile, template, request)
+    result = pyscribe_services.run_llm_postprocess(profile, template, request, prepared_payload=prepared)
     if result.status != "pass":
         return (
             f"Post-process failed: {result.error_code or 'error'} - {result.error_detail or 'Unknown error'}",
@@ -317,7 +350,8 @@ def run_listener_llm_postprocess(
         )
 
     used_model = result.model or profile.default_model or "unknown"
-    return f"Post-process complete ({profile.name}, model: {used_model}).", result.output_text
+    suffix = f" {result.info_note}" if result.info_note else ""
+    return f"Post-process complete ({profile.name}, model: {used_model}).{suffix}", result.output_text
 
 
 def preview_listener_llm_payload(
@@ -326,10 +360,19 @@ def preview_listener_llm_payload(
     uploaded_transcript_file: Any,
     pasted_transcript: str,
     uploaded_ocr_file: Any,
+    uploaded_images: Any,
+    include_images: bool,
+    image_ocr_backend: str,
+    ocr_fallback_for_images: bool,
     notes_text: str,
     extra_context_text: str,
     template_id: str,
+    profile_name: str,
+    selected_model: str,
 ) -> tuple[str, str]:
+    profile = _find_enabled_llm_profile(profile_name)
+    if profile is None:
+        return "Payload preview failed: no enabled profile selected.", ""
     transcript_text, ocr_text = _resolve_listener_postprocess_context(
         current_transcript=current_transcript,
         source_mode=source_mode,
@@ -342,14 +385,28 @@ def preview_listener_llm_payload(
     template = pyscribe_services.get_prompt_template(str(template_id or "").strip().lower())
     if template is None:
         return "Payload preview failed: selected prompt template is unavailable.", ""
+    image_paths = _normalize_uploaded_image_paths(uploaded_images)
     request = pyscribe_services.LLMPostprocessRequest(
         transcript_text=transcript_text,
         ocr_text=ocr_text,
         notes_text=str(notes_text or "").strip(),
+        selected_model=str(selected_model or "").strip() or None,
         extra_context_text=str(extra_context_text or "").strip(),
+        image_paths=image_paths,
+        include_images=bool(include_images),
+        image_ocr_backend=str(image_ocr_backend or "auto").strip().lower() or "auto",
+        ocr_fallback_for_images=bool(ocr_fallback_for_images),
     )
-    payload = pyscribe_services.build_llm_payload_preview(template=template, request=request)
-    return "Payload preview ready.", payload
+    prepared = pyscribe_services.prepare_llm_postprocess_payload(profile, template, request)
+    if prepared.status != "pass":
+        return (
+            f"Payload preview failed: {prepared.error_code or 'error'} - {prepared.error_detail or 'Unknown error'}",
+            "",
+        )
+    status = "Payload preview ready."
+    if prepared.info_note:
+        status = f"{status} {prepared.info_note}"
+    return status, prepared.payload_text
 
 
 def _resolve_listener_postprocess_context(
@@ -784,6 +841,24 @@ def create_interface() -> gr.Blocks:
                         max_lines=12,
                         visible=False,
                     )
+                    llm_include_images_checkbox = gr.Checkbox(
+                        label="Include image attachments",
+                        value=bool(APP_CONFIG.llm_include_images_default),
+                    )
+                    llm_image_files = gr.File(
+                        label="Attach screenshots/images (optional)",
+                        file_types=["image"],
+                        file_count="multiple",
+                    )
+                    llm_image_ocr_backend = gr.Dropdown(
+                        choices=["auto", "paddleocr", "surya", "pytesseract"],
+                        value="auto",
+                        label="Image OCR backend (fallback)",
+                    )
+                    llm_image_ocr_fallback = gr.Checkbox(
+                        label="Use OCR fallback when model is text-only",
+                        value=bool(APP_CONFIG.llm_ocr_fallback_for_images_default),
+                    )
                     llm_ocr_file = gr.File(
                         label="Upload OCR/context text file (optional)",
                         file_types=[".txt", ".md"],
@@ -882,9 +957,15 @@ def create_interface() -> gr.Blocks:
                 llm_transcript_file,
                 llm_transcript_paste,
                 llm_ocr_file,
+                llm_image_files,
+                llm_include_images_checkbox,
+                llm_image_ocr_backend,
+                llm_image_ocr_fallback,
                 llm_notes_input,
                 llm_extra_context_input,
                 llm_template_dropdown,
+                llm_profile_dropdown,
+                llm_model_dropdown,
             ],
             outputs=[llm_status_output, llm_payload_preview_output],
         )
@@ -896,6 +977,10 @@ def create_interface() -> gr.Blocks:
                 llm_transcript_file,
                 llm_transcript_paste,
                 llm_ocr_file,
+                llm_image_files,
+                llm_include_images_checkbox,
+                llm_image_ocr_backend,
+                llm_image_ocr_fallback,
                 llm_notes_input,
                 llm_extra_context_input,
                 llm_payload_preview_output,
@@ -939,6 +1024,8 @@ def launch_listener(
     auth = None
     if auth_user and auth_pass:
         auth = (auth_user, auth_pass)
+    if share and auth is None:
+        raise RuntimeError("Gradio share mode requires auth_user/auth_pass.")
     iface.launch(
         server_name=host,
         server_port=chosen_port,
@@ -976,6 +1063,7 @@ if __name__ == "__main__":
         auth_user=auth_user,
         auth_pass=auth_pass,
         allow_nonlocal_host=bool(args.allow_nonlocal_host),
+        share=bool(args.share),
     )
     bound_port = launch_listener(
         host=args.host,

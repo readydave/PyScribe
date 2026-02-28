@@ -406,12 +406,25 @@ class TranscriptionWorker(QObject):
             LOGGER.info("Qt worker: cleanup end")
 
 
+class DiarBackendProbeWorker(QObject):
+    finished: Signal = Signal(object, str)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            backends = get_available_diarization_backends(include_off=False) or ["accurate"]
+            self.finished.emit(list(backends), "")
+        except Exception as exc:
+            self.finished.emit([], str(exc))
+
+
 class MainWindow(QMainWindow):
     hw_metrics: Signal = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("PyScribe Qt")
+        self._window_title_base = "PyScribe Qt"
+        self.setWindowTitle(self._window_title_base)
         self.resize(980, 700)
 
         self.runtime: RuntimeInfo = detect_runtime()
@@ -428,6 +441,11 @@ class MainWindow(QMainWindow):
         self.metrics_thread: threading.Thread | None = None
         self.download_progress_dialog: QProgressDialog | None = None
         self.diarization_warning: str | None = None
+        self._diar_backends: list[str] = self._default_diar_backends()
+        self._diar_backends_resolved: bool = False
+        self._diar_probe_status_before: str = ""
+        self._diar_probe_thread: QThread | None = None
+        self._diar_probe_worker: DiarBackendProbeWorker | None = None
         self.theme_mode: str = self._sanitize_theme_mode(getattr(self.config, "theme_mode", "system"))
         self._current_run_mode: str = "full"
         self._current_use_diarization: bool = bool(self.config.use_diarization)
@@ -499,11 +517,7 @@ class MainWindow(QMainWindow):
         diar_row.addWidget(self.diar_checkbox)
         diar_row.addWidget(QLabel("Mode"))
         self.diar_backend_combo = QComboBox()
-        self._diar_backends = get_available_diarization_backends(include_off=False) or ["accurate"]
-        for key in self._diar_backends:
-            self.diar_backend_combo.addItem(get_backend_label(key), key)
-        if self.config.diar_backend in self._diar_backends:
-            self.diar_backend_combo.setCurrentIndex(self._diar_backends.index(self.config.diar_backend))
+        self._populate_diar_backend_combo(self._diar_backends, preferred=self.config.diar_backend)
         diar_row.addWidget(self.diar_backend_combo)
         diar_row.addWidget(QLabel("Max Speakers"))
         self.max_speakers_input = QLineEdit()
@@ -857,6 +871,80 @@ class MainWindow(QMainWindow):
         self._set_bar_color(self.diar_progress_bar, self._progress_color(self.diar_progress_bar.value()))
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
 
+    @staticmethod
+    def _default_diar_backends() -> list[str]:
+        # Keep startup fast by deferring expensive capability checks until needed.
+        return ["accurate", "fast", "sortformer"]
+
+    def _set_window_title_status(self, status: str | None) -> None:
+        if status:
+            self.setWindowTitle(f"{self._window_title_base} - {status}")
+            return
+        self.setWindowTitle(self._window_title_base)
+
+    def _populate_diar_backend_combo(self, backends: list[str], *, preferred: str | None = None) -> None:
+        unique: list[str] = []
+        for key in backends:
+            backend = str(key or "").strip().lower()
+            if not backend or backend in unique:
+                continue
+            unique.append(backend)
+        if not unique:
+            unique = ["accurate"]
+        self._diar_backends = unique
+        self.diar_backend_combo.clear()
+        for key in unique:
+            self.diar_backend_combo.addItem(get_backend_label(key), key)
+        target = str(preferred or self.config.diar_backend or "").strip().lower()
+        if target in unique:
+            self.diar_backend_combo.setCurrentIndex(unique.index(target))
+            return
+        self.diar_backend_combo.setCurrentIndex(0)
+
+    def _diar_probe_running(self) -> bool:
+        return bool(self._diar_probe_thread and self._diar_probe_thread.isRunning())
+
+    def _start_diar_backend_probe(self) -> None:
+        if self._diar_backends_resolved or self._diar_probe_running():
+            return
+        self._diar_probe_status_before = self.status_label.text()
+        self.status_label.setText("Loading speaker ID backends...")
+        self._set_window_title_status("Loading speaker ID backends")
+        self.diar_backend_combo.setEnabled(False)
+
+        self._diar_probe_thread = QThread(self)
+        self._diar_probe_worker = DiarBackendProbeWorker()
+        self._diar_probe_worker.moveToThread(self._diar_probe_thread)
+        self._diar_probe_thread.started.connect(self._diar_probe_worker.run)
+        self._diar_probe_worker.finished.connect(self._on_diar_backend_probe_finished)
+        self._diar_probe_worker.finished.connect(self._diar_probe_thread.quit)
+        self._diar_probe_worker.finished.connect(self._diar_probe_worker.deleteLater)
+        self._diar_probe_thread.finished.connect(self._on_diar_backend_probe_thread_finished)
+        self._diar_probe_thread.finished.connect(self._diar_probe_thread.deleteLater)
+        self._diar_probe_thread.start()
+
+    @Slot(object, str)
+    def _on_diar_backend_probe_finished(self, backends: object, error_text: str) -> None:
+        backend_list = [str(item).strip().lower() for item in (backends if isinstance(backends, list) else [])]
+        backend_list = [item for item in backend_list if item]
+        current = str(self.diar_backend_combo.currentData() or "").strip().lower() or self.config.diar_backend
+        self._populate_diar_backend_combo(backend_list or ["accurate"], preferred=current)
+        self._diar_backends_resolved = True
+        self._set_window_title_status(None)
+        if error_text:
+            LOGGER.warning("Speaker backend probe failed; using fallback backend list. reason=%s", error_text)
+            self.status_label.setText("Speaker backend check failed; using fallback backend list.")
+        elif self._diar_probe_status_before.strip():
+            self.status_label.setText(self._diar_probe_status_before)
+        else:
+            self.status_label.setText("Ready")
+        self._update_diar_ui_state(self.diar_checkbox.isChecked())
+
+    @Slot()
+    def _on_diar_backend_probe_thread_finished(self) -> None:
+        self._diar_probe_thread = None
+        self._diar_probe_worker = None
+
     def set_media_path(self, path: str) -> None:
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Missing file", "The selected file does not exist.")
@@ -933,6 +1021,18 @@ class MainWindow(QMainWindow):
         max_speakers = int(max_speakers_text) if max_speakers_text.isdigit() else None
         use_diarization = run_diarization
         self._current_use_diarization = use_diarization
+        if use_diarization and self._diar_probe_running():
+            QMessageBox.information(
+                self,
+                "Speaker backends loading",
+                "Speaker backend detection is still in progress. Please try again in a moment.",
+            )
+            self.status_label.setText("Waiting for speaker backend detection...")
+            self.transcribe_btn.setEnabled(True)
+            self.cancel_btn.setEnabled(False)
+            self.force_stop_btn.setEnabled(False)
+            self.stop_hw_monitor()
+            return
         diar_backend = self.diar_backend_combo.currentData() if use_diarization else "off"
         use_visual_analysis = run_visual
         self._current_use_visual_analysis = use_visual_analysis
@@ -1179,7 +1279,10 @@ class MainWindow(QMainWindow):
     def _update_diar_ui_state(self, enabled: bool) -> None:
         _, allow_transcription, allow_diarization, _ = self._effective_service_flags()
         diar_controls_enabled = bool(enabled and allow_transcription and allow_diarization)
-        self.diar_backend_combo.setEnabled(diar_controls_enabled)
+        if diar_controls_enabled and not self._diar_backends_resolved:
+            self._start_diar_backend_probe()
+        combo_enabled = diar_controls_enabled and self._diar_backends_resolved and not self._diar_probe_running()
+        self.diar_backend_combo.setEnabled(combo_enabled)
         self.max_speakers_input.setEnabled(diar_controls_enabled)
         self.diar_progress_bar.setEnabled(diar_controls_enabled)
         if not diar_controls_enabled:
@@ -1301,6 +1404,18 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+        if self._diar_probe_thread and self._diar_probe_thread.isRunning():
+            self.status_label.setText("Waiting for speaker backend initialization to finish...")
+            self._diar_probe_thread.quit()
+            if not self._diar_probe_thread.wait(15000):
+                QMessageBox.information(
+                    self,
+                    "Initializing backends",
+                    "Speaker backend initialization is still running. Please try closing again in a few seconds.",
+                )
+                event.ignore()
+                return
+        self._set_window_title_status(None)
         LOGGER.info("Qt close accepted")
         self.stop_hw_monitor()
         event.accept()

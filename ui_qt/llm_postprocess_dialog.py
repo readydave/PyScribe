@@ -6,7 +6,8 @@ from collections.abc import Callable
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,18 +28,74 @@ from PySide6.QtWidgets import (
 from services import (
     AppConfig,
     LLMConnectionProfile,
+    LLMPreparedPayload,
     LLMPostprocessRequest,
     PromptTemplate,
-    build_llm_payload_preview,
     create_user_prompt_template,
     delete_user_prompt_template,
     get_enabled_llm_profiles,
     get_prompt_template,
     load_prompt_templates,
+    prepare_llm_postprocess_payload,
     run_llm_postprocess,
     test_connection,
     update_user_prompt_template,
 )
+
+_TEXT_FILE_EXTENSIONS = {".txt", ".md", ".markdown", ".log", ".rtf"}
+_IMAGE_FILE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff"}
+
+
+class FileDropTarget(QLabel):
+    files_dropped: Signal = Signal(list)
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.setAcceptDrops(True)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumHeight(82)
+        self._active = False
+        self._apply_style()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        mime = event.mimeData()
+        if mime.hasUrls() and any(url.isLocalFile() for url in mime.urls()):
+            self._active = True
+            self._apply_style()
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:  # noqa: N802
+        self._active = False
+        self._apply_style()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        self._active = False
+        self._apply_style()
+        paths: list[str] = []
+        for url in event.mimeData().urls():
+            if not url.isLocalFile():
+                continue
+            candidate = str(url.toLocalFile() or "").strip()
+            if not candidate or not os.path.isfile(candidate):
+                continue
+            if candidate not in paths:
+                paths.append(candidate)
+        if paths:
+            self.files_dropped.emit(paths)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def _apply_style(self) -> None:
+        border = "#2563eb" if self._active else "#94a3b8"
+        background = "#eff6ff" if self._active else "#f8fafc"
+        text = "#1d4ed8" if self._active else "#334155"
+        self.setStyleSheet(
+            f"border: 2px dashed {border}; border-radius: 10px; background: {background}; color: {text}; font-weight: 600;"
+        )
 
 
 class PromptTemplateEditorDialog(QDialog):
@@ -143,9 +200,11 @@ class LLMPostprocessDialog(QDialog):
         self._loaded_transcript_text: str = ""
         self._loaded_ocr_path: str | None = None
         self._loaded_ocr_text: str = ""
+        self._loaded_image_paths: tuple[str, ...] = ()
         self._is_transcription_running = is_transcription_running
         self._prefer_loaded_transcript = bool(prefer_loaded_transcript)
         self._payload_preview_required = bool(config.llm_payload_preview_required)
+        self._connection_test_state: str = "not_run"
         self._last_payload_preview: str = ""
         self._last_output_text: str = ""
 
@@ -214,6 +273,37 @@ class LLMPostprocessDialog(QDialog):
         root.addWidget(self.source_label)
         root.addWidget(self.ocr_label)
 
+        image_row = QHBoxLayout()
+        self.include_images_checkbox = QCheckBox("Include image attachments")
+        self.include_images_checkbox.setChecked(bool(self._config.llm_include_images_default))
+        self.load_images_btn = QPushButton("Load Images...")
+        self.load_images_btn.clicked.connect(self._on_load_images)
+        self.clear_images_btn = QPushButton("Clear Images")
+        self.clear_images_btn.clicked.connect(self._on_clear_images)
+        image_row.addWidget(self.include_images_checkbox)
+        image_row.addWidget(self.load_images_btn)
+        image_row.addWidget(self.clear_images_btn)
+        root.addLayout(image_row)
+
+        image_opts_row = QHBoxLayout()
+        image_opts_row.addWidget(QLabel("Image OCR fallback backend"))
+        self.image_ocr_backend_combo = QComboBox()
+        self.image_ocr_backend_combo.addItems(["auto", "paddleocr", "surya", "pytesseract"])
+        self.image_ocr_backend_combo.setCurrentText("auto")
+        image_opts_row.addWidget(self.image_ocr_backend_combo)
+        self.image_ocr_fallback_checkbox = QCheckBox("Use OCR fallback for text-only models")
+        self.image_ocr_fallback_checkbox.setChecked(bool(self._config.llm_ocr_fallback_for_images_default))
+        image_opts_row.addWidget(self.image_ocr_fallback_checkbox)
+        image_opts_row.addStretch(1)
+        root.addLayout(image_opts_row)
+
+        self.images_label = QLabel("No image attachments selected.")
+        root.addWidget(self.images_label)
+
+        self.drop_target = FileDropTarget("Drop transcript/OCR text files and images here")
+        self.drop_target.files_dropped.connect(self._on_files_dropped)
+        root.addWidget(self.drop_target)
+
         root.addWidget(QLabel("Additional Notes"))
         self.notes_box = QTextEdit()
         self.notes_box.setPlaceholderText("Short notes/instructions to include in post-processing (optional).")
@@ -226,12 +316,16 @@ class LLMPostprocessDialog(QDialog):
         self.extra_context_box.setMinimumHeight(90)
         root.addWidget(self.extra_context_box)
 
-        self.connection_status = QLabel("Connection test not run yet.")
+        self.connection_status = QLabel("Connection test optional. Click 'Refresh Connection + Models' to validate.")
         self.connection_status.setWordWrap(True)
         root.addWidget(self.connection_status)
 
         preview_row = QHBoxLayout()
         preview_row.addWidget(QLabel("Payload Preview"))
+        self.preview_required_checkbox = QCheckBox("Require confirmation before send")
+        self.preview_required_checkbox.setChecked(self._payload_preview_required)
+        self.preview_required_checkbox.toggled.connect(self._on_payload_preview_requirement_changed)
+        preview_row.addWidget(self.preview_required_checkbox)
         preview_row.addStretch(1)
         self.preview_btn = QPushButton("Preview Payload")
         self.preview_btn.clicked.connect(self._on_preview_payload)
@@ -338,6 +432,12 @@ class LLMPostprocessDialog(QDialog):
             self.ocr_label.setText(f"Current OCR context available ({len(self._current_ocr_text)} chars).")
         else:
             self.ocr_label.setText("No OCR context selected.")
+        if self._loaded_image_paths:
+            names = ", ".join(os.path.basename(path) for path in self._loaded_image_paths[:4])
+            extra = f" (+{len(self._loaded_image_paths) - 4} more)" if len(self._loaded_image_paths) > 4 else ""
+            self.images_label.setText(f"Images attached ({len(self._loaded_image_paths)}): {names}{extra}")
+        else:
+            self.images_label.setText("No image attachments selected.")
 
     def _selected_profile(self) -> LLMConnectionProfile | None:
         name = self.profile_combo.currentText().strip()
@@ -364,9 +464,17 @@ class LLMPostprocessDialog(QDialog):
             notes_text=(self.notes_box.toPlainText() or "").strip(),
             selected_model=(self.model_combo.currentText() or "").strip() or None,
             extra_context_text=(self.extra_context_box.toPlainText() or "").strip(),
+            image_paths=self._loaded_image_paths,
+            include_images=self.include_images_checkbox.isChecked(),
+            image_ocr_backend=(self.image_ocr_backend_combo.currentText() or "auto").strip().lower(),
+            ocr_fallback_for_images=self.image_ocr_fallback_checkbox.isChecked(),
         )
 
-    def _render_payload_preview(self) -> tuple[PromptTemplate | None, LLMPostprocessRequest | None]:
+    def _render_payload_preview(self) -> tuple[PromptTemplate | None, LLMPostprocessRequest | None, LLMPreparedPayload | None]:
+        profile = self._selected_profile()
+        if profile is None:
+            QMessageBox.warning(self, "Profile required", "Choose an enabled LLM profile.")
+            return None, None, None
         transcript_text, ocr_text = self._resolve_input_context()
         if not transcript_text:
             QMessageBox.warning(
@@ -374,21 +482,31 @@ class LLMPostprocessDialog(QDialog):
                 "Transcript required",
                 "No transcript text is available. Use the current transcript or load a transcript file.",
             )
-            return None, None
+            return None, None, None
         template_id = self._selected_template_id()
         if not template_id:
             QMessageBox.warning(self, "Template required", "Choose a prompt template.")
-            return None, None
+            return None, None, None
         template = get_prompt_template(template_id)
         if template is None:
             QMessageBox.warning(self, "Template unavailable", f"Template '{template_id}' could not be loaded.")
-            return None, None
+            return None, None, None
         request = self._build_request(transcript_text, ocr_text)
-        payload_preview = build_llm_payload_preview(template=template, request=request)
+        prepared = prepare_llm_postprocess_payload(profile, template, request)
+        if prepared.status != "pass":
+            QMessageBox.warning(
+                self,
+                "Payload preview failed",
+                f"{prepared.error_code or 'error'}: {prepared.error_detail or 'Unknown error'}",
+            )
+            return None, None, None
+        payload_preview = prepared.payload_text
         self._last_payload_preview = payload_preview
         self.preview_box.setPlainText(payload_preview)
+        self._config.llm_include_images_default = self.include_images_checkbox.isChecked()
+        self._config.llm_ocr_fallback_for_images_default = self.image_ocr_fallback_checkbox.isChecked()
         self._config.llm_default_template_id = template.id
-        return template, request
+        return template, request, prepared
 
     @Slot()
     def _on_profile_changed(self) -> None:
@@ -397,12 +515,19 @@ class LLMPostprocessDialog(QDialog):
         self.model_combo.clear()
         if profile is None:
             return
+        self._connection_test_state = "not_run"
+        self.connection_status.setText("Connection test optional. Click 'Refresh Connection + Models' to validate.")
         if profile.default_model:
             self.model_combo.addItem(profile.default_model)
             self.model_combo.setCurrentText(profile.default_model)
             return
         if current_text:
             self.model_combo.setEditText(current_text)
+
+    @Slot(bool)
+    def _on_payload_preview_requirement_changed(self, enabled: bool) -> None:
+        self._payload_preview_required = bool(enabled)
+        self._config.llm_payload_preview_required = bool(enabled)
 
     @Slot()
     def _on_template_changed(self) -> None:
@@ -417,11 +542,18 @@ class LLMPostprocessDialog(QDialog):
         if profile is None:
             self.connection_status.setText("No profile selected.")
             return
+        refresh_label = self.refresh_btn.text()
+        self.refresh_btn.setText("Testing Connection...")
+        self.refresh_btn.setEnabled(False)
+        self.connection_status.setText("Testing connection profile...")
+        QApplication.processEvents()
         self.setCursor(Qt.WaitCursor)
         try:
             result = test_connection(profile)
         finally:
             self.unsetCursor()
+            self.refresh_btn.setText(refresh_label)
+            self.refresh_btn.setEnabled(True)
 
         if result.detected_models:
             current_text = (self.model_combo.currentText() or "").strip()
@@ -441,8 +573,11 @@ class LLMPostprocessDialog(QDialog):
             self.model_combo.setCurrentText(profile.default_model)
 
         if result.status == "pass":
-            self.connection_status.setText("Connection test: PASS")
+            selected = f" Selected model: {result.selected_model}." if result.selected_model else ""
+            self._connection_test_state = "pass"
+            self.connection_status.setText(f"Connection test: PASS.{selected}")
             return
+        self._connection_test_state = "fail"
         lines = [f"Connection test: FAIL ({result.failure_code})"]
         for stage in result.stages:
             if stage.status == "fail":
@@ -480,6 +615,98 @@ class LLMPostprocessDialog(QDialog):
         self._loaded_ocr_path = path
         self._loaded_ocr_text = text.strip()
         self._refresh_source_labels()
+
+    @Slot()
+    def _on_load_images(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Image Attachments",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All Files (*.*)",
+        )
+        if not paths:
+            return
+        normalized: list[str] = []
+        for path in paths:
+            candidate = str(path or "").strip()
+            if not candidate or not os.path.isfile(candidate):
+                continue
+            if candidate not in normalized:
+                normalized.append(candidate)
+        self._loaded_image_paths = tuple(normalized)
+        self._refresh_source_labels()
+
+    @Slot()
+    def _on_clear_images(self) -> None:
+        self._loaded_image_paths = ()
+        self._refresh_source_labels()
+
+    @Slot(list)
+    def _on_files_dropped(self, paths: list[str]) -> None:
+        normalized: list[str] = []
+        for path in paths:
+            candidate = str(path or "").strip()
+            if not candidate or not os.path.isfile(candidate):
+                continue
+            if candidate not in normalized:
+                normalized.append(candidate)
+        if not normalized:
+            return
+
+        text_paths = [path for path in normalized if Path(path).suffix.lower() in _TEXT_FILE_EXTENSIONS]
+        image_paths = [path for path in normalized if Path(path).suffix.lower() in _IMAGE_FILE_EXTENSIONS]
+        ignored_count = len(normalized) - len(text_paths) - len(image_paths)
+
+        loaded_parts: list[str] = []
+        if text_paths:
+            transcript_path = text_paths[0]
+            try:
+                transcript_text = Path(transcript_path).read_text(encoding="utf-8").strip()
+            except Exception as exc:
+                QMessageBox.critical(self, "Load transcript failed", str(exc))
+                transcript_text = ""
+            if transcript_text:
+                self._loaded_transcript_path = transcript_path
+                self._loaded_transcript_text = transcript_text
+                self.use_current_checkbox.setChecked(False)
+                loaded_parts.append("transcript")
+
+            ocr_path: str | None = None
+            if len(text_paths) > 1:
+                for candidate in text_paths[1:]:
+                    name = os.path.basename(candidate).lower()
+                    if "ocr" in name or "visual" in name or "slide" in name or "chat" in name:
+                        ocr_path = candidate
+                        break
+                if ocr_path is None:
+                    ocr_path = text_paths[1]
+            if ocr_path is not None:
+                try:
+                    ocr_text = Path(ocr_path).read_text(encoding="utf-8").strip()
+                except Exception as exc:
+                    QMessageBox.critical(self, "Load OCR file failed", str(exc))
+                    ocr_text = ""
+                if ocr_text:
+                    self._loaded_ocr_path = ocr_path
+                    self._loaded_ocr_text = ocr_text
+                    loaded_parts.append("OCR")
+
+        if image_paths:
+            merged = list(self._loaded_image_paths)
+            for path in image_paths:
+                if path not in merged:
+                    merged.append(path)
+            self._loaded_image_paths = tuple(merged)
+            self.include_images_checkbox.setChecked(True)
+            loaded_parts.append(f"{len(image_paths)} image(s)")
+
+        self._refresh_source_labels()
+        status = "Dropped files loaded."
+        if loaded_parts:
+            status = f"Dropped files loaded: {', '.join(loaded_parts)}."
+        if ignored_count > 0:
+            status = f"{status} Ignored {ignored_count} unsupported file(s)."
+        self.connection_status.setText(status)
 
     @Slot()
     def _on_new_template(self) -> None:
@@ -559,10 +786,31 @@ class LLMPostprocessDialog(QDialog):
 
     @Slot()
     def _on_preview_payload(self) -> None:
-        template, request = self._render_payload_preview()
-        if template is None or request is None:
-            return
-        self.connection_status.setText(f"Payload preview ready for template '{template.id}'.")
+        preview_label = self.preview_btn.text()
+        preview_enabled = self.preview_btn.isEnabled()
+        run_enabled = self.run_btn.isEnabled()
+        refresh_enabled = self.refresh_btn.isEnabled()
+        self.preview_btn.setText("Building Preview...")
+        self.preview_btn.setEnabled(False)
+        self.run_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.connection_status.setText("Preparing payload preview...")
+        QApplication.processEvents()
+        self.setCursor(Qt.WaitCursor)
+        try:
+            template, request, prepared = self._render_payload_preview()
+            if template is None or request is None or prepared is None:
+                return
+            status = f"Payload preview ready for template '{template.id}'."
+            if prepared.info_note:
+                status = f"{status} {prepared.info_note}"
+            self.connection_status.setText(status)
+        finally:
+            self.unsetCursor()
+            self.preview_btn.setText(preview_label)
+            self.preview_btn.setEnabled(preview_enabled)
+            self.run_btn.setEnabled(run_enabled)
+            self.refresh_btn.setEnabled(refresh_enabled)
 
     @Slot()
     def _on_run_postprocess(self) -> None:
@@ -595,39 +843,114 @@ class LLMPostprocessDialog(QDialog):
                 )
                 return
 
-        template, request = self._render_payload_preview()
-        if template is None or request is None:
-            return
-        if self._payload_preview_required:
-            answer = QMessageBox.question(
-                self,
-                "Confirm payload",
-                "Payload preview is required. Continue and send this payload to the model?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if answer != QMessageBox.Yes:
-                self.connection_status.setText("Post-processing canceled before send.")
-                return
+        run_label = self.run_btn.text()
+        run_enabled = self.run_btn.isEnabled()
+        preview_enabled = self.preview_btn.isEnabled()
+        refresh_enabled = self.refresh_btn.isEnabled()
+        self.run_btn.setText("Preparing Request...")
+        self.run_btn.setEnabled(False)
+        self.preview_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.connection_status.setText("Preparing payload for post-processing...")
+        QApplication.processEvents()
 
-        self.setCursor(Qt.WaitCursor)
         try:
-            result = run_llm_postprocess(profile, template, request)
-        finally:
-            self.unsetCursor()
+            template, request, prepared = self._render_payload_preview()
+            if template is None or request is None or prepared is None:
+                return
+            if self.preview_required_checkbox.isChecked():
+                answer = QMessageBox.question(
+                    self,
+                    "Confirm payload",
+                    "Payload preview is required. Continue and send this payload to the model?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if answer != QMessageBox.Yes:
+                    self.connection_status.setText("Post-processing canceled before send.")
+                    return
 
-        if result.status != "pass":
-            QMessageBox.warning(
-                self,
-                "LLM post-processing failed",
-                f"{result.error_code or 'error'}: {result.error_detail or 'Unknown error'}",
-            )
-            return
-        self._last_output_text = result.output_text
-        self.output_box.setPlainText(result.output_text)
-        self.copy_btn.setEnabled(True)
-        self.save_btn.setEnabled(True)
-        self.connection_status.setText(f"Post-processing complete with model '{result.model}'.")
+            self.run_btn.setText("Running Post-Process...")
+            self.connection_status.setText("Running post-processing request...")
+            QApplication.processEvents()
+            self._last_output_text = ""
+            self.output_box.clear()
+            self.copy_btn.setEnabled(False)
+            self.save_btn.setEnabled(False)
+            streamed_chunks: list[str] = []
+            stream_started = {"value": False}
+
+            def _on_output_chunk(chunk: str) -> None:
+                if not chunk:
+                    return
+                streamed_chunks.append(chunk)
+                text = "".join(streamed_chunks)
+                self._last_output_text = text
+                self.output_box.setPlainText(text)
+                scrollbar = self.output_box.verticalScrollBar()
+                if scrollbar is not None:
+                    scrollbar.setValue(scrollbar.maximum())
+                if not stream_started["value"]:
+                    self.run_btn.setText("Streaming Output...")
+                    stream_started["value"] = True
+                self.connection_status.setText(f"Streaming model output... {len(text)} chars received.")
+                QApplication.processEvents()
+
+            self.setCursor(Qt.WaitCursor)
+            try:
+                result = run_llm_postprocess(
+                    profile,
+                    template,
+                    request,
+                    prepared_payload=prepared,
+                    on_output_chunk=_on_output_chunk,
+                )
+            finally:
+                self.unsetCursor()
+
+            if result.status != "pass":
+                detail = result.error_detail or "Unknown error"
+                if result.error_code == "timeout":
+                    detail = (
+                        f"{detail}\n\n"
+                        f"Current timeout: {profile.timeout_seconds:.1f}s.\n"
+                        "If your model is cold-starting, raise timeout in Tools > LLM Connections "
+                        "(for example 30-60 seconds)."
+                    )
+                partial_text = (result.output_text or "").strip()
+                if partial_text:
+                    self._last_output_text = result.output_text
+                    self.output_box.setPlainText(result.output_text)
+                    self.copy_btn.setEnabled(True)
+                    self.save_btn.setEnabled(True)
+                self.connection_status.setText(
+                    f"Post-processing failed ({result.error_code or 'error'}). "
+                    "Connection test pass does not guarantee generation latency."
+                )
+                if partial_text:
+                    detail = f"{detail}\n\nPartial output was received and kept in the output box."
+                    self.connection_status.setText(
+                        f"Post-processing failed ({result.error_code or 'error'}). Partial output is available."
+                    )
+                QMessageBox.warning(
+                    self,
+                    "LLM post-processing failed",
+                    f"{result.error_code or 'error'}: {detail}",
+                )
+                return
+            self._last_output_text = result.output_text or "".join(streamed_chunks)
+            self.output_box.setPlainText(self._last_output_text)
+            self.copy_btn.setEnabled(True)
+            self.save_btn.setEnabled(True)
+            status = f"Post-processing complete with model '{result.model}'."
+            if result.info_note:
+                status = f"{status} {result.info_note}"
+            self.connection_status.setText(status)
+        finally:
+            self.run_btn.setText(run_label)
+            self.run_btn.setEnabled(run_enabled)
+            self.preview_btn.setEnabled(preview_enabled)
+            self.refresh_btn.setEnabled(refresh_enabled)
 
     @Slot()
     def _on_copy_output(self) -> None:

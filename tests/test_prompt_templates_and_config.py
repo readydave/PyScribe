@@ -93,7 +93,7 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
         self.assertTrue(cfg.llm_include_user_notes_default)
         self.assertTrue(cfg.llm_include_images_default)
         self.assertTrue(cfg.llm_ocr_fallback_for_images_default)
-        self.assertTrue(cfg.llm_payload_preview_required)
+        self.assertFalse(cfg.llm_payload_preview_required)
         self.assertFalse(cfg.llm_allow_remote_lan)
         self.assertEqual(cfg.llm_profiles, [])
 
@@ -123,6 +123,23 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
         self.assertTrue(reloaded.llm_allow_remote_lan)
         self.assertEqual(len(reloaded.llm_profiles), 1)
         self.assertIn("llm_profiles", payload)
+
+    def test_save_config_strips_plaintext_llm_api_keys(self) -> None:
+        cfg = AppConfig(
+            llm_profiles=[
+                {"name": "Plain", "provider": "openai_compatible", "api_key": "super-secret", "api_key_runtime": "runtime"},
+                {"name": "EnvRef", "provider": "openai_compatible", "api_key": "env:PYSCRIBE_API_KEY"},
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            save_config(cfg, path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        profiles = payload.get("llm_profiles", [])
+        self.assertEqual(len(profiles), 2)
+        self.assertEqual(profiles[0].get("api_key"), "")
+        self.assertNotIn("api_key_runtime", profiles[0])
+        self.assertEqual(profiles[1].get("api_key"), "env:PYSCRIBE_API_KEY")
 
 
 if __name__ == "__main__":

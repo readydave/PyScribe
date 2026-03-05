@@ -10,6 +10,24 @@ The format is inspired by Keep a Changelog.
 
 - Shared listener auth/bind validation service in `services/listener_security_service.py`.
 - `tests/test_listener_and_diar_backends.py` covering listener security helpers and NeMo Sortformer compatibility paths.
+- Prompt template scaffold in `assets/prompts/` with YAML index and built-in templates for meeting summary workflows.
+- Prompt template loading/validation service in `services/prompt_template_service.py`.
+- `tests/test_prompt_templates_and_config.py` covering prompt template loading and additive config behavior.
+- Implementation task tracker for LLM post-processing in `docs/llm_postprocess_plan.md`.
+- LLM connection diagnostics service in `services/llm_connection_service.py` with profile normalization and staged connection tests.
+- `tests/test_llm_connection_service.py` covering local/LAN policy checks, provider smoke tests, and failure mappings.
+- Qt LLM Connections dialog in `ui_qt/llm_connection_dialog.py` for profile editing and staged connection test results.
+- LLM post-processing execution service in `services/llm_postprocess_service.py` for Ollama and OpenAI-compatible endpoints.
+- Qt LLM Post-Process dialog in `ui_qt/llm_postprocess_dialog.py` with template/profile/model selection and transcript file loading.
+- `tests/test_llm_postprocess_service.py` covering request validation, provider success paths, and failure-code mapping.
+- Listener LLM Post-Processing panel in `app.py` with connection test, template/model selection, and current-vs-upload transcript source controls.
+- `tests/test_listener_llm_postprocess_helpers.py` covering listener LLM helper behaviors and concurrency policy checks.
+- User prompt template CRUD support in `services/prompt_template_service.py` (create/update/delete + user default) with templates stored under `~/.pyscribe/prompts`.
+- Qt LLM Post-Process dialog now includes user template management (new/edit/delete), optional pasted context, and explicit payload preview.
+- Listener LLM Post-Processing panel now includes pasted context and payload preview before run.
+- Qt and Listener LLM workflows now support optional image attachments for post-processing context.
+- Image-aware payload preparation now checks model multimodal capability and supports OCR fallback via configured OCR backend.
+- LLM connection diagnostics now include local subnet discovery + LAN scan helpers and explicit `lm_studio` provider profile support.
 
 ### Changed
 
@@ -19,10 +37,35 @@ The format is inspired by Keep a Changelog.
 - Sortformer availability checks now require both NeMo ASR importability and CUDA availability.
 - Streaming transcript text updates are throttled in `services/transcription_service.py` to reduce UI churn while preserving final output.
 - Qt transcript text area behavior in `ui_qt/main_window.py` updated for wrapping, sizing, and scroll behavior.
+- `services/config_service.py` now includes additive LLM/template defaults for upcoming post-processing features.
+- `services/__init__.py` now exports LLM prompt and connection services for both frontends.
+- Qt Tools menu now includes **LLM Connections...** (`Ctrl+Shift+L`) for in-app connection configuration/testing.
+- Qt Tools menu now includes **LLM Post-Process...** (`Ctrl+Shift+P`) and **Process Existing Transcript...** flows.
+- LLM post-processing now blocks concurrent runs for local profiles while local transcription is active; LAN profiles must explicitly allow concurrency.
+- Listener config saves now load-and-update existing config fields to preserve additive settings (including LLM profile data).
+- LLM post-processing request model now supports separate `extra_context_text` and explicit payload preview generation.
+- LLM payload preparation now resolves image context before send and includes OCR-derived context when fallback is used.
+- LAN scope policy diagnostics now explicitly flag loopback usage and recommend `local` scope for `127.0.0.1`/`localhost`.
+- Qt speaker-backend capability detection is now lazy and runs asynchronously when speaker ID is enabled, instead of blocking main-window startup.
+- Qt now shows temporary speaker-backend initialization state in both status text and window title while background probing runs.
+- LLM Post-Process payload confirmation is now opt-in by default (no mandatory confirm prompt unless enabled).
+- LLM Post-Process status messaging now clarifies that connection tests are optional and may differ from generation latency.
+- LLM Post-Process now shows explicit in-button busy states (preview/run/refresh) during long operations so UI pause periods are communicated.
+- Built-in `Meeting Summary` prompt template updated with stricter pre-summary checks, expanded section structure, prioritized actions, Q&A, participant sentiment tags, and standardized naming/style rules.
+- Built-in `Action Items`, `Decision Log`, `Customer Call Summary`, and `Incident Summary` templates upgraded to richer execution-focused structures with stronger evidence, prioritization, and style constraints.
+- LLM Connections dialog now includes an explicit `Rename Profile` action with duplicate-name prevention and default-profile remapping on rename.
+- Interactive LAN listener auth no longer relies on a built-in default password; password now comes from `PYSCRIBE_LAN_AUTH_PASS` or secure prompt input.
+- LLM Connections API key handling now supports persisted `env:VAR_NAME` references and treats direct key entry as session-only.
+- Config persistence now strips plaintext LLM API keys from disk writes.
+- LLM post-processing now enforces endpoint scope/CIDR policy at run time (not only during connection tests).
+- LLM connection/post-process HTTP calls now honor profile `verify_tls` behavior for HTTPS endpoints.
 
 ### Fixed
 
 - Listener and Qt config-save failures now log warnings instead of failing silently.
+- Prevented startup stalls from eager NeMo/Sortformer availability checks during initial Qt window construction.
+- LLM post-processing now retries once with an extended timeout when the first request times out (helps cold model starts).
+- Public listener share mode now requires authentication credentials, including localhost share scenarios.
 
 ## [2026-02-04]
 

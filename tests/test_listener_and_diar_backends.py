@@ -46,6 +46,16 @@ class ListenerSecurityServiceTests(unittest.TestCase):
                 allow_nonlocal_host=True,
             )
 
+    def test_validate_listener_security_requires_auth_for_share(self) -> None:
+        with self.assertRaises(SystemExit):
+            listener_security_service.validate_listener_security(
+                "127.0.0.1",
+                auth_user=None,
+                auth_pass=None,
+                allow_nonlocal_host=False,
+                share=True,
+            )
+
 
 class DiarBackendsCompatibilityTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -54,17 +64,17 @@ class DiarBackendsCompatibilityTests(unittest.TestCase):
     def tearDown(self) -> None:
         sys.modules.pop("diar_backends", None)
 
-    def test_is_sortformer_available_checks_nemo_and_cuda(self) -> None:
+    def test_is_sortformer_available_checks_specs_and_cuda_when_torch_loaded(self) -> None:
         fake_torch = types.ModuleType("torch")
         fake_torch.cuda = types.SimpleNamespace(is_available=lambda: True)
-        real_import_module = importlib.import_module
 
-        def _fake_import_module(name: str, *args: object, **kwargs: object) -> object:
-            if name == "nemo.collections.asr":
+        def _fake_find_spec(name: str, *args: object, **kwargs: object) -> object | None:
+            del args, kwargs
+            if name in {"nemo.collections.asr", "torch"}:
                 return object()
-            return real_import_module(name, *args, **kwargs)
+            return None
 
-        with patch("importlib.import_module", side_effect=_fake_import_module):
+        with patch("importlib.util.find_spec", side_effect=_fake_find_spec):
             with patch.dict(sys.modules, {"torch": fake_torch}):
                 self.assertTrue(self.diar_backends._is_sortformer_available())
 

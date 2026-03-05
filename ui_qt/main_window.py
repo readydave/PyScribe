@@ -45,6 +45,7 @@ from services import (
     detect_language,
     get_available_diarization_backends,
     get_backend_label,
+    get_enabled_llm_profiles,
     get_hf_token,
     get_model_choices,
     normalize_model_name,
@@ -61,6 +62,8 @@ from services import (
 )
 from services.logging_service import configure_logging, get_log_path
 from ui_qt.benchmark_dialog import BenchmarkDialog
+from ui_qt.llm_connection_dialog import LLMConnectionsDialog
+from ui_qt.llm_postprocess_dialog import LLMPostprocessDialog
 from utils import load_audio_waveform
 AUDIO_VIDEO_FILTER = (
     "Media Files (*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.wma *.mp4 *.mov *.mkv *.avi *.flv);;All Files (*.*)"
@@ -403,12 +406,25 @@ class TranscriptionWorker(QObject):
             LOGGER.info("Qt worker: cleanup end")
 
 
+class DiarBackendProbeWorker(QObject):
+    finished: Signal = Signal(object, str)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            backends = get_available_diarization_backends(include_off=False) or ["accurate"]
+            self.finished.emit(list(backends), "")
+        except Exception as exc:
+            self.finished.emit([], str(exc))
+
+
 class MainWindow(QMainWindow):
     hw_metrics: Signal = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("PyScribe Qt")
+        self._window_title_base = "PyScribe Qt"
+        self.setWindowTitle(self._window_title_base)
         self.resize(980, 700)
 
         self.runtime: RuntimeInfo = detect_runtime()
@@ -425,6 +441,11 @@ class MainWindow(QMainWindow):
         self.metrics_thread: threading.Thread | None = None
         self.download_progress_dialog: QProgressDialog | None = None
         self.diarization_warning: str | None = None
+        self._diar_backends: list[str] = self._default_diar_backends()
+        self._diar_backends_resolved: bool = False
+        self._diar_probe_status_before: str = ""
+        self._diar_probe_thread: QThread | None = None
+        self._diar_probe_worker: DiarBackendProbeWorker | None = None
         self.theme_mode: str = self._sanitize_theme_mode(getattr(self.config, "theme_mode", "system"))
         self._current_run_mode: str = "full"
         self._current_use_diarization: bool = bool(self.config.use_diarization)
@@ -496,11 +517,7 @@ class MainWindow(QMainWindow):
         diar_row.addWidget(self.diar_checkbox)
         diar_row.addWidget(QLabel("Mode"))
         self.diar_backend_combo = QComboBox()
-        self._diar_backends = get_available_diarization_backends(include_off=False) or ["accurate"]
-        for key in self._diar_backends:
-            self.diar_backend_combo.addItem(get_backend_label(key), key)
-        if self.config.diar_backend in self._diar_backends:
-            self.diar_backend_combo.setCurrentIndex(self._diar_backends.index(self.config.diar_backend))
+        self._populate_diar_backend_combo(self._diar_backends, preferred=self.config.diar_backend)
         diar_row.addWidget(self.diar_backend_combo)
         diar_row.addWidget(QLabel("Max Speakers"))
         self.max_speakers_input = QLineEdit()
@@ -640,6 +657,22 @@ class MainWindow(QMainWindow):
         benchmark_action.setShortcut(QKeySequence("Ctrl+B"))
         benchmark_action.triggered.connect(self.open_benchmark_dialog)
         tools_menu.addAction(benchmark_action)
+
+        llm_connections_action = QAction("LLM Connections...", self)
+        llm_connections_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        llm_connections_action.triggered.connect(self.open_llm_connections_dialog)
+        tools_menu.addAction(llm_connections_action)
+
+        llm_postprocess_action = QAction("LLM Post-Process...", self)
+        llm_postprocess_action.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        llm_postprocess_action.triggered.connect(lambda _checked=False: self.open_llm_postprocess_dialog())
+        tools_menu.addAction(llm_postprocess_action)
+
+        process_existing_action = QAction("Process Existing Transcript...", self)
+        process_existing_action.triggered.connect(
+            lambda _checked=False: self.open_llm_postprocess_dialog(prefer_loaded_transcript=True)
+        )
+        tools_menu.addAction(process_existing_action)
 
         theme_menu = view_menu.addMenu("Theme")
         self.theme_action_group = QActionGroup(self)
@@ -838,6 +871,82 @@ class MainWindow(QMainWindow):
         self._set_bar_color(self.diar_progress_bar, self._progress_color(self.diar_progress_bar.value()))
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
 
+    @staticmethod
+    def _default_diar_backends() -> list[str]:
+        # Keep startup fast by deferring expensive capability checks until needed.
+        return ["accurate", "fast", "sortformer"]
+
+    def _set_window_title_status(self, status: str | None) -> None:
+        if status:
+            self.setWindowTitle(f"{self._window_title_base} - {status}")
+            return
+        self.setWindowTitle(self._window_title_base)
+
+    def _populate_diar_backend_combo(self, backends: list[str], *, preferred: str | None = None) -> None:
+        unique: list[str] = []
+        for key in backends:
+            backend = str(key or "").strip().lower()
+            if not backend or backend in unique:
+                continue
+            unique.append(backend)
+        if not unique:
+            unique = ["accurate"]
+        self._diar_backends = unique
+        self.diar_backend_combo.clear()
+        for key in unique:
+            self.diar_backend_combo.addItem(get_backend_label(key), key)
+        target = str(preferred or self.config.diar_backend or "").strip().lower()
+        if target in unique:
+            self.diar_backend_combo.setCurrentIndex(unique.index(target))
+            return
+        self.diar_backend_combo.setCurrentIndex(0)
+
+    def _diar_probe_running(self) -> bool:
+        return bool(self._diar_probe_thread and self._diar_probe_thread.isRunning())
+
+    def _start_diar_backend_probe(self) -> None:
+        if self._diar_backends_resolved or self._diar_probe_running():
+            return
+        self._diar_probe_status_before = self.status_label.text()
+        self.status_label.setText("Loading speaker ID backends...")
+        self._set_window_title_status("Loading speaker ID backends")
+        self.diar_backend_combo.setEnabled(False)
+
+        self._diar_probe_thread = QThread(self)
+        self._diar_probe_worker = DiarBackendProbeWorker()
+        self._diar_probe_worker.moveToThread(self._diar_probe_thread)
+        self._diar_probe_thread.started.connect(self._diar_probe_worker.run)
+        self._diar_probe_worker.finished.connect(self._on_diar_backend_probe_finished)
+        self._diar_probe_worker.finished.connect(self._diar_probe_thread.quit)
+        self._diar_probe_worker.finished.connect(self._diar_probe_worker.deleteLater)
+        self._diar_probe_thread.finished.connect(self._on_diar_backend_probe_thread_finished)
+        self._diar_probe_thread.finished.connect(self._diar_probe_thread.deleteLater)
+        self._diar_probe_thread.start()
+
+    @Slot(object, str)
+    def _on_diar_backend_probe_finished(self, backends: object, error_text: str) -> None:
+        backend_list = [str(item).strip().lower() for item in (backends if isinstance(backends, list) else [])]
+        backend_list = [item for item in backend_list if item]
+        current = str(self.diar_backend_combo.currentData() or "").strip().lower() or self.config.diar_backend
+        self._populate_diar_backend_combo(backend_list or ["accurate"], preferred=current)
+        self._diar_backends_resolved = True
+        self._set_window_title_status(None)
+        # Avoid clobbering active processing status text while a run is in progress.
+        if self.transcribe_btn.isEnabled():
+            if error_text:
+                LOGGER.warning("Speaker backend probe failed; using fallback backend list. reason=%s", error_text)
+                self.status_label.setText("Speaker backend check failed; using fallback backend list.")
+            elif self._diar_probe_status_before.strip():
+                self.status_label.setText(self._diar_probe_status_before)
+            else:
+                self.status_label.setText("Ready")
+        self._update_diar_ui_state(self.diar_checkbox.isChecked())
+
+    @Slot()
+    def _on_diar_backend_probe_thread_finished(self) -> None:
+        self._diar_probe_thread = None
+        self._diar_probe_worker = None
+
     def set_media_path(self, path: str) -> None:
         if not os.path.isfile(path):
             QMessageBox.warning(self, "Missing file", "The selected file does not exist.")
@@ -914,7 +1023,18 @@ class MainWindow(QMainWindow):
         max_speakers = int(max_speakers_text) if max_speakers_text.isdigit() else None
         use_diarization = run_diarization
         self._current_use_diarization = use_diarization
-        diar_backend = self.diar_backend_combo.currentData() if use_diarization else "off"
+        diar_backend = "off"
+        diar_backend_for_run = "off"
+        if use_diarization:
+            diar_backend = str(self.diar_backend_combo.currentData() or "").strip().lower() or "accurate"
+            diar_backend_for_run = diar_backend
+            if self._diar_probe_running():
+                # Don't block transcription while lazy backend discovery is still running.
+                if diar_backend_for_run == "sortformer":
+                    diar_backend_for_run = "accurate"
+                self.status_label.setText(
+                    f"Speaker backend detection still running; continuing with {get_backend_label(diar_backend_for_run)}."
+                )
         use_visual_analysis = run_visual
         self._current_use_visual_analysis = use_visual_analysis
         visual_profile = self.visual_profile_combo.currentText().strip().lower() or "balanced"
@@ -991,7 +1111,7 @@ class MainWindow(QMainWindow):
             model_name,
             run_mode=run_mode,
             use_diarization=use_diarization,
-            diar_backend=diar_backend,
+            diar_backend=diar_backend_for_run,
             max_speakers=max_speakers,
             use_visual_analysis=use_visual_analysis,
             visual_profile=visual_profile,
@@ -1160,7 +1280,10 @@ class MainWindow(QMainWindow):
     def _update_diar_ui_state(self, enabled: bool) -> None:
         _, allow_transcription, allow_diarization, _ = self._effective_service_flags()
         diar_controls_enabled = bool(enabled and allow_transcription and allow_diarization)
-        self.diar_backend_combo.setEnabled(diar_controls_enabled)
+        if diar_controls_enabled and not self._diar_backends_resolved:
+            self._start_diar_backend_probe()
+        combo_enabled = diar_controls_enabled and self._diar_backends_resolved and not self._diar_probe_running()
+        self.diar_backend_combo.setEnabled(combo_enabled)
         self.max_speakers_input.setEnabled(diar_controls_enabled)
         self.diar_progress_bar.setEnabled(diar_controls_enabled)
         if not diar_controls_enabled:
@@ -1282,6 +1405,18 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+        if self._diar_probe_thread and self._diar_probe_thread.isRunning():
+            self.status_label.setText("Waiting for speaker backend initialization to finish...")
+            self._diar_probe_thread.quit()
+            if not self._diar_probe_thread.wait(15000):
+                QMessageBox.information(
+                    self,
+                    "Initializing backends",
+                    "Speaker backend initialization is still running. Please try closing again in a few seconds.",
+                )
+                event.ignore()
+                return
+        self._set_window_title_status(None)
         LOGGER.info("Qt close accepted")
         self.stop_hw_monitor()
         event.accept()
@@ -1630,7 +1765,7 @@ class MainWindow(QMainWindow):
         if self.media_path:
             stem = os.path.splitext(os.path.basename(self.media_path))[0]
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        suggested = f"{stem}_{suffix}_{ts}.txt"
+        suggested = f"{ts}_{stem}_{suffix}.txt"
         default_dir = os.path.dirname(self.media_path) if self.media_path else self.last_save_dir
         if not default_dir or not os.path.isdir(default_dir):
             default_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")
@@ -1672,6 +1807,56 @@ class MainWindow(QMainWindow):
     def open_benchmark_dialog(self) -> None:
         dlg = BenchmarkDialog(parent=self, runtime=self.runtime)
         dlg.exec()
+
+    @Slot()
+    def open_llm_connections_dialog(self) -> None:
+        dlg = LLMConnectionsDialog(config=self.config, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self.config.llm_profiles = dlg.profiles()
+        self.config.llm_default_profile = dlg.default_profile()
+        self._save_config()
+        self.status_label.setText("LLM connection profiles saved.")
+
+    def open_llm_postprocess_dialog(self, prefer_loaded_transcript: bool = False) -> None:
+        enabled_profiles = get_enabled_llm_profiles(self.config.llm_profiles)
+        if not enabled_profiles:
+            answer = QMessageBox.question(
+                self,
+                "No LLM profiles",
+                (
+                    "No enabled LLM profiles are configured.\n\n"
+                    "Open LLM Connections now?"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if answer == QMessageBox.Yes:
+                self.open_llm_connections_dialog()
+                enabled_profiles = get_enabled_llm_profiles(self.config.llm_profiles)
+            if not enabled_profiles:
+                self.status_label.setText("LLM post-process canceled: no enabled profiles.")
+                return
+
+        current_transcript = ""
+        current_ocr = ""
+        if not prefer_loaded_transcript:
+            current_transcript = (self.transcript_only_text or self.transcript_text or "").strip()
+            current_ocr = (self.visual_report_text or "").strip()
+
+        dlg = LLMPostprocessDialog(
+            config=self.config,
+            current_transcript_text=current_transcript,
+            current_ocr_text=current_ocr,
+            is_transcription_running=self._is_transcription_running,
+            prefer_loaded_transcript=prefer_loaded_transcript,
+            parent=self,
+        )
+        dlg.exec()
+        self._save_config()
+
+    def _is_transcription_running(self) -> bool:
+        return bool(self.worker_thread and self.worker_thread.isRunning())
 
     def _save_config(
         self,

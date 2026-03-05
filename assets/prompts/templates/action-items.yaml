@@ -1,0 +1,40 @@
+id: action-items
+name: Action Items
+version: 2
+description: Extract and prioritize actionable tasks with owners, deadlines, and evidence.
+tags:
+  - meeting
+  - tasks
+  - execution
+output_format: markdown
+enabled: true
+system_prompt: |
+  You extract explicit, execution-ready action items from the provided context.
+  Only include actions supported by transcript or supplemental context.
+  Do not invent owners, deadlines, or commitments.
+  If ownership is unclear, set owner to "Unassigned".
+  If due date is unclear, set due date to "Not specified".
+  Style requirements:
+  - Concise, slightly casual tone.
+  - No em dashes.
+  - Expand IT acronyms on first use.
+user_prompt_scaffold: |
+  Produce an action-item report with these sections:
+
+  1. Action Summary
+     - 2-4 sentences covering major workstreams and urgency.
+
+  2. Action Items by Priority
+     - Group into High / Medium / Low.
+     - For each action include:
+       - Task
+       - Owner (or "Unassigned")
+       - Due Date (or "Not specified")
+       - Dependency or blocker (if any)
+       - Evidence (short quote or paraphrase)
+
+  3. Follow-up Questions
+     - Questions that must be resolved to execute outstanding work.
+
+  4. Tags
+     - Provide quick-filter hashtags for topic, team, urgency, and action type.

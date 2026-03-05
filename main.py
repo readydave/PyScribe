@@ -2,6 +2,7 @@
 # Entry point for PyScribe Qt desktop and listener modes.
 
 import argparse
+import getpass
 import logging
 import os
 import socket
@@ -64,7 +65,6 @@ warnings.filterwarnings(
 )
 
 INTERACTIVE_LAN_AUTH_USER = os.environ.get("PYSCRIBE_LAN_AUTH_USER", "pyscribe")
-INTERACTIVE_LAN_AUTH_PASS = os.environ.get("PYSCRIBE_LAN_AUTH_PASS", "Pyscribe!")
 
 
 def _redact_sensitive_argv(argv: list[str]) -> list[str]:
@@ -118,6 +118,8 @@ def run_listener(
     )
     if bool(auth_user) != bool(auth_pass):
         raise SystemExit("Both auth username and password must be provided together.")
+    if share and not (auth_user and auth_pass):
+        raise SystemExit("Listener share mode requires authentication credentials.")
 
     def _announce_listener(chosen_port: int) -> None:
         print("PyScribe listener running:")
@@ -221,6 +223,20 @@ def prompt_listener_scope() -> str:
         print("Please enter 1 or 2.")
 
 
+def _resolve_interactive_lan_auth() -> tuple[str, str]:
+    user = clean_env_value("PYSCRIBE_LAN_AUTH_USER") or INTERACTIVE_LAN_AUTH_USER
+    password = clean_env_value("PYSCRIBE_LAN_AUTH_PASS")
+    if not password and sys.stdin and sys.stdin.isatty():
+        prompted = getpass.getpass("LAN listener password (input hidden): ").strip()
+        password = prompted or None
+    if not password:
+        raise SystemExit(
+            "Interactive LAN listener requires a password. "
+            "Set PYSCRIBE_LAN_AUTH_PASS or enter one when prompted."
+        )
+    return user, password
+
+
 def main() -> None:
     safe_argv = _redact_sensitive_argv(sys.argv)
     LOGGER.info(
@@ -238,16 +254,16 @@ def main() -> None:
             return
         scope = prompt_listener_scope()
         if scope == "lan":
-            auth_user = INTERACTIVE_LAN_AUTH_USER
-            auth_pass = INTERACTIVE_LAN_AUTH_PASS
+            auth_user, auth_pass = _resolve_interactive_lan_auth()
             validate_listener_security(
                 "0.0.0.0",
                 auth_user=auth_user,
                 auth_pass=auth_pass,
                 allow_nonlocal_host=True,
+                share=False,
             )
             LOGGER.warning(
-                "Interactive LAN listener enabled with configured default credentials user=%s",
+                "Interactive LAN listener enabled for user=%s",
                 auth_user,
             )
             run_listener(
@@ -267,6 +283,7 @@ def main() -> None:
             auth_user=auth_user,
             auth_pass=auth_pass,
             allow_nonlocal_host=False,
+            share=False,
         )
         run_listener(
             host="127.0.0.1",
@@ -287,6 +304,7 @@ def main() -> None:
             auth_user=auth_user,
             auth_pass=auth_pass,
             allow_nonlocal_host=allow_nonlocal_host,
+            share=bool(args.share),
         )
         run_listener(
             host=args.host,

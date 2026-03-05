@@ -13,6 +13,7 @@ import tempfile
 from services.llm_connection_service import LLMConnectionProfile
 from services.llm_postprocess_service import (
     LLMPostprocessRequest,
+    LLMRunControl,
     build_llm_payload_preview,
     prepare_llm_postprocess_payload,
     run_llm_postprocess,
@@ -230,6 +231,67 @@ class LLMPostprocessServiceTests(unittest.TestCase):
         self.assertEqual(result.status, "pass")
         self.assertEqual(result.output_text, "Action items")
         self.assertEqual("".join(streamed), "Action items")
+
+    def test_cancelled_before_send_returns_cancelled(self) -> None:
+        run_control = LLMRunControl()
+        run_control.request_cancel()
+
+        result = run_llm_postprocess(
+            _profile(),
+            _template(),
+            LLMPostprocessRequest(
+                transcript_text="hello",
+                ocr_text="",
+                notes_text="",
+                selected_model=None,
+            ),
+            run_control=run_control,
+        )
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(result.error_code, "cancelled")
+
+    def test_openai_streaming_cancel_midstream_returns_partial(self) -> None:
+        streamed: list[str] = []
+        run_control = LLMRunControl()
+
+        def _on_output_chunk(chunk: str) -> None:
+            streamed.append(chunk)
+            run_control.request_cancel()
+
+        def _mock_urlopen(request, timeout=8):  # noqa: ANN001, ARG001
+            self.assertTrue(request.full_url.endswith("/v1/chat/completions"))
+            return _StreamingHTTPResponse(
+                [
+                    b'data: {"choices":[{"delta":{"content":"Action "}}]}\n',
+                    b'data: {"choices":[{"delta":{"content":"items"}}]}\n',
+                    b"data: [DONE]\n",
+                ]
+            )
+
+        with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+            result = run_llm_postprocess(
+                _profile(
+                    provider="openai_compatible",
+                    base_url="http://127.0.0.1:1234",
+                    default_model="qwen2.5",
+                    api_key="token",
+                ),
+                _template(),
+                LLMPostprocessRequest(
+                    transcript_text="Decision: proceed with pilot.",
+                    ocr_text="",
+                    notes_text="",
+                    selected_model=None,
+                ),
+                on_output_chunk=_on_output_chunk,
+                run_control=run_control,
+            )
+
+        self.assertEqual(result.status, "fail")
+        self.assertEqual(result.error_code, "cancelled")
+        self.assertEqual(result.output_text, "Action")
+        self.assertEqual("".join(streamed), "Action ")
 
     def test_auth_failure_maps_code(self) -> None:
         def _raise_401(request, timeout=8):  # noqa: ANN001, ARG001

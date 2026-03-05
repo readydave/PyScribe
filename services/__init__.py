@@ -46,6 +46,7 @@ _EXPORTS = {
     "LLMPostprocessRequest": (".llm_postprocess_service", "LLMPostprocessRequest"),
     "LLMPreparedPayload": (".llm_postprocess_service", "LLMPreparedPayload"),
     "LLMPostprocessResult": (".llm_postprocess_service", "LLMPostprocessResult"),
+    "LLMRunControl": (".llm_postprocess_service", "LLMRunControl"),
     "build_llm_payload_preview": (".llm_postprocess_service", "build_llm_payload_preview"),
     "prepare_llm_postprocess_payload": (".llm_postprocess_service", "prepare_llm_postprocess_payload"),
     "run_llm_postprocess": (".llm_postprocess_service", "run_llm_postprocess"),

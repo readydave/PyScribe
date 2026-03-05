@@ -10,6 +10,7 @@ import logging
 import mimetypes
 import os
 import ssl
+import threading
 from typing import Any
 from urllib import error as urlerror
 from urllib import request as urlrequest
@@ -38,6 +39,47 @@ _MULTIMODAL_MODEL_HINTS = (
     "gpt-4.1",
 )
 OutputChunkCallback = Callable[[str], None]
+
+
+class LLMRunControl:
+    """Thread-safe cancel control for an in-flight LLM post-process request."""
+
+    def __init__(self) -> None:
+        self._cancel_event = threading.Event()
+        self._lock = threading.Lock()
+        self._active_response: Any | None = None
+
+    def request_cancel(self) -> None:
+        self._cancel_event.set()
+        self._close_active_response()
+
+    def is_cancelled(self) -> bool:
+        return self._cancel_event.is_set()
+
+    def set_active_response(self, response: Any) -> None:
+        with self._lock:
+            self._active_response = response
+        if self._cancel_event.is_set():
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def clear_active_response(self, response: Any | None = None) -> None:
+        with self._lock:
+            if response is None or self._active_response is response:
+                self._active_response = None
+
+    def _close_active_response(self) -> None:
+        response = None
+        with self._lock:
+            response = self._active_response
+        if response is None:
+            return
+        try:
+            response.close()
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)
@@ -191,8 +233,19 @@ def run_llm_postprocess(
     *,
     prepared_payload: LLMPreparedPayload | None = None,
     on_output_chunk: OutputChunkCallback | None = None,
+    run_control: LLMRunControl | None = None,
 ) -> LLMPostprocessResult:
     """Run LLM post-processing and return model output or error details."""
+    if run_control and run_control.is_cancelled():
+        return LLMPostprocessResult(
+            status="fail",
+            provider=profile.provider,
+            model=request.selected_model or profile.default_model,
+            output_text="",
+            error_code="cancelled",
+            error_detail="Generation cancelled by user.",
+            info_note=None,
+        )
     prepared = prepared_payload or prepare_llm_postprocess_payload(profile, template, request)
     if prepared.status != "pass":
         return LLMPostprocessResult(
@@ -239,6 +292,7 @@ def run_llm_postprocess(
             image_paths=image_paths,
             info_note=prepared.info_note,
             on_output_chunk=on_output_chunk,
+            run_control=run_control,
         )
     return _run_openai_compatible(
         profile=profile,
@@ -248,6 +302,7 @@ def run_llm_postprocess(
         image_paths=image_paths,
         info_note=prepared.info_note,
         on_output_chunk=on_output_chunk,
+        run_control=run_control,
     )
 
 
@@ -260,6 +315,7 @@ def _run_ollama(
     image_paths: tuple[str, ...],
     info_note: str | None,
     on_output_chunk: OutputChunkCallback | None,
+    run_control: LLMRunControl | None,
 ) -> LLMPostprocessResult:
     url = f"{profile.base_url.rstrip('/')}/api/generate"
     payload: dict[str, Any] = {
@@ -281,6 +337,7 @@ def _run_ollama(
                 headers={},
                 verify_tls=profile.verify_tls,
                 on_output_chunk=on_output_chunk,
+                run_control=run_control,
             )
         else:
             result, retry_note = _post_json_with_timeout_retry(
@@ -289,6 +346,7 @@ def _run_ollama(
                 timeout_seconds=profile.timeout_seconds,
                 headers={},
                 verify_tls=profile.verify_tls,
+                run_control=run_control,
             )
             if isinstance(result, dict):
                 response_text = str(result.get("response") or "").strip()
@@ -336,6 +394,7 @@ def _run_openai_compatible(
     image_paths: tuple[str, ...],
     info_note: str | None,
     on_output_chunk: OutputChunkCallback | None,
+    run_control: LLMRunControl | None,
 ) -> LLMPostprocessResult:
     url = f"{profile.base_url.rstrip('/')}/v1/chat/completions"
     headers = _auth_headers(profile.api_key)
@@ -370,6 +429,7 @@ def _run_openai_compatible(
                 headers=headers,
                 verify_tls=profile.verify_tls,
                 on_output_chunk=on_output_chunk,
+                run_control=run_control,
             )
         else:
             result, retry_note = _post_json_with_timeout_retry(
@@ -378,6 +438,7 @@ def _run_openai_compatible(
                 timeout_seconds=profile.timeout_seconds,
                 headers=headers,
                 verify_tls=profile.verify_tls,
+                run_control=run_control,
             )
             response_text = _extract_openai_content(result)
     except _LLMPostprocessException as exc:
@@ -512,14 +573,21 @@ def _http_json_post(
     timeout_seconds: float,
     headers: dict[str, str],
     verify_tls: bool,
+    run_control: LLMRunControl | None,
 ) -> Any:
     req_headers = {"Content-Type": "application/json"}
     req_headers.update(headers)
     data = json.dumps(payload).encode("utf-8")
     request = urlrequest.Request(url=url, method="POST", headers=req_headers, data=data)
+    response_handle: Any | None = None
     try:
         with _urlopen_with_tls_policy(request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls) as response:
+            response_handle = response
+            if run_control:
+                run_control.set_active_response(response)
+            _raise_if_cancelled(run_control, "")
             body = response.read().decode("utf-8", errors="replace")
+            _raise_if_cancelled(run_control, "")
     except urlerror.HTTPError as exc:
         code = exc.code
         if code in {401, 403}:
@@ -538,6 +606,9 @@ def _http_json_post(
         raise _LLMPostprocessException("tcp_unreachable", "Unable to reach endpoint over TCP.") from exc
     except TimeoutError as exc:
         raise _LLMPostprocessException("timeout", "Connection timed out.") from exc
+    finally:
+        if run_control:
+            run_control.clear_active_response(response_handle)
     try:
         return json.loads(body)
     except json.JSONDecodeError as exc:
@@ -552,6 +623,7 @@ def _stream_ollama_with_timeout_retry(
     headers: dict[str, str],
     verify_tls: bool,
     on_output_chunk: OutputChunkCallback,
+    run_control: LLMRunControl | None,
 ) -> tuple[str, str | None]:
     def _runner(current_timeout: float) -> str:
         return _stream_ollama_response(
@@ -561,6 +633,7 @@ def _stream_ollama_with_timeout_retry(
             headers=headers,
             verify_tls=verify_tls,
             on_output_chunk=on_output_chunk,
+            run_control=run_control,
         )
 
     return _stream_with_timeout_retry(
@@ -578,6 +651,7 @@ def _stream_openai_with_timeout_retry(
     headers: dict[str, str],
     verify_tls: bool,
     on_output_chunk: OutputChunkCallback,
+    run_control: LLMRunControl | None,
 ) -> tuple[str, str | None]:
     def _runner(current_timeout: float) -> str:
         return _stream_openai_response(
@@ -587,6 +661,7 @@ def _stream_openai_with_timeout_retry(
             headers=headers,
             verify_tls=verify_tls,
             on_output_chunk=on_output_chunk,
+            run_control=run_control,
         )
 
     return _stream_with_timeout_retry(
@@ -629,15 +704,22 @@ def _stream_ollama_response(
     headers: dict[str, str],
     verify_tls: bool,
     on_output_chunk: OutputChunkCallback,
+    run_control: LLMRunControl | None,
 ) -> str:
     req_headers = {"Content-Type": "application/json"}
     req_headers.update(headers)
     data = json.dumps(payload).encode("utf-8")
     request = urlrequest.Request(url=url, method="POST", headers=req_headers, data=data)
     chunks: list[str] = []
+    response_handle: Any | None = None
     try:
         with _urlopen_with_tls_policy(request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls) as response:
+            response_handle = response
+            if run_control:
+                run_control.set_active_response(response)
+            _raise_if_cancelled(run_control, "".join(chunks))
             for raw_line in response:
+                _raise_if_cancelled(run_control, "".join(chunks))
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
@@ -648,7 +730,9 @@ def _stream_ollama_response(
                 piece = part.get("response")
                 if isinstance(piece, str) and piece:
                     chunks.append(piece)
+                    _raise_if_cancelled(run_control, "".join(chunks))
                     on_output_chunk(piece)
+                    _raise_if_cancelled(run_control, "".join(chunks))
                 if bool(part.get("done")):
                     break
     except urlerror.HTTPError as exc:
@@ -685,6 +769,9 @@ def _stream_ollama_response(
         err = _LLMPostprocessException("timeout", "Connection timed out.")
         err.partial_output = "".join(chunks)
         raise err from exc
+    finally:
+        if run_control:
+            run_control.clear_active_response(response_handle)
     return "".join(chunks).strip()
 
 
@@ -696,15 +783,22 @@ def _stream_openai_response(
     headers: dict[str, str],
     verify_tls: bool,
     on_output_chunk: OutputChunkCallback,
+    run_control: LLMRunControl | None,
 ) -> str:
     req_headers = {"Content-Type": "application/json"}
     req_headers.update(headers)
     data = json.dumps(payload).encode("utf-8")
     request = urlrequest.Request(url=url, method="POST", headers=req_headers, data=data)
     chunks: list[str] = []
+    response_handle: Any | None = None
     try:
         with _urlopen_with_tls_policy(request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls) as response:
+            response_handle = response
+            if run_control:
+                run_control.set_active_response(response)
+            _raise_if_cancelled(run_control, "".join(chunks))
             for raw_line in response:
+                _raise_if_cancelled(run_control, "".join(chunks))
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line or not line.startswith("data:"):
                     continue
@@ -720,7 +814,9 @@ def _stream_openai_response(
                 piece = _extract_openai_stream_delta(event_payload)
                 if piece:
                     chunks.append(piece)
+                    _raise_if_cancelled(run_control, "".join(chunks))
                     on_output_chunk(piece)
+                    _raise_if_cancelled(run_control, "".join(chunks))
     except urlerror.HTTPError as exc:
         code = exc.code
         if code in {401, 403}:
@@ -755,6 +851,9 @@ def _stream_openai_response(
         err = _LLMPostprocessException("timeout", "Connection timed out.")
         err.partial_output = "".join(chunks)
         raise err from exc
+    finally:
+        if run_control:
+            run_control.clear_active_response(response_handle)
     return "".join(chunks).strip()
 
 
@@ -792,6 +891,7 @@ def _post_json_with_timeout_retry(
     timeout_seconds: float,
     headers: dict[str, str],
     verify_tls: bool,
+    run_control: LLMRunControl | None,
 ) -> tuple[Any, str | None]:
     try:
         return (
@@ -801,6 +901,7 @@ def _post_json_with_timeout_retry(
                 timeout_seconds=timeout_seconds,
                 headers=headers,
                 verify_tls=verify_tls,
+                run_control=run_control,
             ),
             None,
         )
@@ -822,6 +923,7 @@ def _post_json_with_timeout_retry(
             timeout_seconds=retry_timeout,
             headers=headers,
             verify_tls=verify_tls,
+            run_control=run_control,
         )
         return result, f"Retried after timeout with {retry_timeout:.1f}s timeout."
 
@@ -890,3 +992,10 @@ class _LLMPostprocessException(Exception):
         super().__init__(detail)
         self.code = code
         self.partial_output: str = ""
+
+
+def _raise_if_cancelled(run_control: LLMRunControl | None, partial_output: str) -> None:
+    if run_control and run_control.is_cancelled():
+        err = _LLMPostprocessException("cancelled", "Generation cancelled by user.")
+        err.partial_output = (partial_output or "").strip()
+        raise err

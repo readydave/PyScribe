@@ -6,8 +6,8 @@ from collections.abc import Callable
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent
+from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,6 +30,8 @@ from services import (
     LLMConnectionProfile,
     LLMPreparedPayload,
     LLMPostprocessRequest,
+    LLMPostprocessResult,
+    LLMRunControl,
     PromptTemplate,
     create_user_prompt_template,
     delete_user_prompt_template,
@@ -175,6 +177,44 @@ class PromptTemplateEditorDialog(QDialog):
         }
 
 
+class LLMPostprocessWorker(QObject):
+    output_chunk: Signal = Signal(str)
+    finished: Signal = Signal(object)
+    failed: Signal = Signal(str)
+
+    def __init__(
+        self,
+        *,
+        profile: LLMConnectionProfile,
+        template: PromptTemplate,
+        request: LLMPostprocessRequest,
+        prepared_payload: LLMPreparedPayload,
+        run_control: LLMRunControl,
+    ) -> None:
+        super().__init__()
+        self._profile = profile
+        self._template = template
+        self._request = request
+        self._prepared_payload = prepared_payload
+        self._run_control = run_control
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = run_llm_postprocess(
+                self._profile,
+                self._template,
+                self._request,
+                prepared_payload=self._prepared_payload,
+                on_output_chunk=self.output_chunk.emit,
+                run_control=self._run_control,
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(result)
+
+
 class LLMPostprocessDialog(QDialog):
     def __init__(
         self,
@@ -207,6 +247,12 @@ class LLMPostprocessDialog(QDialog):
         self._connection_test_state: str = "not_run"
         self._last_payload_preview: str = ""
         self._last_output_text: str = ""
+        self._postprocess_thread: QThread | None = None
+        self._postprocess_worker: LLMPostprocessWorker | None = None
+        self._run_control: LLMRunControl | None = None
+        self._postprocess_active: bool = False
+        self._streamed_output_chunks: list[str] = []
+        self._close_after_cancel: bool = False
 
         self._build_ui()
         self._populate_profiles(default_name=config.llm_default_profile)
@@ -360,10 +406,14 @@ class LLMPostprocessDialog(QDialog):
         actions.addStretch(1)
         self.run_btn = QPushButton("Run Post-Process")
         self.run_btn.clicked.connect(self._on_run_postprocess)
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.reject)
+        self.cancel_run_btn = QPushButton("Cancel Generation")
+        self.cancel_run_btn.setEnabled(False)
+        self.cancel_run_btn.clicked.connect(self._on_cancel_postprocess)
+        self.close_btn = QPushButton("Close")
+        self.close_btn.clicked.connect(self.reject)
         actions.addWidget(self.run_btn)
-        actions.addWidget(close_btn)
+        actions.addWidget(self.cancel_run_btn)
+        actions.addWidget(self.close_btn)
         root.addLayout(actions)
 
     def _wrap_layout(self, layout: QHBoxLayout) -> QWidget:
@@ -538,6 +588,8 @@ class LLMPostprocessDialog(QDialog):
 
     @Slot()
     def _on_refresh_connection(self) -> None:
+        if self._postprocess_active:
+            return
         profile = self._selected_profile()
         if profile is None:
             self.connection_status.setText("No profile selected.")
@@ -786,6 +838,8 @@ class LLMPostprocessDialog(QDialog):
 
     @Slot()
     def _on_preview_payload(self) -> None:
+        if self._postprocess_active:
+            return
         preview_label = self.preview_btn.text()
         preview_enabled = self.preview_btn.isEnabled()
         run_enabled = self.run_btn.isEnabled()
@@ -814,6 +868,8 @@ class LLMPostprocessDialog(QDialog):
 
     @Slot()
     def _on_run_postprocess(self) -> None:
+        if self._postprocess_active:
+            return
         profile = self._selected_profile()
         if profile is None:
             QMessageBox.warning(self, "Profile required", "Choose an enabled LLM profile.")
@@ -843,114 +899,199 @@ class LLMPostprocessDialog(QDialog):
                 )
                 return
 
-        run_label = self.run_btn.text()
-        run_enabled = self.run_btn.isEnabled()
-        preview_enabled = self.preview_btn.isEnabled()
-        refresh_enabled = self.refresh_btn.isEnabled()
         self.run_btn.setText("Preparing Request...")
         self.run_btn.setEnabled(False)
-        self.preview_btn.setEnabled(False)
-        self.refresh_btn.setEnabled(False)
         self.connection_status.setText("Preparing payload for post-processing...")
         QApplication.processEvents()
 
-        try:
-            template, request, prepared = self._render_payload_preview()
-            if template is None or request is None or prepared is None:
+        template, request, prepared = self._render_payload_preview()
+        if template is None or request is None or prepared is None:
+            self.run_btn.setText("Run Post-Process")
+            self.run_btn.setEnabled(True)
+            return
+        if self.preview_required_checkbox.isChecked():
+            answer = QMessageBox.question(
+                self,
+                "Confirm payload",
+                "Payload preview is required. Continue and send this payload to the model?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if answer != QMessageBox.Yes:
+                self.connection_status.setText("Post-processing canceled before send.")
+                self.run_btn.setText("Run Post-Process")
+                self.run_btn.setEnabled(True)
                 return
-            if self.preview_required_checkbox.isChecked():
-                answer = QMessageBox.question(
-                    self,
-                    "Confirm payload",
-                    "Payload preview is required. Continue and send this payload to the model?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes,
-                )
-                if answer != QMessageBox.Yes:
-                    self.connection_status.setText("Post-processing canceled before send.")
-                    return
 
-            self.run_btn.setText("Running Post-Process...")
-            self.connection_status.setText("Running post-processing request...")
-            QApplication.processEvents()
-            self._last_output_text = ""
-            self.output_box.clear()
-            self.copy_btn.setEnabled(False)
-            self.save_btn.setEnabled(False)
-            streamed_chunks: list[str] = []
-            stream_started = {"value": False}
+        self._streamed_output_chunks = []
+        self._last_output_text = ""
+        self.output_box.clear()
+        self.copy_btn.setEnabled(False)
+        self.save_btn.setEnabled(False)
 
-            def _on_output_chunk(chunk: str) -> None:
-                if not chunk:
-                    return
-                streamed_chunks.append(chunk)
-                text = "".join(streamed_chunks)
-                self._last_output_text = text
-                self.output_box.setPlainText(text)
-                scrollbar = self.output_box.verticalScrollBar()
-                if scrollbar is not None:
-                    scrollbar.setValue(scrollbar.maximum())
-                if not stream_started["value"]:
-                    self.run_btn.setText("Streaming Output...")
-                    stream_started["value"] = True
-                self.connection_status.setText(f"Streaming model output... {len(text)} chars received.")
-                QApplication.processEvents()
+        self._run_control = LLMRunControl()
+        self._postprocess_thread = QThread(self)
+        self._postprocess_worker = LLMPostprocessWorker(
+            profile=profile,
+            template=template,
+            request=request,
+            prepared_payload=prepared,
+            run_control=self._run_control,
+        )
+        self._postprocess_worker.moveToThread(self._postprocess_thread)
+        self._postprocess_thread.started.connect(self._postprocess_worker.run)
+        self._postprocess_worker.output_chunk.connect(self._on_postprocess_output_chunk)
+        self._postprocess_worker.finished.connect(self._on_postprocess_finished)
+        self._postprocess_worker.failed.connect(self._on_postprocess_failed)
+        self._postprocess_worker.finished.connect(self._postprocess_thread.quit)
+        self._postprocess_worker.failed.connect(self._postprocess_thread.quit)
+        self._postprocess_worker.finished.connect(self._postprocess_worker.deleteLater)
+        self._postprocess_worker.failed.connect(self._postprocess_worker.deleteLater)
+        self._postprocess_thread.finished.connect(self._on_postprocess_thread_finished)
+        self._postprocess_thread.finished.connect(self._postprocess_thread.deleteLater)
 
-            self.setCursor(Qt.WaitCursor)
-            try:
-                result = run_llm_postprocess(
-                    profile,
-                    template,
-                    request,
-                    prepared_payload=prepared,
-                    on_output_chunk=_on_output_chunk,
-                )
-            finally:
-                self.unsetCursor()
+        self._postprocess_active = True
+        self.run_btn.setText("Running Post-Process...")
+        self.run_btn.setEnabled(False)
+        self.preview_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.cancel_run_btn.setEnabled(True)
+        self.cancel_run_btn.setText("Cancel Generation")
+        self.connection_status.setText("Running post-processing request...")
+        self._postprocess_thread.start()
 
-            if result.status != "pass":
+    @Slot()
+    def _on_cancel_postprocess(self) -> None:
+        if not self._postprocess_active:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Cancel generation",
+            "Stop LLM generation now? Partial output received so far will be kept.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._request_postprocess_cancel()
+
+    def _request_postprocess_cancel(self) -> None:
+        if not self._postprocess_active:
+            return
+        self.cancel_run_btn.setEnabled(False)
+        self.cancel_run_btn.setText("Cancelling...")
+        self.run_btn.setText("Cancelling...")
+        self.connection_status.setText("Cancelling post-processing request...")
+        if self._run_control is not None:
+            self._run_control.request_cancel()
+
+    @Slot(str)
+    def _on_postprocess_output_chunk(self, chunk: str) -> None:
+        if not chunk:
+            return
+        self._streamed_output_chunks.append(chunk)
+        text = "".join(self._streamed_output_chunks)
+        self._last_output_text = text
+        self.output_box.setPlainText(text)
+        scrollbar = self.output_box.verticalScrollBar()
+        if scrollbar is not None:
+            scrollbar.setValue(scrollbar.maximum())
+        if self.cancel_run_btn.text() != "Cancelling...":
+            self.run_btn.setText("Streaming Output...")
+            self.connection_status.setText(f"Streaming model output... {len(text)} chars received.")
+
+    @Slot(object)
+    def _on_postprocess_finished(self, result_obj: object) -> None:
+        result = result_obj if isinstance(result_obj, LLMPostprocessResult) else None
+        if result is None:
+            self._on_postprocess_failed("Invalid post-process worker result.")
+            return
+
+        if result.status != "pass":
+            if result.error_code == "cancelled":
+                partial_text = (result.output_text or self._last_output_text or "").strip()
+                if partial_text:
+                    self._last_output_text = partial_text
+                    self.output_box.setPlainText(partial_text)
+                    self.copy_btn.setEnabled(True)
+                    self.save_btn.setEnabled(True)
+                    self.connection_status.setText("Generation cancelled. Partial output retained.")
+                else:
+                    self.connection_status.setText("Generation cancelled.")
+            else:
                 detail = result.error_detail or "Unknown error"
-                if result.error_code == "timeout":
+                profile = self._selected_profile()
+                if result.error_code == "timeout" and profile is not None:
                     detail = (
                         f"{detail}\n\n"
                         f"Current timeout: {profile.timeout_seconds:.1f}s.\n"
                         "If your model is cold-starting, raise timeout in Tools > LLM Connections "
                         "(for example 30-60 seconds)."
                     )
-                partial_text = (result.output_text or "").strip()
+                partial_text = (result.output_text or self._last_output_text or "").strip()
                 if partial_text:
-                    self._last_output_text = result.output_text
-                    self.output_box.setPlainText(result.output_text)
+                    self._last_output_text = partial_text
+                    self.output_box.setPlainText(partial_text)
                     self.copy_btn.setEnabled(True)
                     self.save_btn.setEnabled(True)
-                self.connection_status.setText(
-                    f"Post-processing failed ({result.error_code or 'error'}). "
-                    "Connection test pass does not guarantee generation latency."
-                )
-                if partial_text:
                     detail = f"{detail}\n\nPartial output was received and kept in the output box."
                     self.connection_status.setText(
                         f"Post-processing failed ({result.error_code or 'error'}). Partial output is available."
+                    )
+                else:
+                    self.connection_status.setText(
+                        f"Post-processing failed ({result.error_code or 'error'}). "
+                        "Connection test pass does not guarantee generation latency."
                     )
                 QMessageBox.warning(
                     self,
                     "LLM post-processing failed",
                     f"{result.error_code or 'error'}: {detail}",
                 )
-                return
-            self._last_output_text = result.output_text or "".join(streamed_chunks)
+        else:
+            self._last_output_text = (result.output_text or self._last_output_text or "").strip()
             self.output_box.setPlainText(self._last_output_text)
-            self.copy_btn.setEnabled(True)
-            self.save_btn.setEnabled(True)
+            self.copy_btn.setEnabled(bool(self._last_output_text))
+            self.save_btn.setEnabled(bool(self._last_output_text))
             status = f"Post-processing complete with model '{result.model}'."
             if result.info_note:
                 status = f"{status} {result.info_note}"
             self.connection_status.setText(status)
-        finally:
-            self.run_btn.setText(run_label)
-            self.run_btn.setEnabled(run_enabled)
-            self.preview_btn.setEnabled(preview_enabled)
-            self.refresh_btn.setEnabled(refresh_enabled)
+
+        self._finalize_postprocess_run()
+
+    @Slot(str)
+    def _on_postprocess_failed(self, detail: str) -> None:
+        self.connection_status.setText("Post-processing failed before completion.")
+        QMessageBox.warning(self, "LLM post-processing failed", detail)
+        self._finalize_postprocess_run()
+
+    @Slot()
+    def _on_postprocess_thread_finished(self) -> None:
+        self._postprocess_thread = None
+        self._postprocess_worker = None
+        self._complete_pending_close_if_ready()
+
+    def _finalize_postprocess_run(self) -> None:
+        self._postprocess_active = False
+        self._run_control = None
+        self.run_btn.setText("Run Post-Process")
+        self.run_btn.setEnabled(bool(self._profiles))
+        self.preview_btn.setEnabled(bool(self._profiles))
+        self.refresh_btn.setEnabled(bool(self._profiles))
+        self.cancel_run_btn.setEnabled(False)
+        self.cancel_run_btn.setText("Cancel Generation")
+        self._complete_pending_close_if_ready()
+
+    def _complete_pending_close_if_ready(self) -> None:
+        if not self._close_after_cancel:
+            return
+        if self._postprocess_active:
+            return
+        if self._postprocess_thread is not None and self._postprocess_thread.isRunning():
+            return
+        self._close_after_cancel = False
+        self.reject()
 
     @Slot()
     def _on_copy_output(self) -> None:
@@ -981,3 +1122,21 @@ class LLMPostprocessDialog(QDialog):
             QMessageBox.critical(self, "Save output failed", str(exc))
             return
         self.connection_status.setText(f"Saved output: {os.path.basename(path)}")
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if not self._postprocess_active:
+            super().closeEvent(event)
+            return
+        answer = QMessageBox.question(
+            self,
+            "Generation in progress",
+            "LLM generation is still running. Cancel generation and close this window?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            event.ignore()
+            return
+        self._close_after_cancel = True
+        self._request_postprocess_cancel()
+        event.ignore()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import sys
 from typing import List, Dict, Optional, Callable
 
 from diarization import run_diarization as run_pyannote
@@ -160,25 +161,52 @@ BACKENDS = {
 
 
 def _is_sortformer_available() -> bool:
-    """Return True when NeMo ASR is importable and CUDA is available."""
-    import importlib
+    """
+    Return True when Sortformer dependencies appear installed.
+
+    Keep this check lightweight so UI startup/probing does not trigger heavyweight
+    imports. Runtime execution still validates actual CUDA usability.
+    """
+    import importlib.util
 
     try:
-        importlib.import_module("nemo.collections.asr")
-    except ImportError:
+        if importlib.util.find_spec("nemo.collections.asr") is None:
+            return False
+    except Exception:
         return False
 
     try:
-        import torch
+        if importlib.util.find_spec("torch") is None:
+            return False
+    except Exception:
+        return False
 
-        return bool(torch.cuda.is_available())
+    # If torch is already loaded, use its CUDA signal without importing torch here.
+    torch_module = sys.modules.get("torch")
+    if torch_module is not None:
+        try:
+            cuda_attr = getattr(torch_module, "cuda", None)
+            is_available = getattr(cuda_attr, "is_available", None)
+            if callable(is_available):
+                return bool(is_available())
+        except Exception:
+            return True
+
+    # Avoid importing torch during capability probe.
+    return True
+
+
+def _module_exists(module_name: str) -> bool:
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(module_name) is not None
     except Exception:
         return False
 
 
 def available_backends() -> Dict[str, bool]:
     """Return a map of backend_id -> available (installed)."""
-    import importlib
     availability = {}
     for key, meta in BACKENDS.items():
         if key == "sortformer":
@@ -188,13 +216,8 @@ def available_backends() -> Dict[str, bool]:
         if req is None:
             availability[key] = True
         else:
-            # crude check: import the top-level package name
-            top = req.split()[0].split("[")[0].split("==")[0]
-            try:
-                importlib.import_module(top.split(".")[0])
-                availability[key] = True
-            except ImportError:
-                availability[key] = False
+            module_name = req.split()[0].split("[")[0].split("==")[0]
+            availability[key] = _module_exists(module_name)
     return availability
 
 

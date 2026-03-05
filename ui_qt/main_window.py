@@ -931,13 +931,15 @@ class MainWindow(QMainWindow):
         self._populate_diar_backend_combo(backend_list or ["accurate"], preferred=current)
         self._diar_backends_resolved = True
         self._set_window_title_status(None)
-        if error_text:
-            LOGGER.warning("Speaker backend probe failed; using fallback backend list. reason=%s", error_text)
-            self.status_label.setText("Speaker backend check failed; using fallback backend list.")
-        elif self._diar_probe_status_before.strip():
-            self.status_label.setText(self._diar_probe_status_before)
-        else:
-            self.status_label.setText("Ready")
+        # Avoid clobbering active processing status text while a run is in progress.
+        if self.transcribe_btn.isEnabled():
+            if error_text:
+                LOGGER.warning("Speaker backend probe failed; using fallback backend list. reason=%s", error_text)
+                self.status_label.setText("Speaker backend check failed; using fallback backend list.")
+            elif self._diar_probe_status_before.strip():
+                self.status_label.setText(self._diar_probe_status_before)
+            else:
+                self.status_label.setText("Ready")
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
 
     @Slot()
@@ -1021,19 +1023,18 @@ class MainWindow(QMainWindow):
         max_speakers = int(max_speakers_text) if max_speakers_text.isdigit() else None
         use_diarization = run_diarization
         self._current_use_diarization = use_diarization
-        if use_diarization and self._diar_probe_running():
-            QMessageBox.information(
-                self,
-                "Speaker backends loading",
-                "Speaker backend detection is still in progress. Please try again in a moment.",
-            )
-            self.status_label.setText("Waiting for speaker backend detection...")
-            self.transcribe_btn.setEnabled(True)
-            self.cancel_btn.setEnabled(False)
-            self.force_stop_btn.setEnabled(False)
-            self.stop_hw_monitor()
-            return
-        diar_backend = self.diar_backend_combo.currentData() if use_diarization else "off"
+        diar_backend = "off"
+        diar_backend_for_run = "off"
+        if use_diarization:
+            diar_backend = str(self.diar_backend_combo.currentData() or "").strip().lower() or "accurate"
+            diar_backend_for_run = diar_backend
+            if self._diar_probe_running():
+                # Don't block transcription while lazy backend discovery is still running.
+                if diar_backend_for_run == "sortformer":
+                    diar_backend_for_run = "accurate"
+                self.status_label.setText(
+                    f"Speaker backend detection still running; continuing with {get_backend_label(diar_backend_for_run)}."
+                )
         use_visual_analysis = run_visual
         self._current_use_visual_analysis = use_visual_analysis
         visual_profile = self.visual_profile_combo.currentText().strip().lower() or "balanced"
@@ -1110,7 +1111,7 @@ class MainWindow(QMainWindow):
             model_name,
             run_mode=run_mode,
             use_diarization=use_diarization,
-            diar_backend=diar_backend,
+            diar_backend=diar_backend_for_run,
             max_speakers=max_speakers,
             use_visual_analysis=use_visual_analysis,
             visual_profile=visual_profile,
@@ -1764,7 +1765,7 @@ class MainWindow(QMainWindow):
         if self.media_path:
             stem = os.path.splitext(os.path.basename(self.media_path))[0]
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        suggested = f"{stem}_{suffix}_{ts}.txt"
+        suggested = f"{ts}_{stem}_{suffix}.txt"
         default_dir = os.path.dirname(self.media_path) if self.media_path else self.last_save_dir
         if not default_dir or not os.path.isdir(default_dir):
             default_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")

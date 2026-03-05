@@ -610,7 +610,7 @@ def save_transcript(transcript: str, audio_path: Any, model_name: str) -> str | 
         
         # Create a temporary file to save the transcript
         temp_dir = tempfile.gettempdir()
-        save_path = os.path.join(temp_dir, f"{base_name}_{ts}_{safe_model_name}.txt")
+        save_path = os.path.join(temp_dir, f"{ts}_{base_name}_{safe_model_name}.txt")
 
         with open(save_path, "w", encoding="utf-8") as transcript_file:
             transcript_file.write(transcript)

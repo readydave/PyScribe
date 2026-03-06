@@ -11,25 +11,33 @@ import threading
 import time
 from _thread import LockType
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QFont, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QSizePolicy,
     QApplication,
     QCheckBox,
     QComboBox,
+    QFrame,
+    QGridLayout,
     QMenu,
     QFileDialog,
     QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QInputDialog,
+    QPlainTextEdit,
     QPushButton,
     QProgressDialog,
     QProgressBar,
+    QScrollArea,
+    QSplitter,
+    QStackedWidget,
     QTextEdit,
     QToolButton,
     QVBoxLayout,
@@ -86,18 +94,46 @@ _UNSET = object()
 LOGGER = logging.getLogger(__name__)
 
 
-class DropLabel(QLabel):
+class DropLabel(QFrame):
     file_dropped: Signal = Signal(str)
+    browse_requested: Signal = Signal()
 
     def __init__(self) -> None:
-        super().__init__("Drop audio/video file here")
+        super().__init__()
         self.setAcceptDrops(True)
-        self.setAlignment(Qt.AlignCenter)
-        self.setMinimumHeight(100)
         self.setObjectName("dropZone")
+        self.setMinimumHeight(140)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(8)
+        layout.addStretch(1)
+
+        self.title_label = QLabel("Drop audio/video file here")
+        self.title_label.setObjectName("dropTitle")
+        self.title_label.setAlignment(Qt.AlignCenter)
+        title_font = QFont(self.font())
+        title_font.setPointSize(17)
+        title_font.setBold(True)
+        self.title_label.setFont(title_font)
+        layout.addWidget(self.title_label)
+
+        self.subtitle_label = QLabel("or click to browse your files")
+        self.subtitle_label.setObjectName("dropSubtitle")
+        self.subtitle_label.setAlignment(Qt.AlignCenter)
+        subtitle_font = QFont(self.font())
+        subtitle_font.setPointSize(10)
+        self.subtitle_label.setFont(subtitle_font)
+        layout.addWidget(self.subtitle_label)
+
+        self.browse_btn = QPushButton("Browse Files")
+        self.browse_btn.setObjectName("dropBrowseButton")
+        self.browse_btn.clicked.connect(self.browse_requested.emit)
+        layout.addWidget(self.browse_btn, alignment=Qt.AlignCenter)
+        layout.addStretch(1)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() and any(url.isLocalFile() for url in event.mimeData().urls()):
             event.acceptProposedAction()
             self.setProperty("activeDrop", True)
             self.style().polish(self)
@@ -425,7 +461,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._window_title_base = "PyScribe Qt"
         self.setWindowTitle(self._window_title_base)
-        self.resize(980, 700)
+        self.setMinimumSize(840, 560)
+        self.resize(1100, 760)
 
         self.runtime: RuntimeInfo = detect_runtime()
         self.config: AppConfig = load_config()
@@ -453,9 +490,12 @@ class MainWindow(QMainWindow):
         self._confirmed_visual_backend_downloads: set[str] = set(
             str(b).strip().lower() for b in (self.config.confirmed_visual_backends or [])
         )
+        self._sidebar_collapsed: bool = False
+        self._status_panel_hidden: bool = False
 
         self._build_ui()
         self._build_menus()
+        self._fit_to_available_screen()
         self._apply_theme()
         self._set_bar_color(self.progress_bar, "#dc2626")
         self._set_bar_color(self.diar_progress_bar, "#dc2626")
@@ -463,27 +503,143 @@ class MainWindow(QMainWindow):
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
         self._update_visual_ui_state(self.visual_checkbox.isChecked())
         self._update_service_visibility()
+        QTimer.singleShot(0, self._apply_responsive_layout_state)
         LOGGER.info("Qt MainWindow initialized runtime=%s compute=%s", self.runtime.device, self.runtime.compute_type)
+
+    def _fit_to_available_screen(self) -> None:
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        target_w = min(max(840, int(available.width() * 0.84)), available.width())
+        target_h = min(max(560, int(available.height() * 0.82)), available.height())
+        self.resize(target_w, target_h)
 
     def _build_ui(self) -> None:
         root = QWidget()
-        layout = QVBoxLayout(root)
-        layout.setSpacing(12)
+        root_layout = QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        top_row = QHBoxLayout()
-        self.path_label = QLabel("No file selected")
-        self.path_label.setObjectName("pathLabel")
-        browse_btn = QPushButton("Browse")
-        browse_btn.clicked.connect(self.on_browse)
+        self.sidebar_frame = QFrame()
+        self.sidebar_frame.setObjectName("Sidebar")
+        self.sidebar_frame.setFixedWidth(230)
+        sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        sidebar_layout.setContentsMargins(14, 14, 14, 14)
+        sidebar_layout.setSpacing(10)
+
+        brand_row = QHBoxLayout()
+        self.sidebar_brand_label = QLabel("PyScribe")
+        self.sidebar_brand_label.setObjectName("SidebarBrand")
+        brand_font = QFont(self.font())
+        brand_font.setPointSize(14)
+        brand_font.setBold(True)
+        self.sidebar_brand_label.setFont(brand_font)
+        self.sidebar_toggle_btn = QToolButton()
+        self.sidebar_toggle_btn.setObjectName("sidebarToggleButton")
+        self.sidebar_toggle_btn.setText("◀")
+        self.sidebar_toggle_btn.setToolTip("Hide left panel")
+        self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar_collapsed)
+        brand_row.addWidget(self.sidebar_brand_label)
+        brand_row.addStretch(1)
+        brand_row.addWidget(self.sidebar_toggle_btn)
+        sidebar_layout.addLayout(brand_row)
+
+        self.new_project_btn = QPushButton("+  New Project")
+        self.new_project_btn.clicked.connect(self._switch_to_transcription_view)
+        sidebar_layout.addWidget(self.new_project_btn)
+
+        self.nav_list = QListWidget()
+        self.nav_list.setObjectName("SidebarNav")
+        for name in ("Transcription", "LLM", "Settings"):
+            item = QListWidgetItem(name)
+            self.nav_list.addItem(item)
+        self.nav_list.currentRowChanged.connect(self._on_nav_item_changed)
+        sidebar_layout.addWidget(self.nav_list, 1)
+
         self.exit_btn = QPushButton("Exit")
         self.exit_btn.setObjectName("exitButton")
         self.exit_btn.clicked.connect(self.close)
-        top_row.addWidget(self.path_label, 1)
-        top_row.addWidget(browse_btn)
-        top_row.addWidget(self.exit_btn)
+        sidebar_layout.addWidget(self.exit_btn)
 
-        model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("Model"))
+        root_layout.addWidget(self.sidebar_frame)
+
+        self.main_stack = QStackedWidget()
+        self.main_stack.setObjectName("MainStack")
+        self.main_stack.addWidget(self._build_transcription_view())
+        self.main_stack.addWidget(self._build_llm_workspace_view())
+        self.main_stack.addWidget(self._build_settings_view())
+        root_layout.addWidget(self.main_stack, 1)
+
+        self.nav_list.setCurrentRow(0)
+        self.setCentralWidget(root)
+
+    def _build_transcription_view(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(14, 14, 14, 14)
+        page_layout.setSpacing(8)
+
+        main_surface = QFrame()
+        main_surface.setObjectName("MainSurface")
+        main_layout = QVBoxLayout(main_surface)
+        main_layout.setContentsMargins(14, 14, 14, 14)
+        main_layout.setSpacing(12)
+
+        title_row = QHBoxLayout()
+        title_col = QVBoxLayout()
+
+        title = QLabel("New Transcription")
+        title.setObjectName("PageTitle")
+        title_font = QFont(self.font())
+        title_font.setPointSize(22)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        subtitle = QLabel("Configure settings, drop media, and process.")
+        subtitle.setObjectName("PageSubtitle")
+        subtitle_font = QFont(self.font())
+        subtitle_font.setPointSize(10)
+        subtitle.setFont(subtitle_font)
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        title_row.addLayout(title_col, 1)
+
+        self.status_toggle_btn = QToolButton()
+        self.status_toggle_btn.setObjectName("statusToggleButton")
+        self.status_toggle_btn.setText("▶")
+        self.status_toggle_btn.setToolTip("Hide right panel")
+        self.status_toggle_btn.clicked.connect(self._toggle_status_panel_visibility)
+        title_row.addWidget(self.status_toggle_btn)
+        main_layout.addLayout(title_row)
+
+        self.path_label = QLabel("No file selected")
+        self.path_label.setObjectName("pathLabel")
+        main_layout.addWidget(self.path_label)
+
+        drop_card = QFrame()
+        drop_card.setObjectName("Card")
+        drop_layout = QVBoxLayout(drop_card)
+        drop_layout.setContentsMargins(12, 12, 12, 12)
+        self.drop_label = DropLabel()
+        self.drop_label.file_dropped.connect(self.set_media_path)
+        self.drop_label.browse_requested.connect(self.on_browse)
+        drop_layout.addWidget(self.drop_label)
+        main_layout.addWidget(drop_card)
+
+        settings_grid = QGridLayout()
+        settings_grid.setHorizontalSpacing(12)
+        settings_grid.setVerticalSpacing(12)
+        self.settings_grid = settings_grid
+
+        general_card = QFrame()
+        general_card.setObjectName("Card")
+        self.general_settings_card = general_card
+        general_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        general_layout = QVBoxLayout(general_card)
+        general_layout.setContentsMargins(12, 12, 12, 12)
+        general_layout.setSpacing(8)
+        general_layout.addWidget(QLabel("General Settings"))
+        general_layout.addWidget(QLabel("Model"))
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
         all_models = get_model_choices()
@@ -493,72 +649,90 @@ class MainWindow(QMainWindow):
         idx = self.model_combo.findText(initial_model)
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
-        model_row.addWidget(self.model_combo, 1)
-        model_hint = QLabel(f"Recommended: {recommended} ({self.runtime.device.upper()})")
-        model_hint.setObjectName("hint")
-        model_row.addWidget(model_hint)
+        general_layout.addWidget(self.model_combo)
+        self.model_hint_label = QLabel(f"Recommended: {recommended} ({self.runtime.device.upper()})")
+        self.model_hint_label.setObjectName("hint")
+        general_layout.addWidget(self.model_hint_label)
 
-        process_row = QHBoxLayout()
         self.transcribe_checkbox = QCheckBox("Transcribe audio")
         start_mode = str(self.config.run_mode or "full").strip().lower()
         self.transcribe_checkbox.setChecked(start_mode != "visual_only")
         self.transcribe_checkbox.toggled.connect(self._update_diar_ui_state)
         self.transcribe_checkbox.toggled.connect(self._update_service_visibility)
-        process_row.addWidget(self.transcribe_checkbox)
-        process_row.addStretch(1)
+        general_layout.addWidget(self.transcribe_checkbox)
+        general_layout.addStretch(1)
 
-        diar_row = QHBoxLayout()
+        advanced_card = QFrame()
+        advanced_card.setObjectName("Card")
+        self.advanced_options_card = advanced_card
+        advanced_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        advanced_layout = QVBoxLayout(advanced_card)
+        advanced_layout.setContentsMargins(12, 12, 12, 12)
+        advanced_layout.setSpacing(8)
+        advanced_layout.addWidget(QLabel("Advanced Options"))
+
         self.diar_checkbox = QCheckBox("Identify Speakers")
         self.diar_checkbox.setChecked(bool(self.config.use_diarization))
         self._update_diar_toggle_label(self.diar_checkbox.isChecked())
         self.diar_checkbox.toggled.connect(self._update_diar_toggle_label)
         self.diar_checkbox.toggled.connect(self._update_diar_ui_state)
         self.diar_checkbox.toggled.connect(self._update_service_visibility)
-        diar_row.addWidget(self.diar_checkbox)
-        diar_row.addWidget(QLabel("Mode"))
+        advanced_layout.addWidget(self.diar_checkbox)
+
+        diar_grid = QGridLayout()
+        diar_grid.setHorizontalSpacing(8)
+        diar_grid.setVerticalSpacing(6)
+        diar_grid.addWidget(QLabel("Mode"), 0, 0)
         self.diar_backend_combo = QComboBox()
         self._populate_diar_backend_combo(self._diar_backends, preferred=self.config.diar_backend)
-        diar_row.addWidget(self.diar_backend_combo)
-        diar_row.addWidget(QLabel("Max Speakers"))
+        diar_grid.addWidget(self.diar_backend_combo, 0, 1)
+        diar_grid.addWidget(QLabel("Max Speakers"), 1, 0)
         self.max_speakers_input = QLineEdit()
         self.max_speakers_input.setPlaceholderText("auto")
-        self.max_speakers_input.setFixedWidth(80)
         if self.config.max_speakers is not None:
             self.max_speakers_input.setText(str(self.config.max_speakers))
-        diar_row.addWidget(self.max_speakers_input)
-        diar_row.addStretch(1)
+        diar_grid.addWidget(self.max_speakers_input, 1, 1)
+        advanced_layout.addLayout(diar_grid)
 
-        visual_row = QHBoxLayout()
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setFrameShadow(QFrame.Sunken)
+        advanced_layout.addWidget(divider)
+
         self.visual_checkbox = QCheckBox("Analyze visuals (slides/chat OCR, beta)")
         self.visual_checkbox.setChecked(bool(self.config.use_visual_analysis))
         self.visual_checkbox.toggled.connect(self._update_visual_ui_state)
         self.visual_checkbox.toggled.connect(self._update_service_visibility)
-        visual_row.addWidget(self.visual_checkbox)
-        visual_row.addWidget(QLabel("Mode"))
+        advanced_layout.addWidget(self.visual_checkbox)
+
+        visual_grid = QGridLayout()
+        visual_grid.setHorizontalSpacing(8)
+        visual_grid.setVerticalSpacing(6)
+        visual_grid.addWidget(QLabel("Mode"), 0, 0)
         self.visual_profile_combo = QComboBox()
         self.visual_profile_combo.addItems(["fast", "balanced", "accurate"])
         profile_idx = self.visual_profile_combo.findText(str(self.config.visual_profile or "balanced").lower())
         if profile_idx < 0:
             profile_idx = 1
         self.visual_profile_combo.setCurrentIndex(profile_idx)
-        visual_row.addWidget(self.visual_profile_combo)
-        visual_row.addWidget(QLabel("OCR Backend"))
+        visual_grid.addWidget(self.visual_profile_combo, 0, 1)
+        visual_grid.addWidget(QLabel("OCR Backend"), 1, 0)
         self.visual_backend_combo = QComboBox()
         self.visual_backend_combo.addItems(["paddleocr", "surya", "pytesseract", "auto"])
-        idx = self.visual_backend_combo.findText(str(self.config.visual_ocr_backend or "paddleocr").lower())
-        if idx < 0:
-            idx = 0
-        self.visual_backend_combo.setCurrentIndex(idx)
-        visual_row.addWidget(self.visual_backend_combo)
-        visual_row.addWidget(QLabel("Sample every (sec)"))
+        ocr_idx = self.visual_backend_combo.findText(str(self.config.visual_ocr_backend or "paddleocr").lower())
+        if ocr_idx < 0:
+            ocr_idx = 0
+        self.visual_backend_combo.setCurrentIndex(ocr_idx)
+        visual_grid.addWidget(self.visual_backend_combo, 1, 1)
+        visual_grid.addWidget(QLabel("Sample every (sec)"), 2, 0)
         self.visual_interval_input = QLineEdit()
-        self.visual_interval_input.setFixedWidth(70)
         self.visual_interval_input.setText(f"{float(self.config.visual_sample_seconds or 1.0):.1f}")
-        visual_row.addWidget(self.visual_interval_input)
-        visual_row.addStretch(1)
+        visual_grid.addWidget(self.visual_interval_input, 2, 1)
+        advanced_layout.addLayout(visual_grid)
+        advanced_layout.addStretch(1)
 
-        self.drop_label = DropLabel()
-        self.drop_label.file_dropped.connect(self.set_media_path)
+        self._update_transcription_card_columns()
+        main_layout.addLayout(settings_grid)
 
         actions = QHBoxLayout()
         self.transcribe_btn = QPushButton("Process File")
@@ -594,54 +768,315 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.save_btn)
         actions.addWidget(self.open_btn)
         actions.addWidget(self.copy_btn)
+        actions.addStretch(1)
+        main_layout.addLayout(actions)
 
-        self.status_label = QLabel("Ready")
-        self.hf_token_status = QLabel(self._hf_token_status_text())
-        self.hf_token_status.setObjectName("tokenLabel")
-        self.hw_metrics_label = QLabel("CPU: -- | RAM: -- | GPU: -- | VRAM: --")
-        self.hw_metrics_label.setObjectName("metricsLabel")
+        progress_card = QFrame()
+        progress_card.setObjectName("Card")
+        progress_layout = QVBoxLayout(progress_card)
+        progress_layout.setContentsMargins(12, 12, 12, 12)
+        progress_layout.setSpacing(8)
+        progress_layout.addWidget(QLabel("Transcription Progress"))
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setMinimumHeight(26)
         self.progress_bar.setFormat("Transcription %p%")
+        progress_layout.addWidget(self.progress_bar)
         self.diar_progress_bar = QProgressBar()
         self.diar_progress_bar.setRange(0, 100)
         self.diar_progress_bar.setValue(0)
         self.diar_progress_bar.setFormat("Diarization %p%")
-        self._set_bar_color(self.progress_bar, "#dc2626")
-        self._set_bar_color(self.diar_progress_bar, "#dc2626")
+        progress_layout.addWidget(self.diar_progress_bar)
+
+        self.terminal_log = QPlainTextEdit()
+        self.terminal_log.setObjectName("TerminalLog")
+        self.terminal_log.setReadOnly(True)
+        self.terminal_log.setPlaceholderText("Live pipeline events...")
+        self.terminal_log.setMinimumHeight(96)
+        progress_layout.addWidget(self.terminal_log)
+        main_layout.addWidget(progress_card)
+
+        transcript_card = QFrame()
+        transcript_card.setObjectName("Card")
+        transcript_layout = QVBoxLayout(transcript_card)
+        transcript_layout.setContentsMargins(12, 12, 12, 12)
+        transcript_layout.setSpacing(8)
+        transcript_layout.addWidget(QLabel("Transcript Output"))
+        self.text_area = QPlainTextEdit()
+        self.text_area.setPlaceholderText("Transcript appears here...")
+        self.text_area.setMinimumHeight(110)
+        self.text_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        transcript_layout.addWidget(self.text_area, 1)
+        main_layout.addWidget(transcript_card, 1)
+
+        status_panel = QFrame()
+        status_panel.setObjectName("StatusPanel")
+        status_panel.setMinimumWidth(220)
+        status_panel.setMaximumWidth(420)
+        status_layout = QVBoxLayout(status_panel)
+        status_layout.setContentsMargins(12, 12, 12, 12)
+        status_layout.setSpacing(10)
+        status_layout.addWidget(QLabel("Status"))
+        self.status_label = QLabel("Ready")
+        status_layout.addWidget(self.status_label)
+        self.hf_token_status = QLabel(self._hf_token_status_text())
+        self.hf_token_status.setObjectName("tokenLabel")
+        status_layout.addWidget(self.hf_token_status)
+        self.hw_metrics_label = QLabel("CPU: -- | RAM: -- | GPU: -- | VRAM: --")
+        self.hw_metrics_label.setObjectName("metricsLabel")
+        status_layout.addWidget(self.hw_metrics_label)
+        metrics_card = QFrame()
+        metrics_card.setObjectName("Card")
+        metrics_layout = QVBoxLayout(metrics_card)
+        metrics_layout.setContentsMargins(10, 10, 10, 10)
+        metrics_layout.setSpacing(6)
         self.transcription_time_label = QLabel("Transcription time: --")
         self.transcription_time_label.setObjectName("metricsLabel")
         self.diar_time_label = QLabel("Diarization time: --")
         self.diar_time_label.setObjectName("metricsLabel")
         self.visual_time_label = QLabel("Visual analysis time: --")
         self.visual_time_label.setObjectName("metricsLabel")
+        metrics_layout.addWidget(self.transcription_time_label)
+        metrics_layout.addWidget(self.diar_time_label)
+        metrics_layout.addWidget(self.visual_time_label)
+        status_layout.addWidget(metrics_card)
+        status_layout.addStretch(1)
 
-        self.text_area = QTextEdit()
-        self.text_area.setPlaceholderText("Transcript appears here...")
-        self.text_area.setLineWrapMode(QTextEdit.WidgetWidth)
-        self.text_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.text_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.text_area.setMinimumHeight(240)
-        self.text_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.status_panel = status_panel
+        self.transcription_scroll = QScrollArea()
+        self.transcription_scroll.setWidgetResizable(True)
+        self.transcription_scroll.setFrameShape(QFrame.NoFrame)
+        self.transcription_scroll.setWidget(main_surface)
 
-        layout.addLayout(top_row)
-        layout.addLayout(model_row)
-        layout.addLayout(process_row)
-        layout.addLayout(diar_row)
-        layout.addLayout(visual_row)
-        layout.addWidget(self.drop_label)
-        layout.addLayout(actions)
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.hf_token_status)
-        layout.addWidget(self.hw_metrics_label)
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.transcription_time_label)
-        layout.addWidget(self.diar_progress_bar)
-        layout.addWidget(self.diar_time_label)
-        layout.addWidget(self.visual_time_label)
-        layout.addWidget(self.text_area, 1)
-        self.setCentralWidget(root)
+        self.transcription_splitter = QSplitter(Qt.Horizontal)
+        self.transcription_splitter.setChildrenCollapsible(False)
+        self.transcription_splitter.addWidget(self.transcription_scroll)
+        self.transcription_splitter.addWidget(status_panel)
+        self.transcription_splitter.setStretchFactor(0, 1)
+        self.transcription_splitter.setStretchFactor(1, 0)
+        self.transcription_splitter.setSizes([900, 300])
+        page_layout.addWidget(self.transcription_splitter, 1)
+        return page
+
+    def _build_llm_workspace_view(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        title = QLabel("LLM Workspace")
+        title.setObjectName("PageTitle")
+        subtitle = QLabel("Open post-processing and connection management tools.")
+        subtitle.setObjectName("PageSubtitle")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 14, 14, 14)
+        card_layout.setSpacing(10)
+        card_layout.addWidget(QLabel("Post-Processing"))
+        open_workspace_btn = QPushButton("Open LLM Post-Process")
+        open_workspace_btn.clicked.connect(lambda _checked=False: self.open_llm_postprocess_dialog())
+        manage_connections_btn = QPushButton("Open LLM Connections")
+        manage_connections_btn.clicked.connect(self.open_llm_connections_dialog)
+        card_layout.addWidget(open_workspace_btn)
+        card_layout.addWidget(manage_connections_btn)
+        layout.addWidget(card)
+        layout.addStretch(1)
+        return page
+
+    def _build_settings_view(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("Settings & Connections")
+        title.setObjectName("PageTitle")
+        subtitle = QLabel("Manage API keys and defaults.")
+        subtitle.setObjectName("PageSubtitle")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        layout.addWidget(scroll, 1)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+
+        api_card = QFrame()
+        api_card.setObjectName("Card")
+        api_layout = QGridLayout(api_card)
+        api_layout.setContentsMargins(14, 14, 14, 14)
+        api_layout.setHorizontalSpacing(8)
+        api_layout.setVerticalSpacing(8)
+        api_layout.addWidget(QLabel("API Keys"), 0, 0, 1, 4)
+
+        openai_label = QLabel("OpenAI Key")
+        self.openai_key_input = QLineEdit()
+        self.openai_key_input.setPlaceholderText("sk-...")
+        self.openai_key_input.setEchoMode(QLineEdit.Password)
+        openai_show_btn = QPushButton("Show")
+        openai_show_btn.clicked.connect(lambda: self._toggle_secret_field_visibility(self.openai_key_input, openai_show_btn))
+        openai_test_btn = QPushButton("Test")
+        openai_test_btn.clicked.connect(self.open_llm_connections_dialog)
+        api_layout.addWidget(openai_label, 1, 0)
+        api_layout.addWidget(self.openai_key_input, 1, 1)
+        api_layout.addWidget(openai_show_btn, 1, 2)
+        api_layout.addWidget(openai_test_btn, 1, 3)
+
+        anthropic_label = QLabel("Anthropic Key")
+        self.anthropic_key_input = QLineEdit()
+        self.anthropic_key_input.setPlaceholderText("sk-ant-...")
+        self.anthropic_key_input.setEchoMode(QLineEdit.Password)
+        anthropic_show_btn = QPushButton("Show")
+        anthropic_show_btn.clicked.connect(
+            lambda: self._toggle_secret_field_visibility(self.anthropic_key_input, anthropic_show_btn)
+        )
+        anthropic_test_btn = QPushButton("Test")
+        anthropic_test_btn.clicked.connect(self.open_llm_connections_dialog)
+        api_layout.addWidget(anthropic_label, 2, 0)
+        api_layout.addWidget(self.anthropic_key_input, 2, 1)
+        api_layout.addWidget(anthropic_show_btn, 2, 2)
+        api_layout.addWidget(anthropic_test_btn, 2, 3)
+
+        defaults_card = QFrame()
+        defaults_card.setObjectName("Card")
+        defaults_layout = QGridLayout(defaults_card)
+        defaults_layout.setContentsMargins(14, 14, 14, 14)
+        defaults_layout.setHorizontalSpacing(8)
+        defaults_layout.setVerticalSpacing(8)
+        defaults_layout.addWidget(QLabel("Transcription Defaults"), 0, 0, 1, 2)
+        defaults_layout.addWidget(QLabel("Default model"), 1, 0)
+        self.default_model_input = QLineEdit(self.config.last_model or "")
+        defaults_layout.addWidget(self.default_model_input, 1, 1)
+        defaults_layout.addWidget(QLabel("Last open folder"), 2, 0)
+        self.default_path_input = QLineEdit(self.last_open_dir or "")
+        defaults_layout.addWidget(self.default_path_input, 2, 1)
+
+        content_layout.addWidget(api_card)
+        content_layout.addWidget(defaults_card)
+        content_layout.addStretch(1)
+        return page
+
+    @Slot(int)
+    def _on_nav_item_changed(self, index: int) -> None:
+        if index < 0:
+            return
+        self.main_stack.setCurrentIndex(index)
+
+    @Slot()
+    def _switch_to_transcription_view(self) -> None:
+        self.nav_list.setCurrentRow(0)
+
+    @Slot()
+    def _toggle_sidebar_collapsed(self) -> None:
+        self._sidebar_collapsed = not self._sidebar_collapsed
+        if self._sidebar_collapsed:
+            self.sidebar_frame.setFixedWidth(52)
+            self.sidebar_brand_label.setText("PS")
+            self.new_project_btn.setVisible(False)
+            self.nav_list.setVisible(False)
+            self.exit_btn.setVisible(False)
+            self.sidebar_toggle_btn.setText("▶")
+            self.sidebar_toggle_btn.setToolTip("Show left panel")
+            self._update_transcription_card_columns()
+            return
+        self.sidebar_frame.setFixedWidth(230)
+        self.sidebar_brand_label.setText("PyScribe")
+        self.new_project_btn.setVisible(True)
+        self.nav_list.setVisible(True)
+        self.exit_btn.setVisible(True)
+        self.sidebar_toggle_btn.setText("◀")
+        self.sidebar_toggle_btn.setToolTip("Hide left panel")
+        self._update_transcription_card_columns()
+
+    @Slot()
+    def _toggle_status_panel_visibility(self) -> None:
+        self._status_panel_hidden = not self._status_panel_hidden
+        if not hasattr(self, "status_panel"):
+            return
+        self.status_panel.setVisible(not self._status_panel_hidden)
+        if hasattr(self, "transcription_splitter"):
+            if self._status_panel_hidden:
+                self.transcription_splitter.setSizes([1200, 0])
+            else:
+                self.transcription_splitter.setSizes([900, 300])
+        if hasattr(self, "status_toggle_btn"):
+            if self._status_panel_hidden:
+                self.status_toggle_btn.setText("◀")
+                self.status_toggle_btn.setToolTip("Show right panel")
+            else:
+                self.status_toggle_btn.setText("▶")
+                self.status_toggle_btn.setToolTip("Hide right panel")
+        self._update_transcription_card_columns()
+
+    def _toggle_secret_field_visibility(self, field: QLineEdit, button: QPushButton) -> None:
+        if field.echoMode() == QLineEdit.Password:
+            field.setEchoMode(QLineEdit.Normal)
+            button.setText("Hide")
+            return
+        field.setEchoMode(QLineEdit.Password)
+        button.setText("Show")
+
+    def _append_terminal_log(self, text: str) -> None:
+        if not hasattr(self, "terminal_log"):
+            return
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self.terminal_log.appendPlainText(f"[{timestamp}] {cleaned}")
+
+    def _update_transcription_card_columns(self) -> None:
+        if not hasattr(self, "settings_grid"):
+            return
+        while self.settings_grid.count():
+            self.settings_grid.takeAt(0)
+
+        available_width = self.width()
+        if hasattr(self, "transcription_scroll"):
+            available_width = int(self.transcription_scroll.viewport().width() or available_width)
+        two_columns = available_width >= 900
+        if two_columns:
+            self.settings_grid.addWidget(self.general_settings_card, 0, 0)
+            self.settings_grid.addWidget(self.advanced_options_card, 0, 1)
+            self.settings_grid.setColumnStretch(0, 1)
+            self.settings_grid.setColumnStretch(1, 1)
+            return
+        self.settings_grid.addWidget(self.general_settings_card, 0, 0)
+        self.settings_grid.addWidget(self.advanced_options_card, 1, 0)
+        self.settings_grid.setColumnStretch(0, 1)
+
+    def _apply_responsive_layout_state(self) -> None:
+        if hasattr(self, "status_panel") and hasattr(self, "status_toggle_btn"):
+            should_hide_status = self.width() < 1080
+            if should_hide_status != self._status_panel_hidden:
+                self._status_panel_hidden = should_hide_status
+                self.status_panel.setVisible(not self._status_panel_hidden)
+            if hasattr(self, "transcription_splitter"):
+                if self._status_panel_hidden:
+                    self.transcription_splitter.setSizes([1200, 0])
+                else:
+                    self.transcription_splitter.setSizes([900, 300])
+            if self._status_panel_hidden:
+                self.status_toggle_btn.setText("◀")
+                self.status_toggle_btn.setToolTip("Show right panel")
+            else:
+                self.status_toggle_btn.setText("▶")
+                self.status_toggle_btn.setToolTip("Hide right panel")
+        self._update_transcription_card_columns()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_responsive_layout_state()
 
     def _build_menus(self) -> None:
         tools_menu = self.menuBar().addMenu("&Tools")
@@ -706,147 +1141,194 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self) -> None:
         applied = self._effective_theme_mode()
-        self.setFont(QFont("Noto Sans", 10))
+        self.setFont(QFont("Segoe UI", 10))
         if applied == "dark":
-            self.setStyleSheet(
-                """
-                QWidget {
-                    background: #0f172a;
-                    color: #e2e8f0;
-                }
-                #pathLabel {
-                    background: #111827;
-                    border: 1px solid #334155;
-                    border-radius: 8px;
-                    padding: 8px;
-                }
-                #hint { color: #94a3b8; }
-                #metricsLabel { color: #94a3b8; font-size: 11px; }
-                #tokenLabel { color: #2dd4bf; font-size: 11px; }
-                #dropZone {
-                    border: 2px dashed #60a5fa;
-                    border-radius: 12px;
-                    background: #1e293b;
-                    color: #93c5fd;
-                    font-weight: 600;
-                }
-                #dropZone[activeDrop="true"] {
-                    border-color: #f97316;
-                    background: #3b2f1a;
-                    color: #fdba74;
-                }
-                QPushButton, QToolButton {
-                    background: #0f766e;
-                    color: white;
-                    border-radius: 8px;
-                    padding: 8px 12px;
-                    font-weight: 600;
-                }
-                QPushButton:disabled, QToolButton:disabled { background: #475569; }
-                QPushButton#exitButton { background: #dc2626; }
-                QPushButton#exitButton:hover { background: #b91c1c; }
-                QCheckBox {
-                    color: #e2e8f0;
-                    font-weight: 600;
-                    spacing: 8px;
-                }
-                QCheckBox::indicator {
-                    width: 20px;
-                    height: 20px;
-                    border: 2px solid #94a3b8;
-                    border-radius: 4px;
-                    background: #111827;
-                }
-                QCheckBox::indicator:checked {
-                    border: 2px solid #0f766e;
-                    background: #0f766e;
-                    image: url(:/qt-project.org/styles/commonstyle/images/checkbox_checked.png);
-                }
-                QTextEdit {
-                    background: #111827;
-                    border: 1px solid #334155;
-                    border-radius: 8px;
-                    padding: 8px;
-                }
-                QProgressBar {
-                    border: 1px solid #334155;
-                    border-radius: 7px;
-                    background: #111827;
-                    text-align: center;
-                }
-                QProgressBar::chunk { border-radius: 6px; }
-                """
-            )
+            window_bg = "#1e1e1e"
+            surface_bg = "#242424"
+            sidebar_bg = "#171717"
+            card_bg = "#232323"
+            border = "#3a3a3a"
+            text = "#e6e6e6"
+            muted = "#9aa4ad"
+            input_bg = "#202020"
+            accent = "#00a3a3"
+            accent_hover = "#008080"
         else:
-            self.setStyleSheet(
-                """
-                QWidget {
-                    background: #f5f7fa;
-                    color: #0f172a;
-                }
-                #pathLabel {
-                    background: #ffffff;
-                    border: 1px solid #d0d7e2;
-                    border-radius: 8px;
-                    padding: 8px;
-                }
-                #hint { color: #334155; }
-                #metricsLabel { color: #475569; font-size: 11px; }
-                #tokenLabel { color: #0f766e; font-size: 11px; }
-                #dropZone {
-                    border: 2px dashed #2563eb;
-                    border-radius: 12px;
-                    background: #eef4ff;
-                    color: #1d4ed8;
-                    font-weight: 600;
-                }
-                #dropZone[activeDrop="true"] {
-                    border-color: #ea580c;
-                    background: #fff7ed;
-                    color: #c2410c;
-                }
-                QPushButton, QToolButton {
-                    background: #0f766e;
-                    color: white;
-                    border-radius: 8px;
-                    padding: 8px 12px;
-                    font-weight: 600;
-                }
-                QPushButton:disabled, QToolButton:disabled { background: #94a3b8; }
-                QPushButton#exitButton { background: #dc2626; }
-                QPushButton#exitButton:hover { background: #b91c1c; }
-                QCheckBox {
-                    color: #0f172a;
-                    font-weight: 600;
-                    spacing: 8px;
-                }
-                QCheckBox::indicator {
-                    width: 20px;
-                    height: 20px;
-                    border: 2px solid #334155;
-                    border-radius: 4px;
-                    background: #ffffff;
-                }
-                QCheckBox::indicator:checked {
-                    border: 2px solid #0f766e;
-                    background: #0f766e;
-                    image: url(:/qt-project.org/styles/commonstyle/images/checkbox_checked.png);
-                }
-                QTextEdit {
-                    background: #ffffff;
-                    border: 1px solid #d0d7e2;
-                    border-radius: 8px;
-                    padding: 8px;
-                }
-                QProgressBar {
-                    border: 1px solid #d0d7e2;
-                    border-radius: 7px;
-                    background: #ffffff;
-                    text-align: center;
-                }
-                QProgressBar::chunk { border-radius: 6px; }
-                """
-            )
+            window_bg = "#f7f9fb"
+            surface_bg = "#f9fbfc"
+            sidebar_bg = "#eef2f4"
+            card_bg = "#ffffff"
+            border = "#d7dfe5"
+            text = "#1f2937"
+            muted = "#5f6d7a"
+            input_bg = "#ffffff"
+            accent = "#008080"
+            accent_hover = "#006b6b"
+
+        self.setStyleSheet(
+            f"""
+            QWidget {{
+                background: {window_bg};
+                color: {text};
+                font-family: "Segoe UI", "Roboto", "Helvetica", sans-serif;
+            }}
+            QPushButton, QFrame, QLineEdit {{
+                border-radius: 8px;
+            }}
+            #Sidebar {{
+                background: {sidebar_bg};
+                border-right: 1px solid {border};
+                padding: 12px;
+            }}
+            #SidebarBrand {{
+                font-weight: 700;
+                padding: 6px 2px;
+                color: {text};
+            }}
+            #SidebarNav {{
+                border: 1px solid {border};
+                background: {sidebar_bg};
+                outline: none;
+                padding: 10px;
+            }}
+            #SidebarNav::item {{
+                padding: 10px 12px;
+                margin: 3px 0;
+                border-radius: 8px;
+            }}
+            #SidebarNav::item:selected {{
+                background: {accent};
+                color: white;
+                font-weight: 600;
+            }}
+            #MainStack {{
+                background: {surface_bg};
+                padding: 12px;
+            }}
+            #MainSurface, #StatusPanel {{
+                background: {surface_bg};
+                border: 1px solid {border};
+                padding: 12px;
+            }}
+            #Card {{
+                background: {card_bg};
+                border: 1px solid {border};
+                padding: 12px;
+            }}
+            #PageTitle {{
+                font-weight: 700;
+                padding-bottom: 2px;
+            }}
+            #PageSubtitle {{
+                color: {muted};
+                padding-bottom: 6px;
+            }}
+            #pathLabel {{
+                background: {input_bg};
+                border: 1px solid {border};
+                padding: 10px 12px;
+            }}
+            #dropZone {{
+                border: 2px dashed {accent};
+                background: {surface_bg};
+                padding: 15px;
+            }}
+            #dropZone[activeDrop="true"] {{
+                border-color: {accent_hover};
+                background: {card_bg};
+            }}
+            #dropTitle {{
+                color: {accent};
+                font-weight: 700;
+                background: transparent;
+            }}
+            #dropSubtitle {{
+                color: {muted};
+                background: transparent;
+            }}
+            QPushButton, QToolButton {{
+                background: {accent};
+                color: white;
+                border: 1px solid {accent};
+                padding: 10px 14px;
+                font-weight: 600;
+            }}
+            QToolButton#sidebarToggleButton, QToolButton#statusToggleButton {{
+                min-width: 24px;
+                max-width: 24px;
+                min-height: 24px;
+                max-height: 24px;
+                padding: 2px;
+                font-weight: 700;
+            }}
+            QPushButton:hover, QToolButton:hover {{
+                background: {accent_hover};
+                border-color: {accent_hover};
+            }}
+            QPushButton:disabled, QToolButton:disabled {{
+                background: #95a5a6;
+                border-color: #95a5a6;
+                color: #f1f5f9;
+            }}
+            QPushButton#exitButton {{
+                background: #b42318;
+                border-color: #b42318;
+            }}
+            QPushButton#exitButton:hover {{
+                background: #991b1b;
+                border-color: #991b1b;
+            }}
+            QLineEdit, QComboBox, QPlainTextEdit, QTextEdit {{
+                background: {input_bg};
+                border: 1px solid {border};
+                padding: 10px 12px;
+                selection-background-color: {accent};
+            }}
+            QGroupBox {{
+                background: {card_bg};
+                border: 1px solid {border};
+                border-radius: 8px;
+                margin-top: 8px;
+                padding: 12px;
+                font-weight: 600;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px;
+                color: {muted};
+            }}
+            QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{
+                border: 1px solid {accent};
+            }}
+            #hint, #metricsLabel {{
+                color: {muted};
+            }}
+            #tokenLabel {{
+                color: {accent};
+                font-weight: 600;
+            }}
+            QProgressBar {{
+                border: 1px solid {border};
+                border-radius: 10px;
+                background: {input_bg};
+                text-align: center;
+                min-height: 20px;
+            }}
+            QProgressBar::chunk {{
+                background: {accent};
+                border-radius: 8px;
+                margin: 1px;
+            }}
+            QPlainTextEdit#TerminalLog {{
+                background: #000000;
+                color: #9df2a7;
+                border: 1px solid #111111;
+                font-family: "Consolas", "Courier New", monospace;
+                padding: 10px;
+            }}
+            """
+        )
 
     @staticmethod
     def _sanitize_theme_mode(value: str) -> str:
@@ -964,6 +1446,7 @@ class MainWindow(QMainWindow):
         self.last_open_dir = os.path.dirname(path) or self.last_open_dir
         self.path_label.setText(path)
         self.status_label.setText(f"Selected: {os.path.basename(path)}")
+        self._append_terminal_log(f"Selected file: {os.path.basename(path)}")
         self._save_config()
 
     @Slot()
@@ -1012,6 +1495,8 @@ class MainWindow(QMainWindow):
         self.diar_time_label.setText("Diarization time: --")
         self.visual_time_label.setText("Visual analysis time: --")
         self.status_label.setText("Starting...")
+        self.terminal_log.clear()
+        self._append_terminal_log(f"Starting job for: {os.path.basename(self.media_path or '')}")
         self.transcribe_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.force_stop_btn.setEnabled(True)
@@ -1035,6 +1520,7 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(
                     f"Speaker backend detection still running; continuing with {get_backend_label(diar_backend_for_run)}."
                 )
+                self._append_terminal_log(self.status_label.text())
         use_visual_analysis = run_visual
         self._current_use_visual_analysis = use_visual_analysis
         visual_profile = self.visual_profile_combo.currentText().strip().lower() or "balanced"
@@ -1138,6 +1624,7 @@ class MainWindow(QMainWindow):
         if self.worker is not None:
             self.worker.request_cancel()
         self.status_label.setText("Cancelling... waiting for current stage to yield.")
+        self._append_terminal_log("Cancellation requested.")
         self.cancel_btn.setEnabled(False)
 
     @Slot()
@@ -1145,6 +1632,7 @@ class MainWindow(QMainWindow):
         if self.worker is not None:
             self.worker.request_force_stop()
         self.status_label.setText("Force stop requested...")
+        self._append_terminal_log("Force-stop requested.")
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
 
@@ -1157,6 +1645,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_status_update(self, text: str) -> None:
         self.status_label.setText(text)
+        self._append_terminal_log(text)
         if text.startswith("Diarization unavailable"):
             self.diarization_warning = text
         # Pyannote diarization can be a long blocking stage; show busy indicator instead of a stuck 25%.
@@ -1217,6 +1706,7 @@ class MainWindow(QMainWindow):
             else:
                 done = "Transcription complete (visual analysis unavailable)."
         self.status_label.setText(done)
+        self._append_terminal_log(done)
         if self._current_run_mode in {"full", "transcribe_only"}:
             self.transcription_time_label.setText(f"Transcription time: {self._format_seconds(transcription_seconds)}")
         else:
@@ -1253,6 +1743,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.diar_progress_bar.setRange(0, 100)
         self.status_label.setText("Error")
+        self._append_terminal_log(f"Error: {error_msg}")
         self.transcription_time_label.setText("Transcription time: --")
         self.diar_time_label.setText("Diarization time: --")
         self.visual_time_label.setText("Visual analysis time: --")
@@ -1278,15 +1769,18 @@ class MainWindow(QMainWindow):
 
     @Slot(bool)
     def _update_diar_ui_state(self, enabled: bool) -> None:
-        _, allow_transcription, allow_diarization, _ = self._effective_service_flags()
-        diar_controls_enabled = bool(enabled and allow_transcription and allow_diarization)
-        if diar_controls_enabled and not self._diar_backends_resolved:
+        del enabled
+        _, allow_transcription, _, _ = self._effective_service_flags()
+        diar_controls_enabled = bool(allow_transcription)
+        if allow_transcription and not self._diar_backends_resolved:
             self._start_diar_backend_probe()
-        combo_enabled = diar_controls_enabled and self._diar_backends_resolved and not self._diar_probe_running()
+        # Keep selector usable immediately with fallback/default options while
+        # lazy backend probing resolves final availability.
+        combo_enabled = allow_transcription
         self.diar_backend_combo.setEnabled(combo_enabled)
-        self.max_speakers_input.setEnabled(diar_controls_enabled)
-        self.diar_progress_bar.setEnabled(diar_controls_enabled)
-        if not diar_controls_enabled:
+        self.max_speakers_input.setEnabled(allow_transcription)
+        self.diar_progress_bar.setEnabled(allow_transcription)
+        if not allow_transcription:
             self.diar_progress_bar.setRange(0, 100)
             self.diar_progress_bar.setValue(0)
             self.diar_progress_bar.setFormat("Diarization disabled")
@@ -1298,7 +1792,8 @@ class MainWindow(QMainWindow):
 
     @Slot(bool)
     def _update_visual_ui_state(self, enabled: bool) -> None:
-        visual_controls_enabled = bool(enabled)
+        del enabled
+        visual_controls_enabled = True
         self.visual_profile_combo.setEnabled(visual_controls_enabled)
         self.visual_backend_combo.setEnabled(visual_controls_enabled)
         self.visual_interval_input.setEnabled(visual_controls_enabled)
@@ -1338,6 +1833,9 @@ class MainWindow(QMainWindow):
             self.diar_backend_combo.setEnabled(False)
             self.max_speakers_input.setEnabled(False)
             self.diar_progress_bar.setEnabled(False)
+            self.visual_profile_combo.setEnabled(False)
+            self.visual_backend_combo.setEnabled(False)
+            self.visual_interval_input.setEnabled(False)
 
         if mode == "visual_only":
             self.progress_bar.setFormat("Visual analysis %p%")

@@ -28,6 +28,11 @@ The format is inspired by Keep a Changelog.
 - Qt and Listener LLM workflows now support optional image attachments for post-processing context.
 - Image-aware payload preparation now checks model multimodal capability and supports OCR fallback via configured OCR backend.
 - LLM connection diagnostics now include local subnet discovery + LAN scan helpers and explicit `lm_studio` provider profile support.
+- Qt main window now uses a unified dashboard shell with left navigation (Transcription, LLM, Settings) and stacked workspaces.
+- Transcription workspace now includes collapsible left navigation and hide/show right status rail controls.
+- Transcription workspace now includes a terminal-style live pipeline event log panel.
+- Qt LLM post-process dialog now uses a splitter layout with grouped configuration/attachments and structured context/preview/output panes.
+- LLM post-process flow now includes explicit cancel confirmation with close-window cancellation handling.
 
 ### Changed
 
@@ -59,6 +64,10 @@ The format is inspired by Keep a Changelog.
 - Config persistence now strips plaintext LLM API keys from disk writes.
 - LLM post-processing now enforces endpoint scope/CIDR policy at run time (not only during connection tests).
 - LLM connection/post-process HTTP calls now honor profile `verify_tls` behavior for HTTPS endpoints.
+- Qt theme/QSS styling refreshed to a card-based teal-accent design for both light and dark themes.
+- Qt transcription settings cards now adapt between two-column and single-column layouts based on available width.
+- Qt startup sizing now fits to available screen area to avoid oversized initial windows on smaller displays.
+- Qt diarization backend selector now remains usable while lazy backend probing resolves capability details.
 
 ### Fixed
 
@@ -66,6 +75,8 @@ The format is inspired by Keep a Changelog.
 - Prevented startup stalls from eager NeMo/Sortformer availability checks during initial Qt window construction.
 - LLM post-processing now retries once with an extended timeout when the first request times out (helps cold model starts).
 - Public listener share mode now requires authentication credentials, including localhost share scenarios.
+- Fixed Qt startup/import error for missing `QSplitter` symbol in the refactored transcription layout.
+- Fixed Qt font warning spam (`QFont::setPointSize <= 0`) triggered during dynamic resize in the new GUI layout.
 
 ## [2026-02-04]
 

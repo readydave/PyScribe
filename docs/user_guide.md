@@ -31,9 +31,20 @@ If you run `python main.py` with no mode, you get an interactive launcher menu.
 
 ## 3) Qt Desktop Features
 
+### Layout + Navigation
+
+- The main Qt window uses a left navigation sidebar and a right content stack:
+  - **Transcription**
+  - **LLM**
+  - **Settings**
+- **New Project** returns to the Transcription screen.
+- Left sidebar can be collapsed/expanded with the small toggle button in the sidebar header.
+- Transcription screen includes a right-side status rail that can also be hidden/shown from the page header.
+- The app now opens sized to the available screen area and remains fully resizable.
+
 ### File Selection
 
-- **Browse**: open file picker for media.
+- **Browse Files** (inside drop zone): open file picker for media.
 - **Drag-and-drop zone**: drop a media file directly.
 - **Open Folder**: open selected file directory (or last-used folder if no file selected).
 
@@ -67,7 +78,7 @@ If both transcription and visuals are off, PyScribe blocks run start.
 - **Mode**: backend selector for diarization engine.
 - **Max Speakers**: optional speaker cap (blank = auto).
 - Diarization progress bar:
-  - Hidden/disabled when diarization is off.
+  - Disabled when transcription is off.
   - Shows indeterminate state during long diarization operations.
 
 ### Visual Analysis Controls
@@ -111,6 +122,7 @@ Fallback behavior:
 ### Status + Timing
 
 - Main status label shows current stage and results.
+- Transcription view includes a terminal-style live event log panel.
 - HF token status label shows whether a token is configured.
 - Progress bars:
   - transcription progress
@@ -120,6 +132,14 @@ Fallback behavior:
   - diarization time
   - visual analysis time
 - Hardware metrics label includes CPU/RAM and GPU/VRAM when available.
+
+### Responsive Behavior
+
+- General and Advanced settings render in:
+  - two columns on wider window sizes
+  - one stacked column on narrower sizes
+- Right status rail auto-hides on narrow windows and can be manually toggled.
+- Both transcription center content and settings page content use scroll areas for smaller displays.
 
 ### Menus
 
@@ -179,9 +199,14 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 - Scope policy is enforced at run time (not only during connection tests).
 - Open **Tools > LLM Post-Process...** for the current transcript, or
   **Tools > Process Existing Transcript...** to load a saved transcript file.
+- The dialog uses a split workspace:
+  - Left: configuration + attachments
+  - Right: input context, payload preview, and output panes
 - Select profile, template, and model, then run post-processing.
 - You can create/edit/delete custom user templates in the same dialog (built-ins remain read-only).
 - Use **Pasted Context**, optional image attachments, and **Payload Preview** to review exactly what will be sent before execution.
+- **Cancel Generation** now prompts for confirmation and immediately requests cancellation.
+- Closing the dialog during active generation prompts to cancel before the window closes.
 - For image attachments:
   - Multimodal-capable models receive image content directly.
   - Text-only models can use OCR fallback to convert image context into text.

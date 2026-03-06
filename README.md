@@ -16,14 +16,20 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Local transcription using `faster-whisper`
 - Hardware-aware model recommendations
 - Qt desktop mode and Gradio listener mode
+- Qt unified dashboard layout with left navigation and stacked workspaces
+- Responsive transcription cards (two-column on wide windows, single-column on narrow windows)
+- Hide/show controls for the left navigation panel and right status panel
 - Optional speaker diarization with selectable backend
 - Optional visual analysis (OCR on sampled video frames)
 - Live status, progress, and transcript updates
+- Real-time terminal-style pipeline log in Qt transcription view
 - Qt controls for cancel and force stop
 - Save modes: combined output, transcript-only, OCR-only
 - Optional Hugging Face token support for gated/private model access
 - Qt LLM connection profiles (local/LAN) with connection diagnostics
 - Qt LLM post-processing for current transcript or previously saved transcript files
+- Qt LLM split workspace with configuration/attachments panel and structured context/preview/output panes
+- LLM generation cancel flow with confirmation and safe close behavior while generation is active
 - Listener LLM post-processing panel for template-based processing of current or uploaded transcripts
 - User template management (custom prompt templates) and payload preview before send
 - Optional screenshot/image attachments with multimodal send or OCR fallback for text-only models
@@ -58,6 +64,12 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Improved NeMo Sortformer compatibility across modern and legacy API paths, with CUDA-aware availability checks.
 - Throttled live transcript text updates in the transcription pipeline for smoother UI updates during long runs.
 - Added regression tests for listener security helpers and diarization backend compatibility.
+- Refreshed Qt main window with a sidebar + stacked dashboard layout and modernized light/dark QSS styling.
+- Added responsive transcription layout behavior, including startup sizing to available screen and adaptive card columns.
+- Added hide/show toggles for left navigation and right status rail in the transcription workspace.
+- Added a terminal-style live pipeline log panel in Qt transcription view.
+- Refactored Qt LLM post-process dialog into a splitter-based workspace with grouped configuration and output panes.
+- Added confirmed-cancel handling for active LLM generation, including close-window cancellation behavior.
 
 ## Requirements
 

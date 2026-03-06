@@ -14,12 +14,16 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
+    QSplitter,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -267,9 +271,21 @@ class LLMPostprocessDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setSpacing(10)
+        root.setSpacing(8)
+        root.setContentsMargins(10, 10, 10, 10)
 
-        config_form = QFormLayout()
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+
+        left_panel = QWidget()
+        left_panel.setMinimumWidth(330)
+        left_panel.setMaximumWidth(430)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(6, 6, 6, 6)
+        left_layout.setSpacing(10)
+
+        config_group = QGroupBox("Configuration")
+        config_form = QFormLayout(config_group)
         config_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         self.profile_combo = QComboBox()
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
@@ -299,7 +315,12 @@ class LLMPostprocessDialog(QDialog):
         config_form.addRow("Profile", self._wrap_layout(profile_row))
         config_form.addRow("Template", self._wrap_layout(template_row))
         config_form.addRow("Model", self.model_combo)
-        root.addLayout(config_form)
+        left_layout.addWidget(config_group)
+
+        attachments_group = QGroupBox("Attachments")
+        attachments_layout = QVBoxLayout(attachments_group)
+        attachments_layout.setContentsMargins(10, 12, 10, 12)
+        attachments_layout.setSpacing(8)
 
         source_row = QHBoxLayout()
         self.use_current_checkbox = QCheckBox("Use current transcript from main window")
@@ -309,15 +330,17 @@ class LLMPostprocessDialog(QDialog):
         self.load_transcript_btn.clicked.connect(self._on_load_transcript)
         self.load_ocr_btn = QPushButton("Load OCR File (optional)...")
         self.load_ocr_btn.clicked.connect(self._on_load_ocr)
-        source_row.addWidget(self.use_current_checkbox)
+        attachments_layout.addWidget(self.use_current_checkbox)
         source_row.addWidget(self.load_transcript_btn)
         source_row.addWidget(self.load_ocr_btn)
-        root.addLayout(source_row)
+        attachments_layout.addLayout(source_row)
 
         self.source_label = QLabel("")
         self.ocr_label = QLabel("")
-        root.addWidget(self.source_label)
-        root.addWidget(self.ocr_label)
+        self.source_label.setWordWrap(True)
+        self.ocr_label.setWordWrap(True)
+        attachments_layout.addWidget(self.source_label)
+        attachments_layout.addWidget(self.ocr_label)
 
         image_row = QHBoxLayout()
         self.include_images_checkbox = QCheckBox("Include image attachments")
@@ -329,7 +352,7 @@ class LLMPostprocessDialog(QDialog):
         image_row.addWidget(self.include_images_checkbox)
         image_row.addWidget(self.load_images_btn)
         image_row.addWidget(self.clear_images_btn)
-        root.addLayout(image_row)
+        attachments_layout.addLayout(image_row)
 
         image_opts_row = QHBoxLayout()
         image_opts_row.addWidget(QLabel("Image OCR fallback backend"))
@@ -341,31 +364,49 @@ class LLMPostprocessDialog(QDialog):
         self.image_ocr_fallback_checkbox.setChecked(bool(self._config.llm_ocr_fallback_for_images_default))
         image_opts_row.addWidget(self.image_ocr_fallback_checkbox)
         image_opts_row.addStretch(1)
-        root.addLayout(image_opts_row)
+        attachments_layout.addLayout(image_opts_row)
 
         self.images_label = QLabel("No image attachments selected.")
-        root.addWidget(self.images_label)
+        self.images_label.setWordWrap(True)
+        attachments_layout.addWidget(self.images_label)
 
         self.drop_target = FileDropTarget("Drop transcript/OCR text files and images here")
         self.drop_target.files_dropped.connect(self._on_files_dropped)
-        root.addWidget(self.drop_target)
+        attachments_layout.addWidget(self.drop_target)
+        left_layout.addWidget(attachments_group, 1)
 
-        root.addWidget(QLabel("Additional Notes"))
-        self.notes_box = QTextEdit()
+        left_layout.addStretch(1)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setSpacing(10)
+
+        input_card = QFrame()
+        input_card.setObjectName("Card")
+        input_layout = QVBoxLayout(input_card)
+        input_layout.setContentsMargins(10, 10, 10, 10)
+        input_layout.setSpacing(6)
+        input_layout.addWidget(QLabel("Input Context"))
+
+        input_layout.addWidget(QLabel("Additional Notes"))
+        self.notes_box = QPlainTextEdit()
         self.notes_box.setPlaceholderText("Short notes/instructions to include in post-processing (optional).")
         self.notes_box.setMinimumHeight(80)
-        root.addWidget(self.notes_box)
+        input_layout.addWidget(self.notes_box)
 
-        root.addWidget(QLabel("Pasted Context"))
-        self.extra_context_box = QTextEdit()
+        input_layout.addWidget(QLabel("Pasted Context"))
+        self.extra_context_box = QPlainTextEdit()
         self.extra_context_box.setPlaceholderText("Paste additional context text (optional).")
         self.extra_context_box.setMinimumHeight(90)
-        root.addWidget(self.extra_context_box)
+        input_layout.addWidget(self.extra_context_box)
+        right_layout.addWidget(input_card, 1)
 
-        self.connection_status = QLabel("Connection test optional. Click 'Refresh Connection + Models' to validate.")
-        self.connection_status.setWordWrap(True)
-        root.addWidget(self.connection_status)
-
+        preview_card = QFrame()
+        preview_card.setObjectName("Card")
+        preview_layout = QVBoxLayout(preview_card)
+        preview_layout.setContentsMargins(10, 10, 10, 10)
+        preview_layout.setSpacing(6)
         preview_row = QHBoxLayout()
         preview_row.addWidget(QLabel("Payload Preview"))
         self.preview_required_checkbox = QCheckBox("Require confirmation before send")
@@ -376,14 +417,20 @@ class LLMPostprocessDialog(QDialog):
         self.preview_btn = QPushButton("Preview Payload")
         self.preview_btn.clicked.connect(self._on_preview_payload)
         preview_row.addWidget(self.preview_btn)
-        root.addLayout(preview_row)
+        preview_layout.addLayout(preview_row)
 
-        self.preview_box = QTextEdit()
+        self.preview_box = QPlainTextEdit()
         self.preview_box.setReadOnly(True)
         self.preview_box.setPlaceholderText("Preview of request payload sent to the LLM.")
         self.preview_box.setMinimumHeight(140)
-        root.addWidget(self.preview_box)
+        preview_layout.addWidget(self.preview_box)
+        right_layout.addWidget(preview_card, 1)
 
+        output_card = QFrame()
+        output_card.setObjectName("Card")
+        output_layout = QVBoxLayout(output_card)
+        output_layout.setContentsMargins(10, 10, 10, 10)
+        output_layout.setSpacing(6)
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel("LLM Output"))
         output_row.addStretch(1)
@@ -395,15 +442,30 @@ class LLMPostprocessDialog(QDialog):
         self.save_btn.clicked.connect(self._on_save_output)
         output_row.addWidget(self.copy_btn)
         output_row.addWidget(self.save_btn)
-        root.addLayout(output_row)
+        output_layout.addLayout(output_row)
 
-        self.output_box = QTextEdit()
+        self.output_box = QPlainTextEdit()
         self.output_box.setReadOnly(True)
         self.output_box.setPlaceholderText("Generated post-processing output appears here.")
-        root.addWidget(self.output_box, 1)
+        self.output_box.setMinimumHeight(180)
+        output_layout.addWidget(self.output_box, 1)
+        right_layout.addWidget(output_card, 1)
 
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        root.addWidget(splitter, 1)
+
+        footer = QFrame()
+        footer.setObjectName("Card")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(10, 10, 10, 10)
+        footer_layout.setSpacing(8)
+        self.connection_status = QLabel("Connection test optional. Click 'Refresh Connection + Models' to validate.")
+        self.connection_status.setWordWrap(True)
+        footer_layout.addWidget(self.connection_status, 1)
         actions = QHBoxLayout()
-        actions.addStretch(1)
         self.run_btn = QPushButton("Run Post-Process")
         self.run_btn.clicked.connect(self._on_run_postprocess)
         self.cancel_run_btn = QPushButton("Cancel Generation")
@@ -414,7 +476,8 @@ class LLMPostprocessDialog(QDialog):
         actions.addWidget(self.run_btn)
         actions.addWidget(self.cancel_run_btn)
         actions.addWidget(self.close_btn)
-        root.addLayout(actions)
+        footer_layout.addLayout(actions)
+        root.addWidget(footer)
 
     def _wrap_layout(self, layout: QHBoxLayout) -> QWidget:
         wrapper = QWidget()

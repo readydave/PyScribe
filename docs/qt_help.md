@@ -2,7 +2,7 @@
 
 ## Quick Start
 
-1. Click **Browse** (or drag and drop a media file) to select audio/video.
+1. Use **Browse Files** in the drop zone (or drag and drop a media file) to select audio/video.
 2. Pick a model in the **Model** dropdown (built-in or custom `owner/repo`).
 3. Choose processing options (**Transcribe audio**, **Speaker Identification**, **Analyze visuals**).
 4. Click **Process File**.
@@ -10,7 +10,10 @@
 
 ## Main Window
 
-- **Browse / Drop zone**: choose a local media file.
+- **Navigation sidebar**: switch between **Transcription**, **LLM**, and **Settings** screens.
+- **Sidebar toggle**: collapse/expand the left navigation area.
+- **Status panel toggle**: hide/show the right status rail on the transcription page.
+- **Drop zone**: choose a local media file via drag/drop or **Browse Files**.
 - **Model**: supports built-in model names and custom Hugging Face repo IDs.
 - **Recommended model label**: shows the hardware-based recommendation.
 - **Status + metrics**:
@@ -21,6 +24,10 @@
   - Transcription progress bar and elapsed time
   - Diarization progress bar and elapsed time (when enabled)
   - Visual analysis elapsed time (when enabled)
+- **Live pipeline log**:
+  - Terminal-style read-only event feed for real-time stage updates.
+- **Responsive cards**:
+  - General/Advanced settings show in two columns on wide windows and collapse to one column on narrow windows.
 
 ## Processing Options
 
@@ -105,6 +112,15 @@ Before transcription, PyScribe may detect language and prompt:
 - **Copy**: copy transcript to clipboard.
 - **Open Folder**: open selected media folder (or last-open folder when no file selected).
 - **Exit**: close app (blocked while a job is running).
+
+## LLM Post-Process Dialog
+
+- Split layout:
+  - Left: **Configuration** and **Attachments**
+  - Right: **Input Context**, **Payload Preview**, **LLM Output**
+- **Cancel Generation** asks for confirmation before stopping an in-flight request.
+- If you close the dialog during generation, PyScribe asks whether to cancel first.
+- Partial output is preserved when cancellation occurs after streaming has started.
 
 ## Model and Download Notes
 

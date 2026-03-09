@@ -718,8 +718,8 @@ class MainWindow(QMainWindow):
         visual_grid.addWidget(self.visual_profile_combo, 0, 1)
         visual_grid.addWidget(QLabel("OCR Backend"), 1, 0)
         self.visual_backend_combo = QComboBox()
-        self.visual_backend_combo.addItems(["paddleocr", "surya", "pytesseract", "auto"])
-        ocr_idx = self.visual_backend_combo.findText(str(self.config.visual_ocr_backend or "paddleocr").lower())
+        self.visual_backend_combo.addItems(["auto", "rapidocr", "paddleocr", "surya", "pytesseract"])
+        ocr_idx = self.visual_backend_combo.findText(str(self.config.visual_ocr_backend or "auto").lower())
         if ocr_idx < 0:
             ocr_idx = 0
         self.visual_backend_combo.setCurrentIndex(ocr_idx)
@@ -1524,13 +1524,17 @@ class MainWindow(QMainWindow):
         use_visual_analysis = run_visual
         self._current_use_visual_analysis = use_visual_analysis
         visual_profile = self.visual_profile_combo.currentText().strip().lower() or "balanced"
-        visual_ocr_backend = self.visual_backend_combo.currentText().strip().lower() or "paddleocr"
+        visual_ocr_backend = self.visual_backend_combo.currentText().strip().lower() or "auto"
         if use_visual_analysis:
             ready, reason = check_ocr_backend_ready(visual_ocr_backend)
             if not ready:
-                fallback = "paddleocr"
-                fallback_ready, _ = check_ocr_backend_ready(fallback)
-                if fallback_ready and visual_ocr_backend != fallback:
+                fallback = ""
+                for candidate in ("rapidocr", "paddleocr", "pytesseract", "surya"):
+                    fallback_ready, _ = check_ocr_backend_ready(candidate)
+                    if fallback_ready and candidate != visual_ocr_backend:
+                        fallback = candidate
+                        break
+                if fallback:
                     answer = QMessageBox.question(
                         self,
                         "OCR backend unavailable",

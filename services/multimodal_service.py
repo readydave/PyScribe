@@ -37,8 +37,13 @@ _UI_NOISE_TERMS = (
     "share leave",
     "sysadmin meeting",
     "banfield",
+    "slide show",
+    "slideshow",
+    "animations",
+    "add-ins",
 )
 _PADDLE_OCR = None
+_RAPID_OCR = None
 _SURYA_DET_PREDICTOR = None
 _SURYA_REC_PREDICTOR = None
 _VISUAL_PROFILE_SETTINGS: dict[str, dict[str, float | int]] = {
@@ -92,6 +97,11 @@ def check_ocr_backend_ready(backend: str) -> tuple[bool, str | None]:
                 False,
                 "Install Surya OCR: pip install surya-ocr (note: this may require a newer Torch stack).",
             )
+        return True, None
+
+    if requested == "rapidocr":
+        if importlib.util.find_spec("rapidocr_onnxruntime") is None:
+            return False, "Install RapidOCR: pip install rapidocr-onnxruntime"
         return True, None
 
     if requested == "pytesseract":
@@ -154,7 +164,7 @@ def extract_text_from_images(
 def analyze_video_stream(
     media_path: str,
     *,
-    ocr_backend: str = "paddleocr",
+    ocr_backend: str = "auto",
     visual_profile: str = "balanced",
     sample_seconds: float = 1.0,
     max_frames: int | None = None,
@@ -172,6 +182,12 @@ def analyze_video_stream(
     if max_frames is None:
         max_frames = int(profile_cfg["max_frames"])
     max_frames = max(1, int(max_frames))
+    media_duration_seconds = _get_video_duration_seconds(media_path)
+    effective_sample_seconds = _resolve_effective_sample_seconds(
+        requested_sample_seconds=sample_seconds,
+        max_frames=max_frames,
+        media_duration_seconds=media_duration_seconds,
+    )
 
     if not _has_video_stream(media_path):
         return VisualAnalysisResult(
@@ -206,7 +222,7 @@ def analyze_video_stream(
         frames = _extract_sampled_frames(
             media_path=media_path,
             out_dir=temp_dir,
-            sample_seconds=sample_seconds,
+            sample_seconds=effective_sample_seconds,
             max_frames=max_frames,
         )
 
@@ -246,7 +262,7 @@ def analyze_video_stream(
                 return VisualAnalysisResult(
                     report=_format_visual_report(
                         partial=True,
-                        sample_seconds=sample_seconds,
+                        sample_seconds=effective_sample_seconds,
                         frames_scanned=idx - 1,
                         visual_profile=visual_profile,
                         requested_backend=requested_backend,
@@ -333,14 +349,18 @@ def analyze_video_stream(
                     canonical_lines[canonical] = line
                     line_source[canonical] = source
                 line_counts[canonical] += 1
-                if line_source.get(canonical) == "slide" and source == "chat":
-                    # If seen in chat panel later, classify as chat (higher value for chat capture).
+                if line_source.get(canonical) == "slide" and source == "chat" and _prefer_chat_source(line):
+                    # Reclassify only when the right-side line looks like actual chat content.
                     line_source[canonical] = "chat"
                 current_keys.add(canonical)
                 if source == "slide":
                     detected_slide_keys.add(canonical)
                 else:
                     detected_chat_keys.add(canonical)
+                if source == "slide" and _is_low_value_slide_line(canonical_lines[canonical]):
+                    continue
+                if source == "chat" and _is_low_value_chat_line(canonical_lines[canonical]):
+                    continue
                 existing_new_lines = [text for _, text in newly_visible]
                 if canonical not in prev_keys and not _line_exists_similar(canonical_lines[canonical], existing_new_lines):
                     newly_visible.append((line_source.get(canonical, source), canonical_lines[canonical]))
@@ -355,8 +375,8 @@ def analyze_video_stream(
                 last_visible_chat_keys = set()
 
             if newly_visible:
-                timestamp = _seconds_to_hhmmss((idx - 1) * sample_seconds)
-                excerpt = " | ".join(f"[{src}] {txt}" for src, txt in newly_visible[:2])
+                timestamp = _seconds_to_hhmmss((idx - 1) * effective_sample_seconds)
+                excerpt = " | ".join(f"[{src}] {txt}" for src, txt in newly_visible[:3])
                 timeline.append(f"- [{timestamp}] {excerpt}")
             prev_keys = current_keys
             if on_progress:
@@ -364,7 +384,7 @@ def analyze_video_stream(
 
         report = _format_visual_report(
             partial=False,
-            sample_seconds=sample_seconds,
+            sample_seconds=effective_sample_seconds,
             frames_scanned=len(frames),
             visual_profile=visual_profile,
             requested_backend=requested_backend,
@@ -400,6 +420,44 @@ def _has_video_stream(media_path: str) -> bool:
     except Exception:
         return False
     return any(s.get("codec_type") == "video" for s in streams)
+
+
+def _get_video_duration_seconds(media_path: str) -> float | None:
+    try:
+        probe = ffmpeg.probe(media_path)
+    except Exception:
+        return None
+
+    try:
+        duration = float(probe.get("format", {}).get("duration"))
+        if duration > 0:
+            return duration
+    except Exception:
+        pass
+
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") != "video":
+            continue
+        try:
+            duration = float(stream.get("duration"))
+        except Exception:
+            continue
+        if duration > 0:
+            return duration
+    return None
+
+
+def _resolve_effective_sample_seconds(
+    *,
+    requested_sample_seconds: float,
+    max_frames: int,
+    media_duration_seconds: float | None,
+) -> float:
+    requested = max(0.5, float(requested_sample_seconds or 1.0))
+    if not media_duration_seconds or media_duration_seconds <= 0 or max_frames <= 0:
+        return requested
+    duration_based = max(0.5, float(media_duration_seconds) / float(max_frames))
+    return max(requested, duration_based)
 
 
 def _extract_sampled_frames(
@@ -447,19 +505,22 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None) -> O
 
     backend_builders: dict[str, Callable[..., OcrBackendBuildResult]] = {
         "paddleocr": _build_paddle_ocr_fn,
+        "rapidocr": _build_rapid_ocr_fn,
         "surya": _build_surya_ocr_fn,
         "pytesseract": lambda **_: _build_tesseract_ocr_fn(),
     }
     if requested == "auto":
-        order = ["paddleocr", "surya", "pytesseract"]
+        order = ["paddleocr", "rapidocr", "surya", "pytesseract"]
+    elif requested == "rapidocr":
+        order = ["rapidocr", "paddleocr", "pytesseract"]
     elif requested == "surya":
-        order = ["surya", "paddleocr", "pytesseract"]
+        order = ["surya", "rapidocr", "paddleocr", "pytesseract"]
     elif requested == "paddleocr":
-        order = ["paddleocr", "pytesseract"]
+        order = ["paddleocr", "rapidocr", "pytesseract"]
     elif requested == "pytesseract":
         order = ["pytesseract"]
     else:
-        order = ["paddleocr", "surya", "pytesseract"]
+        order = ["paddleocr", "rapidocr", "surya", "pytesseract"]
 
     for name in order:
         fn, reason = backend_builders[name](on_status=on_status)
@@ -600,6 +661,33 @@ def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBacke
         return _ocr, None
     except Exception as exc:
         return None, f"PaddleOCR init/runtime error: {exc}"
+
+
+def _build_rapid_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBackendBuildResult:
+    global _RAPID_OCR
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except Exception as exc:
+        return None, f"Install RapidOCR backend: pip install rapidocr-onnxruntime ({exc})"
+
+    try:
+        if _RAPID_OCR is None:
+            if on_status:
+                on_status("Initializing RapidOCR (first run may download OCR model files)...")
+            _RAPID_OCR = RapidOCR()
+
+        def _ocr(image: "Image.Image", mode: str = "slide") -> str:
+            import numpy as np
+
+            image_np = np.array(image)
+            min_conf = 0.48 if mode == "slide" else 0.40
+            result, _ = _RAPID_OCR(image_np)
+            lines = _extract_rapidocr_lines(result, min_conf=min_conf)
+            return "\n".join(lines)
+
+        return _ocr, None
+    except Exception as exc:
+        return None, f"RapidOCR init/runtime error: {exc}"
 
 
 def _extract_paddle_lines(result: object, *, min_conf: float) -> list[str]:
@@ -773,14 +861,31 @@ def _extract_ocr_lines(text: str) -> list[str]:
     return lines
 
 
+def _extract_rapidocr_lines(result: object, *, min_conf: float) -> list[str]:
+    lines: list[str] = []
+    if not isinstance(result, list):
+        return lines
+    for item in result:
+        if not isinstance(item, (list, tuple)) or len(item) < 3:
+            continue
+        text = str(item[1] or "").strip()
+        if not text:
+            continue
+        try:
+            conf = float(item[2]) if item[2] is not None else 1.0
+        except Exception:
+            conf = 1.0
+        if conf >= min_conf:
+            lines.append(text)
+    return lines
+
+
 def _extract_rois(image: "Image.Image") -> dict[str, "Image.Image"]:
     w, h = image.size
-    top = int(h * 0.12)
-    bottom = int(h * 0.93)
+    top = int(h * 0.05)
+    bottom = int(h * 0.96)
     left = int(w * 0.01)
-    slide_right = int(w * 0.84)
-    if slide_right - left < 240:
-        slide_right = int(w * 0.99)
+    slide_right = int(w * 0.99)
 
     rois = {
         "slide": image.crop((left, top, slide_right, bottom)),
@@ -815,13 +920,72 @@ def _line_exists_similar(candidate: str, existing_lines: list[str]) -> bool:
     return False
 
 
+def _looks_like_person_name(line: str) -> bool:
+    normalized = re.sub(r"\s+", " ", line or "").strip()
+    if not normalized or any(char.isdigit() for char in normalized):
+        return False
+    parts = re.findall(r"[A-Za-z][A-Za-z'-]*", normalized.replace(".", " "))
+    if len(parts) < 2 or len(parts) > 4:
+        return False
+    if len("".join(parts)) < 6:
+        return False
+    if re.search(r"[:;,.!?()%$]", normalized.replace(".", "")):
+        return False
+    for part in parts:
+        if len(part) == 1:
+            continue
+        if not part[:1].isupper():
+            return False
+    return True
+
+
 def _is_chat_like(line: str) -> bool:
     return bool(re.match(r"^[A-Za-z][A-Za-z0-9_. -]{0,24}:\s+\S+", line))
 
 
+def _is_low_value_chat_line(line: str) -> bool:
+    normalized = re.sub(r"\s+", " ", line or "").strip()
+    if not normalized:
+        return True
+    if _is_ui_noise_line(normalized):
+        return True
+    if re.fullmatch(r"[\d:.]+", normalized):
+        return True
+    if _looks_like_person_name(normalized):
+        return True
+    if _is_chat_like(normalized):
+        return False
+    if any(char.isdigit() for char in normalized):
+        return False
+    if re.search(r"[.!?;,]", normalized):
+        return False
+    words = re.findall(r"[A-Za-z]+", normalized)
+    if not words:
+        return True
+    if len(words) <= 2 and all(word[:1].isupper() for word in words):
+        return True
+    if len(words) <= 3 and len(normalized) <= 24:
+        return True
+    return False
+
+
+def _prefer_chat_source(line: str) -> bool:
+    return _is_chat_like(line) or not _is_low_value_chat_line(line)
+
+
 def _is_ui_noise_line(line: str) -> bool:
     lower = line.lower()
+    if lower in {"chat", "people", "raise", "react", "camera", "mic", "share", "leave", "view", "notes"}:
+        return True
     if any(term in lower for term in _UI_NOISE_TERMS):
+        return True
+    if re.search(r"\banimat\w*", lower):
+        return True
+    if ("shom" in lower or "side sh" in lower or "side sho" in lower) and re.search(r"(animat|armat)", lower):
+        return True
+    if re.search(r"\bslide\s*s\w*", lower):
+        return True
+    if re.search(r"\b(home|record|review|add-ins|view|help)\b", lower) and len(lower) <= 36:
         return True
     if re.search(r"\b(chat|people|raise|react|camera|mic|share|leave|copilot|apps|view|notes)\b", lower):
         if len(lower.split()) >= 4:
@@ -834,6 +998,8 @@ def _is_ui_noise_line(line: str) -> bool:
 def _is_persistent_noise(line: str, count: int, total_frames: int) -> bool:
     if total_frames <= 0:
         return False
+    if (_looks_like_person_name(line) or _is_low_value_slide_line(line) or _is_low_value_chat_line(line)) and count >= max(6, int(total_frames * 0.18)):
+        return True
     if count >= max(8, int(total_frames * 0.6)):
         if len(line) <= 36 or _is_ui_noise_line(line):
             return True
@@ -844,15 +1010,39 @@ def _is_low_value_slide_line(line: str) -> bool:
     normalized = re.sub(r"\s+", " ", line or "").strip()
     if not normalized:
         return True
+    if _looks_like_person_name(normalized):
+        return True
     if re.search(r"\d", normalized):
         return False
     words = re.findall(r"[A-Za-z]+", normalized)
     if len(words) <= 1:
         return True
     # Filter likely participant-name fragments from side panes.
-    if len(words) <= 2 and all(w[:1].isupper() for w in words):
+    if len(words) <= 3 and len(normalized) <= 32 and all(w[:1].isupper() for w in words):
         return True
     return False
+
+
+def _slide_sort_key(key: str, line_counts: Counter[str], canonical_lines: dict[str, str]) -> tuple[float, int, str]:
+    line = canonical_lines.get(key, "")
+    score = float(line_counts[key])
+    if re.search(r"\d", line):
+        score += 1.0
+    if re.search(r"[:;,.()%$]", line):
+        score += 0.8
+    score += min(len(line), 120) / 80.0
+    return (-score, -line_counts[key], line.lower())
+
+
+def _chat_sort_key(key: str, line_counts: Counter[str], canonical_lines: dict[str, str]) -> tuple[float, int, str]:
+    line = canonical_lines.get(key, "")
+    score = float(line_counts[key])
+    if _is_chat_like(line):
+        score += 2.0
+    if re.search(r"[:;,.!?]", line):
+        score += 1.2
+    score += min(len(line), 120) / 60.0
+    return (-score, -line_counts[key], line.lower())
 
 
 def _seconds_to_hhmmss(total_seconds: float) -> str:
@@ -915,8 +1105,15 @@ def _format_visual_report(
         for k in sorted_keys
         if line_source.get(k, "slide") == "slide"
         and not _is_low_value_slide_line(canonical_lines.get(k, ""))
-    ][:12]
-    top_chat = [k for k in sorted_keys if line_source.get(k, "slide") == "chat"][:12]
+    ]
+    slide_keys = sorted(slide_keys, key=lambda k: _slide_sort_key(k, line_counts, canonical_lines))[:18]
+    top_chat = [
+        k
+        for k in sorted_keys
+        if line_source.get(k, "slide") == "chat"
+        and not _is_low_value_chat_line(canonical_lines.get(k, ""))
+    ]
+    top_chat = sorted(top_chat, key=lambda k: _chat_sort_key(k, line_counts, canonical_lines))[:18]
 
     if slide_keys:
         lines.append("- Likely slide/presentation text:")
@@ -930,7 +1127,7 @@ def _format_visual_report(
 
     if timeline:
         lines.append("- Timeline (new on-screen text):")
-        lines.extend(timeline[:25])
+        lines.extend(timeline[:40])
 
     return "\n".join(lines)
 

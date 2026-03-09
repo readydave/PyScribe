@@ -355,7 +355,7 @@ def transcribe_media_file(
     max_speakers: int | None = None,
     use_visual_analysis: bool = False,
     visual_profile: str = "balanced",
-    visual_ocr_backend: str = "paddleocr",
+    visual_ocr_backend: str = "auto",
     visual_sample_seconds: float = 1.0,
     on_status: StatusCallback | None = None,
     on_text: TextCallback | None = None,

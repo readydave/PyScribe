@@ -357,7 +357,7 @@ class LLMPostprocessDialog(QDialog):
         image_opts_row = QHBoxLayout()
         image_opts_row.addWidget(QLabel("Image OCR fallback backend"))
         self.image_ocr_backend_combo = QComboBox()
-        self.image_ocr_backend_combo.addItems(["auto", "paddleocr", "surya", "pytesseract"])
+        self.image_ocr_backend_combo.addItems(["auto", "rapidocr", "paddleocr", "surya", "pytesseract"])
         self.image_ocr_backend_combo.setCurrentText("auto")
         image_opts_row.addWidget(self.image_ocr_backend_combo)
         self.image_ocr_fallback_checkbox = QCheckBox("Use OCR fallback for text-only models")

@@ -494,19 +494,35 @@ def transcribe(
         )
         return
     visual_profile = str(visual_profile or "balanced").lower()
-    visual_ocr_backend = str(visual_ocr_backend or "paddleocr").lower()
+    visual_ocr_backend = str(visual_ocr_backend or "auto").lower()
     if use_visual_analysis:
         ready, reason = pyscribe_services.check_ocr_backend_ready(visual_ocr_backend)
         if not ready:
-            use_visual_analysis = False
-            yield (
-                f"Status: Visual backend '{visual_ocr_backend}' unavailable ({reason}). "
-                "Continuing transcription without visual analysis.",
-                "",
-                gr.update(visible=True),
-                gr.update(visible=False),
-                "",
-            )
+            fallback = ""
+            for candidate in ("rapidocr", "paddleocr", "pytesseract", "surya"):
+                fallback_ready, _ = pyscribe_services.check_ocr_backend_ready(candidate)
+                if fallback_ready and candidate != visual_ocr_backend:
+                    fallback = candidate
+                    break
+            if fallback:
+                visual_ocr_backend = fallback
+                yield (
+                    f"Status: Visual backend unavailable ({reason}). Using '{fallback}' instead.",
+                    "",
+                    gr.update(visible=True),
+                    gr.update(visible=False),
+                    "",
+                )
+            else:
+                use_visual_analysis = False
+                yield (
+                    f"Status: Visual backend '{visual_ocr_backend}' unavailable ({reason}). "
+                    "Continuing transcription without visual analysis.",
+                    "",
+                    gr.update(visible=True),
+                    gr.update(visible=False),
+                    "",
+                )
     try:
         global APP_CONFIG
         listener_cfg = pyscribe_services.load_config()
@@ -771,10 +787,10 @@ def create_interface() -> gr.Blocks:
                     visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
                 )
                 visual_backend_dropdown = gr.Dropdown(
-                    choices=["paddleocr", "surya", "pytesseract", "auto"],
-                    value=str(APP_CONFIG.visual_ocr_backend or "paddleocr").lower(),
+                    choices=["auto", "rapidocr", "paddleocr", "surya", "pytesseract"],
+                    value=str(APP_CONFIG.visual_ocr_backend or "auto").lower(),
                     label="Visual OCR backend",
-                    info="paddleocr/surya may download OCR models on first run.",
+                    info="auto picks the best available backend; paddleocr/surya/rapidocr may download models on first run.",
                     visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
                 )
                 visual_interval = gr.Slider(
@@ -851,7 +867,7 @@ def create_interface() -> gr.Blocks:
                         file_count="multiple",
                     )
                     llm_image_ocr_backend = gr.Dropdown(
-                        choices=["auto", "paddleocr", "surya", "pytesseract"],
+                        choices=["auto", "rapidocr", "paddleocr", "surya", "pytesseract"],
                         value="auto",
                         label="Image OCR backend (fallback)",
                     )

@@ -17,7 +17,7 @@ class AppConfig:
     diar_backend: str = "accurate"
     use_visual_analysis: bool = False
     visual_profile: str = "balanced"
-    visual_ocr_backend: str = "paddleocr"
+    visual_ocr_backend: str = "auto"
     visual_sample_seconds: float = 1.0
     confirmed_visual_backends: list[str] = field(default_factory=list)
     last_open_dir: str | None = None
@@ -111,11 +111,11 @@ def _as_optional_float(value: object, default: float) -> float:
 
 
 def _as_ocr_backend(value: object) -> str:
-    allowed = {"auto", "paddleocr", "surya", "pytesseract"}
+    allowed = {"auto", "paddleocr", "rapidocr", "surya", "pytesseract"}
     normalized = str(value or "").strip().lower()
     if normalized in allowed:
         return normalized
-    return "paddleocr"
+    return "auto"
 
 
 def _as_visual_profile(value: object) -> str:
@@ -143,7 +143,7 @@ def _as_theme_mode(value: object) -> str:
 
 
 def _as_backend_list(value: object) -> list[str]:
-    allowed = {"paddleocr", "surya", "pytesseract", "auto"}
+    allowed = {"paddleocr", "rapidocr", "surya", "pytesseract", "auto"}
     if not isinstance(value, list):
         return []
     normalized: list[str] = []

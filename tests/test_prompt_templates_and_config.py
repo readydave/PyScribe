@@ -96,6 +96,7 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
         self.assertFalse(cfg.llm_payload_preview_required)
         self.assertFalse(cfg.llm_allow_remote_lan)
         self.assertEqual(cfg.llm_profiles, [])
+        self.assertEqual(cfg.visual_ocr_backend, "auto")
 
     def test_save_and_reload_additive_llm_fields(self) -> None:
         cfg = AppConfig(

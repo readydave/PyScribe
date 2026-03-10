@@ -278,21 +278,27 @@ class LLMPostprocessDialog(QDialog):
         splitter.setChildrenCollapsible(False)
 
         left_panel = QWidget()
-        left_panel.setMinimumWidth(330)
-        left_panel.setMaximumWidth(430)
+        left_panel.setMinimumWidth(360)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(6, 6, 6, 6)
         left_layout.setSpacing(10)
 
         config_group = QGroupBox("Configuration")
-        config_form = QFormLayout(config_group)
-        config_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setContentsMargins(10, 12, 10, 12)
+        config_layout.setSpacing(8)
         self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumContentsLength(20)
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+        self.profile_combo.currentTextChanged.connect(lambda _: self._sync_combo_tooltip(self.profile_combo))
         self.template_combo = QComboBox()
+        self.template_combo.setMinimumContentsLength(20)
         self.template_combo.currentIndexChanged.connect(self._on_template_changed)
+        self.template_combo.currentTextChanged.connect(lambda _: self._sync_combo_tooltip(self.template_combo))
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
+        self.model_combo.setMinimumContentsLength(20)
+        self.model_combo.currentTextChanged.connect(lambda _: self._sync_combo_tooltip(self.model_combo))
         self.refresh_btn = QPushButton("Refresh Connection + Models")
         self.refresh_btn.clicked.connect(self._on_refresh_connection)
         self.template_new_btn = QPushButton("New...")
@@ -303,18 +309,19 @@ class LLMPostprocessDialog(QDialog):
         self.template_delete_btn.clicked.connect(self._on_delete_template)
 
         profile_row = QHBoxLayout()
-        profile_row.addWidget(self.profile_combo, 1)
-        profile_row.addWidget(self.refresh_btn)
+        profile_row.setSpacing(8)
+        profile_row.addWidget(self.template_new_btn, 1)
+        profile_row.addWidget(self.template_edit_btn, 1)
+        profile_row.addWidget(self.template_delete_btn, 1)
 
-        template_row = QHBoxLayout()
-        template_row.addWidget(self.template_combo, 1)
-        template_row.addWidget(self.template_new_btn)
-        template_row.addWidget(self.template_edit_btn)
-        template_row.addWidget(self.template_delete_btn)
-
-        config_form.addRow("Profile", self._wrap_layout(profile_row))
-        config_form.addRow("Template", self._wrap_layout(template_row))
-        config_form.addRow("Model", self.model_combo)
+        config_layout.addWidget(QLabel("Profile"))
+        config_layout.addWidget(self.profile_combo)
+        config_layout.addWidget(self.refresh_btn)
+        config_layout.addWidget(QLabel("Template"))
+        config_layout.addWidget(self.template_combo)
+        config_layout.addLayout(profile_row)
+        config_layout.addWidget(QLabel("Model"))
+        config_layout.addWidget(self.model_combo)
         left_layout.addWidget(config_group)
 
         attachments_group = QGroupBox("Attachments")
@@ -322,18 +329,17 @@ class LLMPostprocessDialog(QDialog):
         attachments_layout.setContentsMargins(10, 12, 10, 12)
         attachments_layout.setSpacing(8)
 
-        source_row = QHBoxLayout()
-        self.use_current_checkbox = QCheckBox("Use current transcript from main window")
+        self.use_current_checkbox = QCheckBox("Use current transcript")
         self.use_current_checkbox.setChecked(bool(self._current_transcript_text))
         self.use_current_checkbox.setEnabled(bool(self._current_transcript_text))
-        self.load_transcript_btn = QPushButton("Load Transcript File...")
+        self.load_transcript_btn = QPushButton("Load Transcript...")
         self.load_transcript_btn.clicked.connect(self._on_load_transcript)
-        self.load_ocr_btn = QPushButton("Load OCR File (optional)...")
+        self.load_ocr_btn = QPushButton("Load OCR File...")
+        self.load_ocr_btn.setToolTip("Optional OCR context file.")
         self.load_ocr_btn.clicked.connect(self._on_load_ocr)
         attachments_layout.addWidget(self.use_current_checkbox)
-        source_row.addWidget(self.load_transcript_btn)
-        source_row.addWidget(self.load_ocr_btn)
-        attachments_layout.addLayout(source_row)
+        attachments_layout.addWidget(self.load_transcript_btn)
+        attachments_layout.addWidget(self.load_ocr_btn)
 
         self.source_label = QLabel("")
         self.ocr_label = QLabel("")
@@ -343,28 +349,27 @@ class LLMPostprocessDialog(QDialog):
         attachments_layout.addWidget(self.ocr_label)
 
         image_row = QHBoxLayout()
+        image_row.setSpacing(8)
         self.include_images_checkbox = QCheckBox("Include image attachments")
         self.include_images_checkbox.setChecked(bool(self._config.llm_include_images_default))
         self.load_images_btn = QPushButton("Load Images...")
         self.load_images_btn.clicked.connect(self._on_load_images)
-        self.clear_images_btn = QPushButton("Clear Images")
+        self.clear_images_btn = QPushButton("Clear")
         self.clear_images_btn.clicked.connect(self._on_clear_images)
-        image_row.addWidget(self.include_images_checkbox)
-        image_row.addWidget(self.load_images_btn)
+        image_row.addWidget(self.load_images_btn, 1)
         image_row.addWidget(self.clear_images_btn)
+        attachments_layout.addWidget(self.include_images_checkbox)
         attachments_layout.addLayout(image_row)
 
-        image_opts_row = QHBoxLayout()
-        image_opts_row.addWidget(QLabel("Image OCR fallback backend"))
+        attachments_layout.addWidget(QLabel("Image OCR fallback backend"))
         self.image_ocr_backend_combo = QComboBox()
+        self.image_ocr_backend_combo.setMinimumContentsLength(16)
         self.image_ocr_backend_combo.addItems(["auto", "rapidocr", "paddleocr", "surya", "pytesseract"])
         self.image_ocr_backend_combo.setCurrentText("auto")
-        image_opts_row.addWidget(self.image_ocr_backend_combo)
-        self.image_ocr_fallback_checkbox = QCheckBox("Use OCR fallback for text-only models")
+        attachments_layout.addWidget(self.image_ocr_backend_combo)
+        self.image_ocr_fallback_checkbox = QCheckBox("OCR fallback for text-only models")
         self.image_ocr_fallback_checkbox.setChecked(bool(self._config.llm_ocr_fallback_for_images_default))
-        image_opts_row.addWidget(self.image_ocr_fallback_checkbox)
-        image_opts_row.addStretch(1)
-        attachments_layout.addLayout(image_opts_row)
+        attachments_layout.addWidget(self.image_ocr_fallback_checkbox)
 
         self.images_label = QLabel("No image attachments selected.")
         self.images_label.setWordWrap(True)
@@ -455,6 +460,7 @@ class LLMPostprocessDialog(QDialog):
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([420, 560])
         root.addWidget(splitter, 1)
 
         footer = QFrame()
@@ -484,6 +490,20 @@ class LLMPostprocessDialog(QDialog):
         wrapper.setLayout(layout)
         return wrapper
 
+    def _sync_combo_tooltip(self, combo: QComboBox) -> None:
+        combo.setToolTip((combo.currentText() or "").strip())
+
+    def _default_output_save_path(self) -> str:
+        template_id = self._selected_template_id() or "template"
+        if self._loaded_transcript_path:
+            transcript_path = Path(self._loaded_transcript_path)
+            base_name = f"{transcript_path.stem}_postprocess_{template_id}.md"
+            return str(transcript_path.with_name(base_name))
+        last_save_dir = str(self._config.last_save_dir or "").strip()
+        if last_save_dir:
+            return str(Path(last_save_dir) / f"postprocess_{template_id}.md")
+        return f"postprocess_{template_id}.md"
+
     def _populate_profiles(self, *, default_name: str | None) -> None:
         self.profile_combo.clear()
         for profile in self._profiles:
@@ -496,6 +516,7 @@ class LLMPostprocessDialog(QDialog):
         if self.profile_combo.count() > 0:
             self.profile_combo.setCurrentIndex(0)
         self._on_profile_changed()
+        self._sync_combo_tooltip(self.profile_combo)
 
     def _populate_templates(self, *, default_template_id: str | None) -> None:
         self.template_combo.clear()
@@ -512,6 +533,7 @@ class LLMPostprocessDialog(QDialog):
         if self.template_combo.count() > 0:
             self.template_combo.setCurrentIndex(0)
         self._on_template_changed()
+        self._sync_combo_tooltip(self.template_combo)
 
     def _selected_template_id(self) -> str | None:
         value = self.template_combo.currentData()
@@ -626,6 +648,7 @@ class LLMPostprocessDialog(QDialog):
         profile = self._selected_profile()
         current_text = (self.model_combo.currentText() or "").strip()
         self.model_combo.clear()
+        self._sync_combo_tooltip(self.profile_combo)
         if profile is None:
             return
         self._connection_test_state = "not_run"
@@ -633,9 +656,11 @@ class LLMPostprocessDialog(QDialog):
         if profile.default_model:
             self.model_combo.addItem(profile.default_model)
             self.model_combo.setCurrentText(profile.default_model)
+            self._sync_combo_tooltip(self.model_combo)
             return
         if current_text:
             self.model_combo.setEditText(current_text)
+        self._sync_combo_tooltip(self.model_combo)
 
     @Slot(bool)
     def _on_payload_preview_requirement_changed(self, enabled: bool) -> None:
@@ -648,6 +673,7 @@ class LLMPostprocessDialog(QDialog):
         editable = bool(template is not None and not template.built_in)
         self.template_edit_btn.setEnabled(editable)
         self.template_delete_btn.setEnabled(editable)
+        self._sync_combo_tooltip(self.template_combo)
 
     @Slot()
     def _on_refresh_connection(self) -> None:
@@ -686,6 +712,7 @@ class LLMPostprocessDialog(QDialog):
             if self.model_combo.findText(profile.default_model) < 0:
                 self.model_combo.addItem(profile.default_model)
             self.model_combo.setCurrentText(profile.default_model)
+        self._sync_combo_tooltip(self.model_combo)
 
         if result.status == "pass":
             selected = f" Selected model: {result.selected_model}." if result.selected_model else ""
@@ -1169,8 +1196,7 @@ class LLMPostprocessDialog(QDialog):
         text = self._last_output_text.strip()
         if not text:
             return
-        template_id = self._selected_template_id() or "template"
-        suggested = f"postprocess_{template_id}.md"
+        suggested = self._default_output_save_path()
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Post-Processed Output",
@@ -1184,6 +1210,8 @@ class LLMPostprocessDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Save output failed", str(exc))
             return
+        resolved_parent = str(Path(path).resolve().parent)
+        self._config.last_save_dir = resolved_parent
         self.connection_status.setText(f"Saved output: {os.path.basename(path)}")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802

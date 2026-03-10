@@ -17,6 +17,7 @@ from services.model_download_service import (
     ModelVerificationManifest,
     _fetch_verification_manifest,
     _verify_model_snapshot,
+    ensure_hf_repo_local_dir_verified,
     ensure_model_cached,
 )
 
@@ -192,6 +193,134 @@ class ModelDownloadServiceTests(unittest.TestCase):
         self.assertEqual(result, str(snapshot_dir))
         self.assertTrue(bool(captured["kwargs"]["force_download"]))
         self.assertEqual(repaired_contents["value"], good_data)
+
+    def test_ensure_hf_repo_local_dir_verified_downloads_and_verifies(self) -> None:
+        data = b"ocr-model"
+        digest = _sha256_bytes(data)
+        info = SimpleNamespace(
+            sha="rev-ocr",
+            siblings=[_repo_sibling("inference.pdiparams", sha256=digest, size=len(data))],
+        )
+        statuses: list[str] = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_dir = Path(temp_dir) / "PP-OCRv5_server_det"
+            captured: dict[str, object] = {}
+
+            def _mock_snapshot_download(*args, **kwargs):  # noqa: ANN002, ANN003
+                captured["kwargs"] = dict(kwargs)
+                model_dir.mkdir(parents=True, exist_ok=True)
+                (model_dir / "inference.pdiparams").write_bytes(data)
+                metadata_dir = model_dir / ".cache" / "huggingface" / "download"
+                metadata_dir.mkdir(parents=True, exist_ok=True)
+                (metadata_dir / "inference.pdiparams.metadata").write_text(
+                    "rev-ocr\netag\n0\n",
+                    encoding="utf-8",
+                )
+                return str(model_dir)
+
+            with patch(
+                "services.model_download_service.get_hf_token",
+                return_value=None,
+            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
+                "services.model_download_service.snapshot_download",
+                side_effect=_mock_snapshot_download,
+            ):
+                mock_api_cls.return_value.model_info.return_value = info
+                result = ensure_hf_repo_local_dir_verified(
+                    "PaddlePaddle/PP-OCRv5_server_det",
+                    model_dir,
+                    on_status=statuses.append,
+                )
+
+        self.assertEqual(result, str(model_dir))
+        self.assertEqual(captured["kwargs"]["revision"], "rev-ocr")
+        self.assertEqual(captured["kwargs"]["local_dir"], str(model_dir))
+        self.assertFalse(bool(captured["kwargs"]["force_download"]))
+        self.assertTrue(any("Fetching model metadata" in status for status in statuses))
+        self.assertTrue(any("Verifying downloaded files" in status for status in statuses))
+
+    def test_ensure_hf_repo_local_dir_verified_redownloads_broken_cache(self) -> None:
+        good_data = b"verified-ocr-model"
+        digest = _sha256_bytes(good_data)
+        info = SimpleNamespace(
+            sha="rev-ocr",
+            siblings=[_repo_sibling("inference.pdiparams", sha256=digest, size=len(good_data))],
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_dir = Path(temp_dir) / "PP-OCRv5_server_det"
+            model_dir.mkdir(parents=True)
+            (model_dir / "inference.pdiparams").write_bytes(b"corrupt")
+            metadata_dir = model_dir / ".cache" / "huggingface" / "download"
+            metadata_dir.mkdir(parents=True)
+            (metadata_dir / "inference.pdiparams.metadata").write_text(
+                "rev-ocr\netag\n0\n",
+                encoding="utf-8",
+            )
+            captured: dict[str, object] = {}
+
+            def _mock_snapshot_download(*args, **kwargs):  # noqa: ANN002, ANN003
+                captured["kwargs"] = dict(kwargs)
+                (model_dir / "inference.pdiparams").write_bytes(good_data)
+                return str(model_dir)
+
+            with patch(
+                "services.model_download_service.get_hf_token",
+                return_value=None,
+            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
+                "services.model_download_service.snapshot_download",
+                side_effect=_mock_snapshot_download,
+            ):
+                mock_api_cls.return_value.model_info.return_value = info
+                result = ensure_hf_repo_local_dir_verified(
+                    "PaddlePaddle/PP-OCRv5_server_det",
+                    model_dir,
+                )
+
+        self.assertEqual(result, str(model_dir))
+        self.assertTrue(bool(captured["kwargs"]["force_download"]))
+
+    def test_ensure_hf_repo_local_dir_verified_redownloads_when_revision_metadata_missing(self) -> None:
+        data = b"verified-ocr-model"
+        digest = _sha256_bytes(data)
+        info = SimpleNamespace(
+            sha="rev-ocr",
+            siblings=[_repo_sibling("inference.pdiparams", sha256=digest, size=len(data))],
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_dir = Path(temp_dir) / "PP-OCRv5_server_det"
+            model_dir.mkdir(parents=True)
+            (model_dir / "inference.pdiparams").write_bytes(b"stale")
+            captured: dict[str, object] = {}
+
+            def _mock_snapshot_download(*args, **kwargs):  # noqa: ANN002, ANN003
+                captured["kwargs"] = dict(kwargs)
+                metadata_dir = model_dir / ".cache" / "huggingface" / "download"
+                metadata_dir.mkdir(parents=True, exist_ok=True)
+                (metadata_dir / "inference.pdiparams.metadata").write_text(
+                    "rev-ocr\netag\n0\n",
+                    encoding="utf-8",
+                )
+                (model_dir / "inference.pdiparams").write_bytes(data)
+                return str(model_dir)
+
+            with patch(
+                "services.model_download_service.get_hf_token",
+                return_value=None,
+            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
+                "services.model_download_service.snapshot_download",
+                side_effect=_mock_snapshot_download,
+            ):
+                mock_api_cls.return_value.model_info.return_value = info
+                result = ensure_hf_repo_local_dir_verified(
+                    "PaddlePaddle/PP-OCRv5_server_det",
+                    model_dir,
+                )
+
+        self.assertEqual(result, str(model_dir))
+        self.assertTrue(bool(captured["kwargs"]["force_download"]))
 
     def test_repository_not_found_still_falls_back_to_model_name(self) -> None:
         statuses: list[str] = []

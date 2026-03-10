@@ -266,6 +266,104 @@ def ensure_model_cached(
     return local_dir or model_name
 
 
+def ensure_hf_repo_local_dir_verified(
+    repo_id: str,
+    local_dir: str | os.PathLike[str],
+    *,
+    on_status: StatusCallback | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> str:
+    """
+    Ensures a Hugging Face repo is present in ``local_dir`` and verified.
+
+    This is used for PaddleX/PaddleOCR model caches that are downloaded into a
+    plain directory instead of the standard Hugging Face snapshot cache.
+    """
+    token = get_hf_token()
+    local_dir_path = Path(local_dir)
+    if on_status:
+        on_status(f"Checking model cache for '{repo_id}'...")
+
+    class _ProgressTqdm(tqdm):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            kwargs["disable"] = True
+            super().__init__(*args, **kwargs)
+            if on_status and getattr(self, "desc", None):
+                on_status(f"Downloading model: {self.desc}")
+
+        def update(self, n: int = 1) -> bool | None:
+            result = super().update(n)
+            if on_progress and self.total:
+                on_progress((self.n / self.total) * 100.0)
+            return result
+
+    local_revision = _local_dir_revision_from_metadata(local_dir_path)
+    if local_revision:
+        manifest = _fetch_verification_manifest(
+            repo_id=repo_id,
+            token=token,
+            revision=local_revision,
+            on_status=on_status,
+        )
+        if on_status:
+            on_status(f"Verifying downloaded files for '{repo_id}'...")
+        try:
+            _verify_model_snapshot(local_dir_path, manifest)
+        except ModelVerificationError as exc:
+            if on_status:
+                on_status(
+                    f"Cached model verification failed for '{repo_id}': {exc}. "
+                    "Re-downloading verified files..."
+                )
+            _download_snapshot_to_local_dir(
+                repo_id=repo_id,
+                local_dir=local_dir_path,
+                token=token,
+                revision=manifest.revision,
+                force_download=True,
+                on_status=on_status,
+                tqdm_class=_ProgressTqdm,
+            )
+            if on_status:
+                on_status(f"Verifying downloaded files for '{repo_id}'...")
+            _verify_model_snapshot(local_dir_path, manifest)
+            if on_progress:
+                on_progress(100.0)
+            return str(local_dir_path)
+        if on_status:
+            on_status(f"Model cache ready: '{repo_id}'.")
+        return str(local_dir_path)
+
+    force_download = local_dir_path.exists()
+    if force_download and on_status:
+        on_status(
+            f"Cached model path for '{repo_id}' could not be tied to a revision. "
+            "Re-downloading verified files..."
+        )
+
+    manifest = _fetch_verification_manifest(
+        repo_id=repo_id,
+        token=token,
+        revision=None,
+        on_status=on_status,
+    )
+    _download_snapshot_to_local_dir(
+        repo_id=repo_id,
+        local_dir=local_dir_path,
+        token=token,
+        revision=manifest.revision,
+        force_download=force_download,
+        on_status=on_status,
+        tqdm_class=_ProgressTqdm,
+    )
+    if on_status:
+        on_status(f"Verifying downloaded files for '{repo_id}'...")
+    _verify_model_snapshot(local_dir_path, manifest)
+    if on_progress:
+        on_progress(100.0)
+    return str(local_dir_path)
+
+
 def _candidate_hf_cache_roots() -> list[str]:
     roots: list[str] = []
     explicit_hub = os.environ.get("HUGGINGFACE_HUB_CACHE")
@@ -382,6 +480,38 @@ def _download_snapshot(
         raise RuntimeError(f"Model download failed for '{repo_id}': {exc}") from exc
 
 
+def _download_snapshot_to_local_dir(
+    *,
+    repo_id: str,
+    local_dir: str | os.PathLike[str],
+    token: str | None,
+    revision: str,
+    force_download: bool,
+    on_status: StatusCallback | None,
+    tqdm_class: type[tqdm],
+) -> str:
+    if on_status:
+        on_status(f"Downloading model files for '{repo_id}'...")
+    local_dir_path = Path(local_dir)
+    local_dir_path.mkdir(parents=True, exist_ok=True)
+    try:
+        snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            token=token,
+            tqdm_class=tqdm_class,
+            local_dir=str(local_dir_path),
+            local_files_only=False,
+            force_download=force_download,
+            resume_download=not force_download,
+        )
+    except RepositoryNotFoundError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Model download failed for '{repo_id}': {exc}") from exc
+    return str(local_dir_path)
+
+
 def _verify_model_snapshot(snapshot_path: str | os.PathLike[str], manifest: ModelVerificationManifest) -> ModelVerificationResult:
     base_path = Path(snapshot_path)
     if not base_path.is_dir():
@@ -417,6 +547,31 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _local_dir_revision_from_metadata(path: str | os.PathLike[str]) -> str | None:
+    metadata_dir = Path(path) / ".cache" / "huggingface" / "download"
+    if not metadata_dir.is_dir():
+        return None
+
+    revisions: set[str] = set()
+    found_metadata = False
+    for metadata_file in metadata_dir.glob("*.metadata"):
+        found_metadata = True
+        try:
+            lines = metadata_file.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return None
+        if not lines:
+            return None
+        revision = str(lines[0] or "").strip()
+        if not revision:
+            return None
+        revisions.add(revision)
+
+    if not found_metadata or len(revisions) != 1:
+        return None
+    return next(iter(revisions))
 
 
 def _snapshot_revision_from_path(path: str | os.PathLike[str]) -> str | None:

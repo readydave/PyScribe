@@ -18,6 +18,7 @@ from typing import Callable, Iterable
 
 import ffmpeg
 
+from services.model_download_service import ensure_hf_repo_local_dir_verified
 from services.runtime_env_service import configure_runtime_environment
 from utils import get_ffmpeg_cmd
 
@@ -43,6 +44,7 @@ _UI_NOISE_TERMS = (
     "add-ins",
 )
 _PADDLE_OCR = None
+_PADDLE_OCR_MODEL_DIR_KWARGS = None
 _RAPID_OCR = None
 _SURYA_DET_PREDICTOR = None
 _SURYA_REC_PREDICTOR = None
@@ -575,8 +577,52 @@ def _build_tesseract_ocr_fn() -> OcrBackendBuildResult:
         return None, f"{reason} ({exc})"
 
 
+def _resolve_paddle_ocr_model_dir_kwargs(PaddleOCR: type[object]) -> dict[str, str]:
+    helper = object.__new__(PaddleOCR)
+    det_model_name, rec_model_name = PaddleOCR._get_ocr_model_names(helper, "en", None)
+    if not det_model_name or not rec_model_name:
+        raise RuntimeError("Unable to resolve PaddleOCR model names for English OCR.")
+
+    return {
+        "doc_orientation_classify_model_dir": "PP-LCNet_x1_0_doc_ori",
+        "doc_unwarping_model_dir": "UVDoc",
+        "text_detection_model_dir": str(det_model_name),
+        "textline_orientation_model_dir": "PP-LCNet_x1_0_textline_ori",
+        "text_recognition_model_dir": str(rec_model_name),
+    }
+
+
+def _prepare_verified_paddle_ocr_model_dirs(
+    PaddleOCR: type[object],
+    *,
+    on_status: StatusCallback | None = None,
+) -> dict[str, str]:
+    model_source = str(os.environ.get("PADDLE_PDX_MODEL_SOURCE") or "").strip().lower()
+    if model_source != "huggingface":
+        return {}
+
+    paddlex_cache = str(os.environ.get("PADDLE_PDX_CACHE_HOME") or "").strip()
+    if not paddlex_cache:
+        paddlex_cache = configure_runtime_environment()["paddlex_cache"]
+    official_models_root = os.path.join(paddlex_cache, "official_models")
+    os.makedirs(official_models_root, exist_ok=True)
+
+    model_dir_kwargs = _resolve_paddle_ocr_model_dir_kwargs(PaddleOCR)
+    verified_kwargs: dict[str, str] = {}
+    total_models = len(model_dir_kwargs)
+    for idx, (arg_name, model_name) in enumerate(model_dir_kwargs.items(), start=1):
+        if on_status:
+            on_status(f"Preparing PaddleOCR model {idx}/{total_models}: {model_name}...")
+        verified_kwargs[arg_name] = ensure_hf_repo_local_dir_verified(
+            repo_id=f"PaddlePaddle/{model_name}",
+            local_dir=os.path.join(official_models_root, model_name),
+            on_status=on_status,
+        )
+    return verified_kwargs
+
+
 def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBackendBuildResult:
-    global _PADDLE_OCR
+    global _PADDLE_OCR, _PADDLE_OCR_MODEL_DIR_KWARGS
     configure_runtime_environment()
     _sanitize_ld_library_path(on_status=on_status)
     try:
@@ -612,10 +658,21 @@ def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBacke
         )
 
     try:
+        if _PADDLE_OCR_MODEL_DIR_KWARGS is None:
+            if on_status:
+                on_status("Preparing verified PaddleOCR model files...")
+            _PADDLE_OCR_MODEL_DIR_KWARGS = _prepare_verified_paddle_ocr_model_dirs(
+                PaddleOCR,
+                on_status=on_status,
+            )
         if _PADDLE_OCR is None:
             if on_status:
-                on_status("Initializing PaddleOCR (first run may download OCR model files)...")
-            _PADDLE_OCR = PaddleOCR(use_angle_cls=True, lang="en")
+                on_status("Initializing PaddleOCR...")
+            _PADDLE_OCR = PaddleOCR(
+                use_textline_orientation=True,
+                lang="en",
+                **(_PADDLE_OCR_MODEL_DIR_KWARGS or {}),
+            )
 
         def _ocr(image: "Image.Image", mode: str = "slide") -> str:
             import numpy as np

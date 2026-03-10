@@ -2046,12 +2046,34 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "HF token", "No token entered.")
             return
         try:
-            save_hf_token(token)
+            choice = QMessageBox(self)
+            choice.setWindowTitle("Store HF token")
+            choice.setText("How should PyScribe store this token?")
+            choice.setInformativeText(
+                "Session-only storage is recommended. Saving to disk writes the token into the "
+                "shared Hugging Face auth cache for future runs."
+            )
+            session_btn = choice.addButton("Session Only", QMessageBox.AcceptRole)
+            disk_btn = choice.addButton("Save to Disk", QMessageBox.ActionRole)
+            cancel_btn = choice.addButton(QMessageBox.Cancel)
+            choice.setDefaultButton(session_btn)
+            choice.exec()
+            clicked = choice.clickedButton()
+            if clicked == cancel_btn:
+                return
+            persist = clicked == disk_btn
+            save_hf_token(token, persist=persist)
             self.hf_token_status.setText(self._hf_token_status_text())
             QMessageBox.information(
                 self,
                 "HF token saved",
-                "Token saved. If diarization is still gated, accept terms on the model page once.",
+                (
+                    "Token stored for this session only. If diarization is still gated, accept terms on "
+                    "the model page once."
+                    if not persist
+                    else "Token saved to the Hugging Face auth cache. If diarization is still gated, "
+                    "accept terms on the model page once."
+                ),
             )
         except Exception as exc:
             QMessageBox.critical(self, "HF token error", str(exc))

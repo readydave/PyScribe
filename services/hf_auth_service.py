@@ -6,9 +6,13 @@ import os
 
 from huggingface_hub import HfFolder
 
+_SESSION_HF_TOKEN: str | None = None
+
 
 def get_hf_token() -> str | None:
-    """Returns token from env or saved Hugging Face auth cache."""
+    """Returns token from session memory, env, or saved Hugging Face auth cache."""
+    if _SESSION_HF_TOKEN:
+        return _SESSION_HF_TOKEN
     env_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
     if env_token:
         return env_token.strip() or None
@@ -18,10 +22,18 @@ def get_hf_token() -> str | None:
     return token or None
 
 
-def save_hf_token(token: str) -> None:
-    """Saves token to Hugging Face cache and current process env."""
+def save_hf_token(token: str, *, persist: bool = False) -> None:
+    """Stores token for the current session and optionally persists it to the HF cache."""
+    global _SESSION_HF_TOKEN
     value = (token or "").strip()
     if not value:
         raise ValueError("Token is empty.")
-    HfFolder.save_token(value)
-    os.environ["HF_TOKEN"] = value
+    _SESSION_HF_TOKEN = value
+    if persist:
+        HfFolder.save_token(value)
+
+
+def clear_session_hf_token() -> None:
+    """Clears any in-memory session token."""
+    global _SESSION_HF_TOKEN
+    _SESSION_HF_TOKEN = None

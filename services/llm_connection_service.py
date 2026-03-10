@@ -253,6 +253,16 @@ def test_connection(profile: LLMConnectionProfile) -> ConnectionTestResult:
             detail=_failure_detail(policy_error),
         )
     stages.append(ConnectionStageResult(stage="scope_policy", status="pass", code=None, detail="Scope policy passed."))
+    tls_policy_error = _check_tls_policy(profile=profile, parsed_url=parsed)
+    if tls_policy_error is not None:
+        return _fail_result(
+            profile=profile,
+            stages=stages,
+            stage="tls_policy",
+            code=tls_policy_error,
+            detail=_failure_detail(tls_policy_error),
+        )
+    stages.append(ConnectionStageResult(stage="tls_policy", status="pass", code=None, detail="TLS policy passed."))
 
     if profile.provider == "ollama":
         return _test_ollama(profile=profile, stages=stages)
@@ -284,6 +294,11 @@ def get_failure_suggestions(code: str) -> tuple[str, ...]:
         "dns_failure": (
             "Verify hostname spelling and local DNS resolution.",
             "Try using a direct LAN IP address instead of hostname.",
+        ),
+        "policy_tls_verification_required": (
+            "Disable TLS verification only for localhost/loopback development endpoints.",
+            "For LAN HTTPS endpoints, trust the certificate instead of bypassing validation.",
+            "Use plain http:// on private LAN only if that matches your deployment and risk tolerance.",
         ),
         "tcp_unreachable": (
             "Confirm the LLM server is running and listening on the configured port.",
@@ -649,6 +664,9 @@ def evaluate_profile_scope_policy(profile: LLMConnectionProfile) -> tuple[bool, 
     policy_error = _check_scope_policy(profile=profile, parsed_url=parsed)
     if policy_error is not None:
         return False, policy_error, _failure_detail(policy_error)
+    tls_policy_error = _check_tls_policy(profile=profile, parsed_url=parsed)
+    if tls_policy_error is not None:
+        return False, tls_policy_error, _failure_detail(tls_policy_error)
     return True, None, None
 
 
@@ -709,6 +727,26 @@ def _check_scope_policy(*, profile: LLMConnectionProfile, parsed_url: urlparse.P
         if candidate.is_private and _ip_in_any_network(candidate, cidrs):
             return None
     return "policy_blocked_non_lan"
+
+
+def _check_tls_policy(*, profile: LLMConnectionProfile, parsed_url: urlparse.ParseResult) -> str | None:
+    if profile.verify_tls or parsed_url.scheme.lower() != "https":
+        return None
+    host = (parsed_url.hostname or "").strip().lower()
+    if not host:
+        return "invalid_url"
+    if host in _LOCAL_HOSTS:
+        return None
+    try:
+        ip_obj = ipaddress.ip_address(host)
+    except ValueError:
+        ip_obj = None
+    if ip_obj is not None and ip_obj.is_loopback:
+        return None
+    candidate_ips = _resolve_host_ips(host)
+    if any(candidate.is_loopback for candidate in candidate_ips):
+        return None
+    return "policy_tls_verification_required"
 
 
 def _resolve_host_ips(host: str) -> list[ipaddress._BaseAddress]:
@@ -997,6 +1035,9 @@ def _failure_detail(code: str) -> str:
         "policy_blocked_non_local": "Local scope allows only localhost/loopback endpoints.",
         "policy_blocked_non_lan": "LAN scope allows only private network endpoints in allowed CIDRs.",
         "policy_loopback_with_lan": "LAN scope cannot use localhost/loopback endpoints. Use local scope instead.",
+        "policy_tls_verification_required": (
+            "HTTPS certificate verification can only be bypassed for localhost/loopback development endpoints."
+        ),
         "dns_failure": "Host DNS resolution failed for endpoint.",
     }
     return details.get(code, "Connection test failed.")

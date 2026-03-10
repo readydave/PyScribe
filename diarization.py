@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import logging
 from typing import Callable
-from huggingface_hub import HfFolder
 import torchaudio
 import numpy as np
 import torch
+from services.hf_auth_service import get_hf_token
 from services.runtime_compat import ensure_platform_sys_version_compat
 LOGGER = logging.getLogger(__name__)
 ProgressCallback = Callable[[float], None]
@@ -65,7 +65,7 @@ def run_diarization(
     if not hasattr(np, "NaN"):
         np.NaN = np.nan  # type: ignore
 
-    token = HfFolder.get_token()
+    token = get_hf_token()
     LOGGER.info(
         "Loading pyannote diarization pipeline preferred=3.1 fallback=3.0 token_present=%s requested_device=%s",
         bool(token),

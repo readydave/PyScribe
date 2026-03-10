@@ -212,7 +212,11 @@ def update_user_prompt_template(
         raise ValueError(f"User template '{target_id}' was not found.")
 
     file_name = _as_optional_str(entry.get("file")) or f"templates/{target_id}.yaml"
-    template_path = user_index_path.parent / file_name
+    template_path = _resolve_index_relative_path(
+        index_path=user_index_path,
+        relative_path=file_name,
+        require_within_root=True,
+    )
     existing_payload = _load_yaml_mapping(template_path, warn_if_missing=False) or {}
     next_version = _as_positive_int(existing_payload.get("version"), default=1) + 1
     template_payload = _build_template_payload(
@@ -277,7 +281,15 @@ def delete_user_prompt_template(
     _write_yaml_mapping(user_index_path, index_payload)
 
     if removed_file:
-        template_path = user_index_path.parent / removed_file
+        try:
+            template_path = _resolve_index_relative_path(
+                index_path=user_index_path,
+                relative_path=removed_file,
+                require_within_root=True,
+            )
+        except ValueError as exc:
+            LOGGER.warning("Refusing to delete template file outside root: %s", exc)
+            return True
         try:
             if template_path.exists():
                 template_path.unlink()
@@ -335,7 +347,15 @@ def _load_templates_from_index(
         seen_ids.add(template_id)
         built_in = bool(entry.get("built_in", True))
         entry_enabled = bool(entry.get("enabled", True))
-        template_path = (index_path.parent / file_name).resolve()
+        try:
+            template_path = _resolve_index_relative_path(
+                index_path=index_path,
+                relative_path=file_name,
+                require_within_root=True,
+            )
+        except ValueError as exc:
+            LOGGER.warning("Skipping prompt template '%s' with invalid file path: %s", template_id, exc)
+            continue
         template_payload = _load_yaml_mapping(template_path, warn_if_missing=True)
         if not template_payload:
             continue
@@ -366,6 +386,17 @@ def _load_or_init_user_index(user_index_path: Path) -> dict[str, Any]:
     initialized = {"version": 1, "default_template_id": None, "templates": []}
     _write_yaml_mapping(user_index_path, initialized)
     return initialized
+
+
+def _resolve_index_relative_path(*, index_path: Path, relative_path: str, require_within_root: bool) -> Path:
+    root = index_path.parent.resolve()
+    candidate = (root / relative_path).resolve()
+    if require_within_root:
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"path escapes template root: {relative_path}") from exc
+    return candidate
 
 
 def _collect_template_ids(index_payload: dict[str, Any]) -> set[str]:

@@ -81,6 +81,74 @@ class PromptTemplateServiceTests(unittest.TestCase):
             )
             self.assertNotIn("weekly-team-summary", {template.id for template in templates_after_delete})
 
+    def test_user_template_index_cannot_escape_prompt_root_on_load(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            outside_path = root / "outside.yaml"
+            outside_path.write_text(
+                "\n".join(
+                    [
+                        "id: escaped-template",
+                        "name: Escaped",
+                        "version: 1",
+                        "system_prompt: system",
+                        "user_prompt_scaffold: user",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            user_index = root / "prompts" / "index.yaml"
+            user_index.parent.mkdir(parents=True, exist_ok=True)
+            user_index.write_text(
+                "\n".join(
+                    [
+                        "version: 1",
+                        "default_template_id: null",
+                        "templates:",
+                        "  - id: escaped-template",
+                        "    file: ../outside.yaml",
+                        "    built_in: false",
+                        "    enabled: true",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            templates, _ = load_prompt_templates(
+                include_user_templates=True,
+                user_index_path=user_index,
+            )
+
+        self.assertNotIn("escaped-template", {template.id for template in templates})
+
+    def test_delete_user_prompt_template_does_not_delete_outside_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            outside_path = root / "outside.txt"
+            outside_path.write_text("keep me", encoding="utf-8")
+            user_index = root / "prompts" / "index.yaml"
+            user_index.parent.mkdir(parents=True, exist_ok=True)
+            user_index.write_text(
+                "\n".join(
+                    [
+                        "version: 1",
+                        "default_template_id: evil-template",
+                        "templates:",
+                        "  - id: evil-template",
+                        "    file: ../outside.txt",
+                        "    built_in: false",
+                        "    enabled: true",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            removed = delete_user_prompt_template("evil-template", user_index_path=user_index)
+            outside_exists = outside_path.exists()
+
+        self.assertTrue(removed)
+        self.assertTrue(outside_exists)
+
 
 class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
     def test_load_config_defaults_additive_llm_fields(self) -> None:

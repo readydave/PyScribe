@@ -80,6 +80,10 @@ class LLMConnectionsDialog(QDialog):
         self.allowed_cidrs_input = QLineEdit()
         self.allowed_cidrs_input.setPlaceholderText("192.168.0.0/16,10.0.0.0/8")
         self.verify_tls_check = QCheckBox("Verify TLS certificates")
+        self.verify_tls_check.setToolTip(
+            "Required for HTTPS LAN endpoints. Only disable certificate verification for "
+            "localhost/loopback development endpoints."
+        )
         self.enabled_check = QCheckBox("Profile enabled")
         self.concurrent_check = QCheckBox("Allow concurrent run with local transcription")
 
@@ -416,6 +420,19 @@ class LLMConnectionsDialog(QDialog):
         entered_api_key = (self.api_key_input.text() or "").strip()
         persisted_api_key = entered_api_key if entered_api_key.lower().startswith("env:") else ""
         runtime_api_key = entered_api_key if entered_api_key and not entered_api_key.lower().startswith("env:") else ""
+        verify_tls = self.verify_tls_check.isChecked()
+        if (
+            scope_value == "lan"
+            and base_url_value.lower().startswith("https://")
+            and not verify_tls
+        ):
+            QMessageBox.warning(
+                self,
+                "TLS policy",
+                "HTTPS LAN endpoints must keep certificate verification enabled. "
+                "Install a trusted certificate or switch the endpoint to HTTP if that matches your deployment.",
+            )
+            return
         profile = {
             "name": new_name,
             "provider": self.provider_combo.currentText().strip(),
@@ -425,7 +442,7 @@ class LLMConnectionsDialog(QDialog):
             "api_key_runtime": runtime_api_key,
             "default_model": (self.default_model_input.text() or "").strip(),
             "timeout_seconds": timeout,
-            "verify_tls": self.verify_tls_check.isChecked(),
+            "verify_tls": verify_tls,
             "enabled": self.enabled_check.isChecked(),
             "allow_concurrent_with_local_transcription": self.concurrent_check.isChecked(),
             "allowed_cidrs": cidr_values,

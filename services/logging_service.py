@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -64,16 +63,11 @@ def _find_writable_log_path() -> Path:
     candidates = []
     if custom:
         candidates.append(Path(custom))
-    candidates.extend(
-        [
-            Path.home() / ".pyscribe" / "logs",
-            Path.cwd() / ".pyscribe_logs",
-            Path(tempfile.gettempdir()) / "pyscribe-logs",
-        ]
-    )
+    candidates.append(Path.home() / ".pyscribe" / "logs")
     for directory in candidates:
         try:
             directory.mkdir(parents=True, exist_ok=True)
+            _tighten_directory_permissions(directory)
             return directory / "pyscribe.log"
         except Exception:
             continue
@@ -82,13 +76,10 @@ def _find_writable_log_path() -> Path:
 
 
 def _make_file_handler(primary_path: Path) -> RotatingFileHandler:
-    for path in (
-        primary_path,
-        Path.cwd() / ".pyscribe_logs" / "pyscribe.log",
-        Path(tempfile.gettempdir()) / "pyscribe-logs" / "pyscribe.log",
-    ):
+    for path in (primary_path,):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            _tighten_directory_permissions(path.parent)
             return RotatingFileHandler(
                 path,
                 maxBytes=2 * 1024 * 1024,
@@ -104,3 +95,10 @@ def _make_file_handler(primary_path: Path) -> RotatingFileHandler:
         backupCount=5,
         encoding="utf-8",
     )
+
+
+def _tighten_directory_permissions(directory: Path) -> None:
+    try:
+        directory.chmod(0o700)
+    except Exception:
+        return

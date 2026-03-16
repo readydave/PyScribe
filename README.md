@@ -191,7 +191,9 @@ See `docs/user_guide.md` for all environment variables and behavior.
 
 ## License
 
-GPL-3.0-only
+PolyForm-Noncommercial-1.0.0
+
+Commercial use is not permitted under the current project license.
 
 ## Acknowledgments
 

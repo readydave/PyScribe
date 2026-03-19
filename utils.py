@@ -9,7 +9,6 @@ import importlib.util
 import tkinter as tk
 from tkinter import messagebox
 
-import ffmpeg
 import numpy as np
 
 def check_and_install_dependencies() -> bool:
@@ -62,6 +61,7 @@ def get_available_hf_models() -> list[str]:
         "Systran/faster-whisper-small.en",
         "Systran/faster-whisper-medium.en",
         "Systran/faster-whisper-large-v3",
+        "ibm-granite/granite-4.0-1b-speech",
         "deepdml/faster-whisper-large-v3-turbo-ct2",
         "distil-whisper/distil-large-v3",
         "guillaumekln/whisper-large-v2-ct2",
@@ -100,6 +100,8 @@ def get_ffmpeg_cmd(tool: str = "ffmpeg") -> str | None:
 
 def convert_to_16k_mono(src_path: str, tmpdir: str, ffmpeg_cmd: str) -> str:
     """Uses ffmpeg to convert any media file to a temporary 16kHz mono WAV file."""
+    import ffmpeg
+
     out_path = os.path.join(tmpdir, "audio_16k_mono.wav")
     try:
         (
@@ -116,6 +118,8 @@ def load_audio_waveform(file_path: str) -> np.ndarray:
     Loads an audio file and converts it to a float32 NumPy array,
     which is the format expected by Whisper models.
     """
+    import ffmpeg
+
     try:
         out, _ = (
             ffmpeg

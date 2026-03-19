@@ -5,7 +5,15 @@ from __future__ import annotations
 from diar_backends import BACKENDS, available_backends
 from utils import get_available_hf_models
 
-BASE_MODEL_CHOICES = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
+BASE_MODEL_CHOICES = [
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v2",
+    "large-v3",
+    "ibm-granite/granite-4.0-1b-speech",
+]
 
 
 def get_model_choices() -> list[str]:

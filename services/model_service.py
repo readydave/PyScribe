@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import torch
-from faster_whisper import WhisperModel
+
+from .granite_speech_service import load_granite_model
+from .model_download_service import normalize_model_name, resolve_repo_id
+
+if TYPE_CHECKING:
+    from faster_whisper import WhisperModel
 
 
 @dataclass(frozen=True)
@@ -18,7 +24,22 @@ class RuntimeInfo:
     cpu_count: int
 
 
-_MODEL_CACHE: dict[tuple[str, str, str], WhisperModel] = {}
+GRANITE_SPEECH_REPO_IDS = {"ibm-granite/granite-4.0-1b-speech"}
+
+
+@dataclass(frozen=True)
+class TranscriptionModelSpec:
+    requested_name: str
+    normalized_name: str
+    backend_kind: str
+    repo_id: str | None
+    display_name: str
+    supports_diarization: bool
+    supports_timestamps: bool
+    is_experimental: bool = False
+
+
+_MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
 
 
 def detect_runtime() -> RuntimeInfo:
@@ -65,19 +86,68 @@ def recommend_model(runtime: RuntimeInfo) -> str:
     return "tiny"
 
 
+def resolve_transcription_model(model_name: str) -> TranscriptionModelSpec:
+    """Resolve a model string to a backend/capability descriptor."""
+    normalized = normalize_model_name(model_name)
+    repo_id = resolve_repo_id(normalized)
+    if repo_id in GRANITE_SPEECH_REPO_IDS:
+        return TranscriptionModelSpec(
+            requested_name=model_name,
+            normalized_name=normalized,
+            backend_kind="granite_transformers",
+            repo_id=repo_id,
+            display_name=repo_id,
+            supports_diarization=False,
+            supports_timestamps=False,
+            is_experimental=True,
+        )
+
+    display_name = repo_id or normalized
+    return TranscriptionModelSpec(
+        requested_name=model_name,
+        normalized_name=normalized,
+        backend_kind="faster_whisper",
+        repo_id=repo_id,
+        display_name=display_name,
+        supports_diarization=True,
+        supports_timestamps=True,
+        is_experimental=False,
+    )
+
+
+def model_supports_diarization(model_name: str) -> bool:
+    return resolve_transcription_model(model_name).supports_diarization
+
+
+def is_experimental_model(model_name: str) -> bool:
+    return resolve_transcription_model(model_name).is_experimental
+
+
 def load_model(
     model_name: str,
     *,
     device: str,
     compute_type: str,
     use_cache: bool = True,
-) -> WhisperModel:
-    """Loads (and optionally caches) a Whisper model instance."""
-    key = (model_name, device, compute_type)
+    model_spec: TranscriptionModelSpec | None = None,
+) -> Any:
+    """Load and optionally cache a transcription model for the resolved backend."""
+    spec = model_spec or resolve_transcription_model(model_name)
+    cache_name = spec.normalized_name or model_name
+    key = (cache_name, device, compute_type)
     if use_cache and key in _MODEL_CACHE:
         return _MODEL_CACHE[key]
 
-    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    if spec.backend_kind == "granite_transformers":
+        model = load_granite_model(
+            model_name,
+            device=device,
+            compute_type=compute_type,
+        )
+    else:
+        from faster_whisper import WhisperModel
+
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
     if use_cache:
         _MODEL_CACHE[key] = model
     return model

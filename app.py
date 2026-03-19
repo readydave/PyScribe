@@ -479,8 +479,19 @@ def transcribe(
         yield "Status: No model selected.", "", gr.update(visible=True), gr.update(visible=False), ""
         return
 
+    model_spec = pyscribe_services.resolve_transcription_model(model_name) if should_transcribe else None
     max_speakers = int(max_speakers_text) if str(max_speakers_text).strip().isdigit() else None
     use_diarization = bool(use_diarization and should_transcribe)
+    if use_diarization and model_spec is not None and not model_spec.supports_diarization:
+        use_diarization = False
+        yield (
+            f"Status: Speaker identification is unavailable for '{model_spec.display_name}'. "
+            "Continuing without diarization.",
+            "",
+            gr.update(visible=True),
+            gr.update(visible=False),
+            "",
+        )
     if not use_diarization:
         diar_backend = "off"
     use_visual_analysis = bool(use_visual_analysis and should_run_visual)
@@ -720,6 +731,7 @@ def create_interface() -> gr.Blocks:
             **Model tips:** use built-in choices or a custom Hugging Face repo ID (`owner/repo`).
             If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
             For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
+            Granite 4.0 Speech is available as an experimental backend and does not support speaker identification in PyScribe yet.
             Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
             """
         )

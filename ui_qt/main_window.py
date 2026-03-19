@@ -56,6 +56,8 @@ from services import (
     get_enabled_llm_profiles,
     get_hf_token,
     get_model_choices,
+    is_experimental_model,
+    model_supports_diarization,
     normalize_model_name,
     estimate_model_download_size_bytes,
     format_bytes,
@@ -63,6 +65,7 @@ from services import (
     load_config,
     open_folder,
     recommend_model,
+    resolve_transcription_model,
     resolve_repo_id,
     save_hf_token,
     save_config,
@@ -502,6 +505,7 @@ class MainWindow(QMainWindow):
         self.hw_metrics.connect(self.hw_metrics_label.setText)
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
         self._update_visual_ui_state(self.visual_checkbox.isChecked())
+        self._on_model_selection_changed(self.model_combo.currentText())
         self._update_service_visibility()
         QTimer.singleShot(0, self._apply_responsive_layout_state)
         LOGGER.info("Qt MainWindow initialized runtime=%s compute=%s", self.runtime.device, self.runtime.compute_type)
@@ -653,6 +657,7 @@ class MainWindow(QMainWindow):
         self.model_hint_label = QLabel(f"Recommended: {recommended} ({self.runtime.device.upper()})")
         self.model_hint_label.setObjectName("hint")
         general_layout.addWidget(self.model_hint_label)
+        self.model_combo.currentTextChanged.connect(self._on_model_selection_changed)
 
         self.transcribe_checkbox = QCheckBox("Transcribe audio")
         start_mode = str(self.config.run_mode or "full").strip().lower()
@@ -1775,16 +1780,17 @@ class MainWindow(QMainWindow):
     def _update_diar_ui_state(self, enabled: bool) -> None:
         del enabled
         _, allow_transcription, _, _ = self._effective_service_flags()
-        diar_controls_enabled = bool(allow_transcription)
-        if allow_transcription and not self._diar_backends_resolved:
+        diarization_supported = self._selected_model_supports_diarization()
+        diar_controls_enabled = bool(allow_transcription and diarization_supported)
+        if diar_controls_enabled and not self._diar_backends_resolved:
             self._start_diar_backend_probe()
         # Keep selector usable immediately with fallback/default options while
         # lazy backend probing resolves final availability.
-        combo_enabled = allow_transcription
+        combo_enabled = diar_controls_enabled
         self.diar_backend_combo.setEnabled(combo_enabled)
-        self.max_speakers_input.setEnabled(allow_transcription)
-        self.diar_progress_bar.setEnabled(allow_transcription)
-        if not allow_transcription:
+        self.max_speakers_input.setEnabled(diar_controls_enabled)
+        self.diar_progress_bar.setEnabled(diar_controls_enabled)
+        if not diar_controls_enabled:
             self.diar_progress_bar.setRange(0, 100)
             self.diar_progress_bar.setValue(0)
             self.diar_progress_bar.setFormat("Diarization disabled")
@@ -1805,12 +1811,43 @@ class MainWindow(QMainWindow):
 
     @Slot(bool)
     def _update_diar_toggle_label(self, enabled: bool) -> None:
+        if not self._selected_model_supports_diarization():
+            self.diar_checkbox.setText("Speaker Identification unavailable for Granite")
+            return
         self.diar_checkbox.setText("Speaker Identification is On" if enabled else "Speaker Identification is Off")
+
+    def _selected_model_name(self) -> str:
+        return normalize_model_name(self.model_combo.currentText().strip())
+
+    def _selected_model_supports_diarization(self) -> bool:
+        model_name = self._selected_model_name()
+        if not model_name:
+            return True
+        return model_supports_diarization(model_name)
+
+    @Slot(str)
+    def _on_model_selection_changed(self, text: str) -> None:
+        model_name = normalize_model_name(text.strip())
+        recommended = recommend_model(self.runtime)
+        if not hasattr(self, "model_hint_label"):
+            return
+        if model_name and is_experimental_model(model_name):
+            self.model_hint_label.setText(
+                "Experimental: Granite Speech via transformers. Speaker identification is unavailable."
+            )
+            if hasattr(self, "diar_checkbox") and self.diar_checkbox.isChecked():
+                self.diar_checkbox.setChecked(False)
+        else:
+            self.model_hint_label.setText(f"Recommended: {recommended} ({self.runtime.device.upper()})")
+        if hasattr(self, "diar_checkbox"):
+            self._update_diar_toggle_label(self.diar_checkbox.isChecked())
+        if hasattr(self, "transcribe_checkbox"):
+            self._update_service_visibility()
 
     def _effective_service_flags(self) -> tuple[str, bool, bool, bool]:
         allow_transcription = self.transcribe_checkbox.isChecked()
         allow_visual = self.visual_checkbox.isChecked()
-        run_diarization = allow_transcription and self.diar_checkbox.isChecked()
+        run_diarization = allow_transcription and self.diar_checkbox.isChecked() and self._selected_model_supports_diarization()
         run_visual = allow_visual
         mode = "none"
         if allow_transcription and run_visual:
@@ -1825,6 +1862,9 @@ class MainWindow(QMainWindow):
     def _update_service_visibility(self) -> None:
         mode, allow_transcription, run_diarization, run_visual = self._effective_service_flags()
         show_main_progress = allow_transcription or run_visual
+        diarization_supported = self._selected_model_supports_diarization()
+        if not diarization_supported and self.diar_checkbox.isChecked():
+            self.diar_checkbox.setChecked(False)
         self.progress_bar.setVisible(show_main_progress)
         self.transcription_time_label.setVisible(allow_transcription)
         self.diar_progress_bar.setVisible(run_diarization)
@@ -1832,7 +1872,12 @@ class MainWindow(QMainWindow):
         self.visual_time_label.setVisible(run_visual)
 
         self.model_combo.setEnabled(allow_transcription)
-        self.diar_checkbox.setEnabled(allow_transcription)
+        self.diar_checkbox.setEnabled(allow_transcription and diarization_supported)
+        self.diar_checkbox.setToolTip(
+            ""
+            if diarization_supported
+            else "Granite Speech is transcript-only in PyScribe and does not provide timestamps for speaker attribution."
+        )
         if not allow_transcription:
             self.diar_backend_combo.setEnabled(False)
             self.max_speakers_input.setEnabled(False)
@@ -1840,6 +1885,10 @@ class MainWindow(QMainWindow):
             self.visual_profile_combo.setEnabled(False)
             self.visual_backend_combo.setEnabled(False)
             self.visual_interval_input.setEnabled(False)
+        else:
+            diar_controls_enabled = run_diarization and diarization_supported
+            self.diar_backend_combo.setEnabled(diar_controls_enabled and not self._diar_probe_running())
+            self.max_speakers_input.setEnabled(diar_controls_enabled)
 
         if mode == "visual_only":
             self.progress_bar.setFormat("Visual analysis %p%")
@@ -1933,11 +1982,18 @@ class MainWindow(QMainWindow):
         repo_id = resolve_repo_id(model_name) or model_name
         est_size = estimate_model_download_size_bytes(model_name)
         size_text = format_bytes(est_size)
+        extra_note = ""
+        model_spec = resolve_transcription_model(model_name)
+        if model_spec.is_experimental:
+            extra_note = (
+                "\n\nThis Granite model runs through the experimental transformers backend in PyScribe. "
+                "Speaker identification is unavailable for this model."
+            )
         msg = (
             f"Model '{repo_id}' is not cached locally.\n\n"
             f"Estimated download size: {size_text}\n\n"
             "Note: this is a best-effort estimate and may differ from the final transfer size.\n\n"
-            "Download now?"
+            f"Download now?{extra_note}"
         )
         answer = QMessageBox.question(
             self,

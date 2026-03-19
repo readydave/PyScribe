@@ -23,8 +23,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from services import RuntimeInfo, get_model_choices, load_model
-from utils import convert_to_16k_mono, get_ffmpeg_cmd, load_audio_waveform
+from services import (
+    RuntimeInfo,
+    ensure_model_cached,
+    get_model_choices,
+    load_model,
+    resolve_transcription_model,
+    transcribe_prepared_audio,
+)
+from utils import convert_to_16k_mono, get_ffmpeg_cmd
 LOGGER = logging.getLogger(__name__)
 
 
@@ -65,7 +72,6 @@ class BenchmarkWorker(QObject):
                 raise RuntimeError("ffmpeg not found.")
 
             wav_path = convert_to_16k_mono(audio_path, temp_dir.name, ffmpeg_cmd)
-            audio_np = load_audio_waveform(wav_path)
             for idx, model_name in enumerate(self.selected_models):
                 if self.cancel_event.is_set():
                     self.result_line.emit("Benchmark cancelled.")
@@ -74,16 +80,30 @@ class BenchmarkWorker(QObject):
                 self.status.emit(f"Testing model {idx + 1}/{len(self.selected_models)}: {model_name}")
                 self.progress.emit(int((idx / max(len(self.selected_models), 1)) * 100))
                 start = time.time()
+                model_spec = resolve_transcription_model(model_name)
+                model_ref = ensure_model_cached(model_name, on_status=self.status.emit)
                 model = load_model(
-                    model_name,
+                    model_ref,
                     device=self.runtime.device,
                     compute_type=self.runtime.compute_type,
                     use_cache=False,
+                    model_spec=model_spec,
                 )
-                segments, _ = model.transcribe(audio_np, language=self.audio_language, beam_size=5)
-                _ = [s.text for s in segments]
+                result = transcribe_prepared_audio(
+                    wav_path=wav_path,
+                    model=model,
+                    model_spec=model_spec,
+                    language=self.audio_language,
+                    cancel_event=self.cancel_event,
+                    use_diarization=False,
+                )
                 elapsed = time.time() - start
-                self.result_line.emit(f"- {model_name}: {elapsed:.2f} seconds")
+                preview = " ".join(result.transcript_only.split())
+                if len(preview) > 120:
+                    preview = f"{preview[:117]}..."
+                if not preview:
+                    preview = "<empty transcript>"
+                self.result_line.emit(f"- {model_name}: {elapsed:.2f} seconds | {preview}")
 
             self.progress.emit(100)
             self.status.emit("Benchmark complete.")

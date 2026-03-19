@@ -14,14 +14,9 @@ from dataclasses import dataclass
 from threading import Event
 from typing import Callable
 
-import ffmpeg
-from faster_whisper import WhisperModel
-
-from diar_backends import run_diarization_backend
-from diarization import assign_speakers
-from services.multimodal_service import analyze_video_stream
+from services.granite_speech_service import GraniteSpeechModelBundle, transcribe_granite_audio
 from services.model_download_service import ensure_model_cached
-from services.model_service import load_model
+from services.model_service import TranscriptionModelSpec, load_model, resolve_transcription_model
 from utils import convert_to_16k_mono, get_ffmpeg_cmd, load_audio_waveform
 
 
@@ -100,6 +95,8 @@ def _collect_cuda_diagnostics() -> str:
 
 
 def _probe_duration_seconds(wav_path: str) -> float:
+    import ffmpeg
+
     try:
         probe = ffmpeg.probe(wav_path)
         return float(probe["format"]["duration"])
@@ -117,9 +114,10 @@ def _format_speaker_transcript(segments: list[dict]) -> str:
 
 def transcribe_prepared_audio(
     wav_path: str,
-    model: WhisperModel,
+    model: object,
     language: str | None,
     *,
+    model_spec: TranscriptionModelSpec | None = None,
     cancel_event: Event | None = None,
     use_diarization: bool = False,
     diar_backend: str = "accurate",
@@ -134,8 +132,46 @@ def transcribe_prepared_audio(
     Transcribes a prepared 16k mono wav file and optionally runs diarization.
     """
     duration = _probe_duration_seconds(wav_path)
+    spec = model_spec or resolve_transcription_model("")
+    audio_np = load_audio_waveform(wav_path)
+
+    if spec.backend_kind == "granite_transformers":
+        if cancel_event and cancel_event.is_set():
+            return TranscriptionResult(
+                transcript="",
+                transcript_only="",
+                visual_report="",
+                segments=[],
+                cancelled=True,
+                duration_seconds=duration,
+                transcription_seconds=0.0,
+                diarization_seconds=0.0,
+                visual_analysis_seconds=0.0,
+            )
+        transcription_started = time.perf_counter()
+        transcript = transcribe_granite_audio(
+            model if isinstance(model, GraniteSpeechModelBundle) else model,
+            audio_np,
+            progress_cb=on_progress,
+        )
+        transcription_seconds = time.perf_counter() - transcription_started
+        if on_text and transcript:
+            on_text(transcript)
+        was_cancelled = bool(cancel_event and cancel_event.is_set())
+        return TranscriptionResult(
+            transcript="" if was_cancelled else transcript,
+            transcript_only="" if was_cancelled else transcript,
+            visual_report="",
+            segments=[],
+            cancelled=was_cancelled,
+            duration_seconds=duration,
+            transcription_seconds=transcription_seconds,
+            diarization_seconds=0.0,
+            visual_analysis_seconds=0.0,
+        )
+
     task = "transcribe"
-    segments_generator, _ = model.transcribe(audio_np := load_audio_waveform(wav_path), task=task, language=language, beam_size=5)
+    segments_generator, _ = model.transcribe(audio_np, task=task, language=language, beam_size=5)
 
     all_text_segments: list[str] = []
     streamed_text = ""
@@ -227,6 +263,8 @@ def transcribe_prepared_audio(
                 if on_diar_progress:
                     on_diar_progress(value)
 
+            from diar_backends import run_diarization_backend
+
             try:
                 diar_segments = run_diarization_backend(
                     audio_path=wav_path,
@@ -278,6 +316,8 @@ def transcribe_prepared_audio(
                 on_status("Assigning speakers to transcript...")
             if on_diar_progress:
                 on_diar_progress(65)
+
+            from diarization import assign_speakers
 
             final_segments = assign_speakers(all_segments_struct, diar_segments)
             transcript = _format_speaker_transcript(final_segments)
@@ -389,6 +429,8 @@ def transcribe_media_file(
         run_mode = "full"
 
     if run_mode == "visual_only":
+        from services.multimodal_service import analyze_video_stream
+
         visual = analyze_video_stream(
             media_path,
             ocr_backend=visual_ocr_backend,
@@ -427,6 +469,15 @@ def transcribe_media_file(
             on_status("Preparing audio...")
         wav_path = convert_to_16k_mono(media_path, temp_dir, ffmpeg_cmd)
 
+        model_spec = resolve_transcription_model(model_name)
+        if use_diarization and not model_spec.supports_diarization:
+            if on_status:
+                on_status(
+                    f"Diarization unavailable for '{model_spec.display_name}'. "
+                    "Continuing without speaker identification."
+                )
+            use_diarization = False
+
         if on_status:
             on_status(f"Loading model '{model_name}' on {device.upper()}...")
         model_ref = ensure_model_cached(
@@ -439,6 +490,7 @@ def transcribe_media_file(
             device=device,
             compute_type=compute_type,
             use_cache=True,
+            model_spec=model_spec,
         )
 
         if on_status:
@@ -447,6 +499,7 @@ def transcribe_media_file(
             wav_path=wav_path,
             model=model,
             language=language,
+            model_spec=model_spec,
             cancel_event=cancel_event,
             use_diarization=use_diarization,
             diar_backend=diar_backend,
@@ -461,6 +514,8 @@ def transcribe_media_file(
         if run_mode == "transcribe_only" or not use_visual_analysis or result.cancelled:
             LOGGER.info("Job[%s] completed without visual analysis cancelled=%s", job_id, result.cancelled)
             return result
+
+        from services.multimodal_service import analyze_video_stream
 
         visual = analyze_video_stream(
             media_path,

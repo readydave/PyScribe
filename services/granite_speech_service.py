@@ -117,12 +117,22 @@ def load_granite_model(
         local_files_only=local_files_only,
         trust_remote_code=False,
     )
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        load_name,
-        local_files_only=local_files_only,
-        trust_remote_code=False,
-        torch_dtype=torch_dtype,
-    )
+    model_load_kwargs = {
+        "local_files_only": local_files_only,
+        "trust_remote_code": False,
+    }
+    try:
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            load_name,
+            dtype=torch_dtype,
+            **model_load_kwargs,
+        )
+    except TypeError:
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            load_name,
+            torch_dtype=torch_dtype,
+            **model_load_kwargs,
+        )
     if hasattr(model, "to"):
         model = model.to(device)
     if hasattr(model, "eval"):

@@ -617,7 +617,7 @@ def transcribe(
 
     final_badge = _progress_badge(100.0)
     final_done = "Visual analysis complete!" if run_mode == "visual_only" else "Transcription complete!"
-    yield f"Status: {final_badge} {last_phase}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), final_done
+    yield f"Status: {final_badge} {final_done}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), final_done
 
 def save_transcript(transcript: str, audio_path: Any, model_name: str) -> str | None:
     if not transcript:

@@ -23,6 +23,10 @@ nvidia-ml-py
 
 gradio
 PySide6>=6.7
+requests
+tqdm
+PyYAML
+Pillow
 hf_xet  # Optional accelerator for Hugging Face Xet storage; speeds up model downloads
 transformers>=4.52.1
 peft>=0.14.0

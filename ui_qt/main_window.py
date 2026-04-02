@@ -292,8 +292,54 @@ class TranscriptionWorker(QObject):
         with self._lock:
             self._force_stop_requested = True
             proc = self._process
-        if proc is not None and proc.is_alive():
+        self._stop_child_process(proc, reason="direct force-stop request", wait_timeout=0.5)
+
+    def _stop_child_process(
+        self,
+        proc: mp.Process | None,
+        *,
+        reason: str,
+        wait_timeout: float = 1.0,
+    ) -> bool:
+        if proc is None:
+            return False
+        try:
+            if not proc.is_alive():
+                return True
+        except Exception:
+            return True
+
+        try:
+            LOGGER.warning("Qt worker: terminating child pid=%s reason=%s", proc.pid, reason)
             proc.terminate()
+        except Exception as exc:
+            LOGGER.warning("Qt worker: terminate failed pid=%s reason=%s error=%s", getattr(proc, "pid", None), reason, exc)
+
+        deadline = time.perf_counter() + max(wait_timeout, 0.0)
+        while time.perf_counter() < deadline:
+            try:
+                if not proc.is_alive():
+                    break
+            except Exception:
+                break
+            time.sleep(0.05)
+
+        try:
+            if proc.is_alive():
+                LOGGER.warning("Qt worker: killing child pid=%s reason=%s", proc.pid, reason)
+                proc.kill()
+        except Exception as exc:
+            LOGGER.warning("Qt worker: kill failed pid=%s reason=%s error=%s", getattr(proc, "pid", None), reason, exc)
+
+        try:
+            proc.join(timeout=max(wait_timeout, 0.5))
+        except Exception:
+            pass
+
+        try:
+            return not proc.is_alive()
+        except Exception:
+            return True
 
     @Slot()
     def run(self) -> None:
@@ -341,7 +387,7 @@ class TranscriptionWorker(QObject):
                     cancel_event.set()
                 if force_req and process.is_alive():
                     self.status.emit("Force stop requested. Terminating worker process...")
-                    process.terminate()
+                    self._stop_child_process(process, reason="worker loop force stop")
                     force_stopped = True
 
                 drained = False
@@ -426,6 +472,17 @@ class TranscriptionWorker(QObject):
             if force_stopped and not terminal_emitted:
                 LOGGER.warning("Qt worker: force-stopped before terminal event")
                 self.finished.emit(True, latest_transcript, latest_transcript, "", 0.0, 0.0, 0.0)
+                terminal_emitted = True
+            elif not terminal_emitted:
+                exit_code = getattr(process, "exitcode", None)
+                detail = (
+                    f"Worker process exited unexpectedly (exit code {exit_code})."
+                    if exit_code is not None
+                    else "Worker process exited unexpectedly."
+                )
+                LOGGER.error("Qt worker: missing terminal event after child exit detail=%s", detail)
+                self.failed.emit(detail)
+                terminal_emitted = True
         finally:
             LOGGER.info("Qt worker: cleanup begin")
             with self._lock:
@@ -433,8 +490,7 @@ class TranscriptionWorker(QObject):
                 self._process = None
             try:
                 if process.is_alive():
-                    process.terminate()
-                    process.join(timeout=1.0)
+                    self._stop_child_process(process, reason="worker cleanup", wait_timeout=0.5)
             except Exception:
                 pass
             try:

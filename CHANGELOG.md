@@ -10,6 +10,8 @@ The format is inspired by Keep a Changelog.
 
 - Shared listener auth/bind validation service in `services/listener_security_service.py`.
 - `tests/test_listener_and_diar_backends.py` covering listener security helpers and NeMo Sortformer compatibility paths.
+- `tests/test_diarization.py` covering diarization runtime safeguards (`soundfile` backend preference and CPU pipeline reload after CUDA failure).
+- `tests/test_qt_main_window_worker.py` covering Qt worker force-stop escalation and missing-terminal-event recovery.
 - Prompt template scaffold in `assets/prompts/` with YAML index and built-in templates for meeting summary workflows.
 - Prompt template loading/validation service in `services/prompt_template_service.py`.
 - `tests/test_prompt_templates_and_config.py` covering prompt template loading and additive config behavior.
@@ -38,6 +40,9 @@ The format is inspired by Keep a Changelog.
 
 - `main.py` and `app.py` refactored to use shared listener security/auth helpers.
 - Listener runtime initialization in `app.py` is now lazy to avoid unnecessary startup setup until listener code is needed.
+- Pyannote diarization backends now run in an isolated spawned subprocess so CUDA speaker ID does not share cuDNN runtime state with `faster-whisper` ASR.
+- Diarization now prefers `torchaudio`'s `soundfile` backend for audio loading because the default SoX path can crash on some systems.
+- Diarization CPU retry detection now treats cuDNN mismatch and related GPU runtime failures as retryable for pyannote backends.
 - NeMo Sortformer handling now supports both modern callable diarizer APIs and legacy RTTM-output APIs.
 - Sortformer availability checks now require both NeMo ASR importability and CUDA availability.
 - Streaming transcript text updates are throttled in `services/transcription_service.py` to reduce UI churn while preserving final output.
@@ -72,6 +77,10 @@ The format is inspired by Keep a Changelog.
 ### Fixed
 
 - Listener and Qt config-save failures now log warnings instead of failing silently.
+- Fixed Qt transcription runs that could remain stuck when a worker process exited without emitting a terminal event.
+- Fixed Qt **Force Stop** so Linux worker cleanup escalates beyond `terminate()` when necessary.
+- Fixed diarization crashes caused by `torchaudio`'s SoX backend during pyannote audio reads.
+- Fixed CUDA speaker-ID failures after `faster-whisper` ASR by isolating pyannote diarization into a fresh subprocess.
 - Prevented startup stalls from eager NeMo/Sortformer availability checks during initial Qt window construction.
 - LLM post-processing now retries once with an extended timeout when the first request times out (helps cold model starts).
 - Public listener share mode now requires authentication credentials, including localhost share scenarios.

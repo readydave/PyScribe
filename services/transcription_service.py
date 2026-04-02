@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing as mp
 import os
 import platform
+import queue
 from pathlib import Path
 import sys
 import tempfile
@@ -25,6 +27,7 @@ TextCallback = Callable[[str], None]
 ProgressCallback = Callable[[float], None]
 LOGGER = logging.getLogger(__name__)
 STREAM_TEXT_UPDATE_INTERVAL_SECONDS = 0.30
+_PYANNOTE_BACKENDS = {"accurate", "fast"}
 
 
 @dataclass
@@ -44,7 +47,7 @@ def _should_retry_diarization_on_cpu(exc: Exception, *, backend: str, device: st
     """Returns True when diarization failed due to likely CUDA runtime/linker issues."""
     if device.lower() != "cuda":
         return False
-    if backend not in {"accurate", "fast"}:
+    if backend not in _PYANNOTE_BACKENDS:
         # sortformer is CUDA-only; don't auto-switch backend implicitly.
         return False
     message = str(exc).lower()
@@ -57,8 +60,216 @@ def _should_retry_diarization_on_cpu(exc: Exception, *, backend: str, device: st
         "failed call to cuinit",
         "no cuda gpus are available",
         "torch.cuda",
+        "cudnn",
+        "subprocess exited unexpectedly",
+        "exit code -",
+        "expected all tensors to be on the same device",
     )
     return any(marker in message for marker in cuda_linker_markers)
+
+
+def _should_isolate_diarization_backend(backend: str) -> bool:
+    """Run pyannote diarization in a fresh process to avoid cuDNN state conflicts."""
+    return backend in _PYANNOTE_BACKENDS
+
+
+def _can_spawn_isolated_diarization() -> bool:
+    """Returns True when the current __main__ module can be re-imported by spawn."""
+    main_module = sys.modules.get("__main__")
+    main_file = getattr(main_module, "__file__", "")
+    return bool(main_file and not str(main_file).startswith("<"))
+
+
+def _isolated_diarization_entry(
+    audio_path: str,
+    backend: str,
+    device: str,
+    max_speakers: int | None,
+    event_queue: mp.Queue,
+) -> None:
+    try:
+        from services.runtime_env_service import configure_runtime_environment, prepare_linux_dynamic_loader_environment
+
+        configure_runtime_environment()
+        prepare_linux_dynamic_loader_environment()
+
+        from diar_backends import run_diarization_backend
+
+        def _status_cb(text: str) -> None:
+            event_queue.put({"type": "status", "value": str(text)})
+
+        def _progress_cb(value: float) -> None:
+            event_queue.put({"type": "progress", "value": float(value)})
+
+        segments = run_diarization_backend(
+            audio_path=audio_path,
+            backend=backend,
+            device=device,
+            max_speakers=max_speakers,
+            progress_cb=_progress_cb,
+            status_cb=_status_cb,
+        )
+        event_queue.put({"type": "result", "value": segments})
+    except Exception as exc:
+        event_queue.put({"type": "error", "value": str(exc)})
+
+
+def _stop_process(proc: mp.Process, *, reason: str) -> None:
+    try:
+        if not proc.is_alive():
+            return
+    except Exception:
+        return
+
+    LOGGER.warning("Stopping diarization subprocess pid=%s reason=%s", getattr(proc, "pid", None), reason)
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+
+    deadline = time.perf_counter() + 1.0
+    while time.perf_counter() < deadline:
+        try:
+            if not proc.is_alive():
+                break
+        except Exception:
+            break
+        time.sleep(0.05)
+
+    try:
+        if proc.is_alive():
+            proc.kill()
+    except Exception:
+        pass
+
+    try:
+        proc.join(timeout=1.0)
+    except Exception:
+        pass
+
+
+def _run_diarization_backend_in_subprocess(
+    *,
+    audio_path: str,
+    backend: str,
+    device: str,
+    max_speakers: int | None,
+    cancel_event: Event | None,
+    progress_cb: ProgressCallback | None,
+    status_cb: StatusCallback | None,
+) -> list[dict]:
+    ctx = mp.get_context("spawn")
+    event_queue = ctx.Queue()
+    proc = ctx.Process(
+        target=_isolated_diarization_entry,
+        args=(audio_path, backend, device, max_speakers, event_queue),
+    )
+    result: list[dict] | None = None
+    error_text: str | None = None
+
+    proc.start()
+    try:
+        while True:
+            if cancel_event and cancel_event.is_set():
+                raise InterruptedError("Cancelled during diarization.")
+
+            drained = False
+            while True:
+                try:
+                    evt = event_queue.get_nowait()
+                except queue.Empty:
+                    break
+                drained = True
+                etype = evt.get("type")
+                value = evt.get("value")
+                if etype == "status" and status_cb:
+                    status_cb(str(value))
+                elif etype == "progress" and progress_cb:
+                    progress_cb(float(value))
+                elif etype == "result":
+                    result = list(value)
+                elif etype == "error":
+                    error_text = str(value)
+
+            if result is not None or error_text is not None:
+                break
+            if not proc.is_alive() and not drained:
+                break
+            time.sleep(0.05)
+
+        proc.join(timeout=2.0)
+
+        while True:
+            try:
+                evt = event_queue.get_nowait()
+            except queue.Empty:
+                break
+            etype = evt.get("type")
+            value = evt.get("value")
+            if etype == "status" and status_cb:
+                status_cb(str(value))
+            elif etype == "progress" and progress_cb:
+                progress_cb(float(value))
+            elif etype == "result":
+                result = list(value)
+            elif etype == "error":
+                error_text = str(value)
+
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("Cancelled during diarization.")
+        if result is not None:
+            return result
+        if error_text is not None:
+            raise RuntimeError(error_text)
+        raise RuntimeError(
+            f"Diarization subprocess exited unexpectedly (exit code {getattr(proc, 'exitcode', None)})."
+        )
+    finally:
+        try:
+            if proc.is_alive():
+                _stop_process(proc, reason="diarization cleanup")
+        except Exception:
+            pass
+        try:
+            event_queue.close()
+            event_queue.join_thread()
+        except Exception:
+            pass
+
+
+def _run_diarization_backend(
+    *,
+    audio_path: str,
+    backend: str,
+    device: str,
+    max_speakers: int | None,
+    cancel_event: Event | None,
+    progress_cb: ProgressCallback | None,
+    status_cb: StatusCallback | None,
+) -> list[dict]:
+    if _should_isolate_diarization_backend(backend) and _can_spawn_isolated_diarization():
+        return _run_diarization_backend_in_subprocess(
+            audio_path=audio_path,
+            backend=backend,
+            device=device,
+            max_speakers=max_speakers,
+            cancel_event=cancel_event,
+            progress_cb=progress_cb,
+            status_cb=status_cb,
+        )
+    if _should_isolate_diarization_backend(backend):
+        LOGGER.info("Skipping isolated diarization process because __main__ is not spawn-importable.")
+
+    from diar_backends import run_diarization_backend
+
+    return run_diarization_backend(
+        audio_path=audio_path,
+        backend=backend,
+        device=device,
+        max_speakers=max_speakers,
+        progress_cb=progress_cb,
+        status_cb=status_cb,
+    )
 
 
 def _collect_cuda_diagnostics() -> str:
@@ -263,14 +474,13 @@ def transcribe_prepared_audio(
                 if on_diar_progress:
                     on_diar_progress(value)
 
-            from diar_backends import run_diarization_backend
-
             try:
-                diar_segments = run_diarization_backend(
+                diar_segments = _run_diarization_backend(
                     audio_path=wav_path,
                     backend=diar_backend,
                     device=device,
                     max_speakers=max_speakers,
+                    cancel_event=cancel_event,
                     progress_cb=_diar_progress,
                     status_cb=on_status,
                 )
@@ -289,11 +499,12 @@ def transcribe_prepared_audio(
                         "Diarization CUDA runtime unavailable. Retrying diarization on CPU (slower, keeps speakers)..."
                     )
                 try:
-                    diar_segments = run_diarization_backend(
+                    diar_segments = _run_diarization_backend(
                         audio_path=wav_path,
                         backend=diar_backend,
                         device="cpu",
                         max_speakers=max_speakers,
+                        cancel_event=cancel_event,
                         progress_cb=_diar_progress,
                         status_cb=on_status,
                     )

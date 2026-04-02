@@ -11,7 +11,14 @@ from unittest.mock import patch
 
 from services.granite_speech_service import GraniteSpeechModelBundle
 from services.model_service import resolve_transcription_model
-from services.transcription_service import TranscriptionResult, transcribe_media_file, transcribe_prepared_audio
+from services.transcription_service import (
+    TranscriptionResult,
+    _can_spawn_isolated_diarization,
+    _should_isolate_diarization_backend,
+    _should_retry_diarization_on_cpu,
+    transcribe_media_file,
+    transcribe_prepared_audio,
+)
 
 
 @dataclass
@@ -23,6 +30,24 @@ class _FakeVisualResult:
 
 
 class TranscriptionServiceTests(unittest.TestCase):
+    def test_should_retry_diarization_on_cpu_handles_cudnn_mismatch(self) -> None:
+        exc = RuntimeError("cuDNN error: CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH")
+
+        self.assertTrue(_should_retry_diarization_on_cpu(exc, backend="accurate", device="cuda"))
+        self.assertFalse(_should_retry_diarization_on_cpu(exc, backend="accurate", device="cpu"))
+
+    def test_should_isolate_diarization_backend_for_pyannote_backends(self) -> None:
+        self.assertTrue(_should_isolate_diarization_backend("accurate"))
+        self.assertTrue(_should_isolate_diarization_backend("fast"))
+        self.assertFalse(_should_isolate_diarization_backend("sortformer"))
+        self.assertFalse(_should_isolate_diarization_backend("off"))
+
+    def test_can_spawn_isolated_diarization_requires_real_main_file(self) -> None:
+        with patch.object(sys.modules["__main__"], "__file__", "/tmp/runner.py"):
+            self.assertTrue(_can_spawn_isolated_diarization())
+        with patch.object(sys.modules["__main__"], "__file__", "<stdin>"):
+            self.assertFalse(_can_spawn_isolated_diarization())
+
     def test_transcribe_prepared_audio_granite_returns_transcript_without_segments(self) -> None:
         bundle = GraniteSpeechModelBundle(
             processor=object(),
@@ -113,6 +138,52 @@ class TranscriptionServiceTests(unittest.TestCase):
         self.assertTrue(any("Diarization unavailable" in status for status in statuses))
         self.assertEqual(load_model_mock.call_args.kwargs["model_spec"], spec)
         self.assertFalse(transcribe_mock.call_args.kwargs["use_diarization"])
+
+    def test_transcribe_prepared_audio_retries_diarization_on_cpu_after_cuda_runtime_error(self) -> None:
+        statuses: list[str] = []
+
+        class _FakeSegment:
+            def __init__(self, start: float, end: float, text: str) -> None:
+                self.start = start
+                self.end = end
+                self.text = text
+
+        class _FakeModel:
+            def transcribe(self, *args, **kwargs):
+                return iter([_FakeSegment(0.0, 1.0, "hello there")]), None
+
+        attempts: list[str] = []
+
+        def _fake_run(**kwargs):
+            attempts.append(kwargs["device"])
+            if kwargs["device"] == "cuda":
+                raise RuntimeError("cuDNN error: CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH")
+            return [{"start": 0.0, "end": 1.0, "speaker": "S1"}]
+
+        spec = resolve_transcription_model("deepdml/faster-whisper-large-v3-turbo-ct2")
+
+        with patch("services.transcription_service._probe_duration_seconds", return_value=8.0), patch(
+            "services.transcription_service.load_audio_waveform",
+            return_value=[0.1, 0.2],
+        ), patch(
+            "services.transcription_service._run_diarization_backend",
+            side_effect=_fake_run,
+        ):
+            result = transcribe_prepared_audio(
+                wav_path="prepared.wav",
+                model=_FakeModel(),
+                model_spec=spec,
+                language=None,
+                use_diarization=True,
+                diar_backend="accurate",
+                device="cuda",
+                max_speakers=2,
+                on_status=statuses.append,
+            )
+
+        self.assertEqual(attempts, ["cuda", "cpu"])
+        self.assertIn("Diarization CUDA runtime unavailable. Retrying diarization on CPU", "\n".join(statuses))
+        self.assertTrue(result.transcript.startswith("[S1] hello there"))
 
 
 if __name__ == "__main__":

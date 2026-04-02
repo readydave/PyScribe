@@ -36,6 +36,8 @@
 - **Speaker Identification**:
   - Enables/disables diarization (speaker labels).
   - Choose backend mode and optional max speakers (blank = auto).
+  - Pyannote diarization runs in a separate worker process so GPU speaker ID is isolated from CUDA ASR runtime state.
+  - If CUDA diarization is unavailable, PyScribe retries diarization on CPU before dropping speaker labels.
 - **Analyze visuals (slides/chat OCR, beta)**:
   - Optional video-frame OCR to capture on-screen text.
   - Choose visual mode: `fast`, `balanced`, `accurate`.
@@ -104,7 +106,7 @@ Before transcription, PyScribe may detect language and prompt:
 
 - **Process File**: starts a new job.
 - **Cancel**: cooperative stop (safe).
-- **Force Stop**: immediate stop if cancel is stuck.
+- **Force Stop**: immediate stop if cancel is stuck; escalates to a hard kill if the worker does not exit cleanly.
 - **Save** (dropdown, default action = Save All):
   - **Save All (Transcript + OCR)**
   - **Save Transcript Only**
@@ -141,7 +143,9 @@ Before transcription, PyScribe may detect language and prompt:
 - **Gated diarization errors**
   - Verify HF token and model access terms.
 - **GPU issues**
-  - Retry with a smaller model or disable diarization.
+  - Pyannote diarization runs in a separate process to avoid CUDA runtime conflicts with `faster-whisper`.
+  - If GPU diarization still cannot start, PyScribe retries speaker ID on CPU automatically.
+  - Retry with a smaller model or disable diarization if GPU memory is tight.
 - **Visual analysis unavailable**
   - Install OCR runtime (`pytesseract` + OS package `tesseract-ocr`), or configure another backend.
 - **Post-process blocked while transcription is running**

@@ -14,6 +14,7 @@ LOGGER = logging.getLogger(__name__)
 ProgressCallback = Callable[[float], None]
 StatusCallback = Callable[[str], None]
 Segment = dict[str, object]
+_TORCHAUDIO_SOUNDFILE_PATCHED = False
 
 
 def _torch_cuda_snapshot() -> str:
@@ -33,6 +34,54 @@ def _torch_cuda_snapshot() -> str:
     return " | ".join(parts)
 
 
+def _prefer_torchaudio_soundfile_backend() -> str | None:
+    """
+    Prefer torchaudio's soundfile backend for pyannote IO.
+
+    pyannote still calls ``torchaudio.set_audio_backend("soundfile")``, but on
+    modern torchaudio that API is a no-op and the dispatcher picks the first
+    available backend. On this Linux host, the default SoX backend segfaults
+    during WAV reads, while ``backend="soundfile"`` works reliably.
+    """
+
+    global _TORCHAUDIO_SOUNDFILE_PATCHED
+    if _TORCHAUDIO_SOUNDFILE_PATCHED:
+        return "soundfile"
+
+    try:
+        available = list(torchaudio.list_audio_backends())
+    except Exception as exc:
+        LOGGER.warning("Unable to inspect torchaudio backends for diarization. reason=%s", exc, exc_info=True)
+        return None
+
+    if "soundfile" not in available:
+        LOGGER.info("TorchAudio soundfile backend unavailable for diarization. available=%s", available)
+        return None
+
+    original_info = torchaudio.info
+    original_load = torchaudio.load
+
+    def _wrap_with_soundfile_default(func):
+        def _wrapped(*args, **kwargs):
+            kwargs.setdefault("backend", "soundfile")
+            return func(*args, **kwargs)
+
+        setattr(_wrapped, "__pyscribe_soundfile_default__", True)
+        return _wrapped
+
+    if not getattr(original_info, "__pyscribe_soundfile_default__", False):
+        torchaudio.info = _wrap_with_soundfile_default(original_info)
+    if not getattr(original_load, "__pyscribe_soundfile_default__", False):
+        torchaudio.load = _wrap_with_soundfile_default(original_load)
+
+    _TORCHAUDIO_SOUNDFILE_PATCHED = True
+    LOGGER.info(
+        "Configured torchaudio to prefer backend=soundfile for diarization. available=%s",
+        available,
+    )
+    return "soundfile"
+
+
 def _lazy_import_pyannote() -> object:
     try:
         from pyannote.audio import Pipeline  # type: ignore
@@ -41,6 +90,30 @@ def _lazy_import_pyannote() -> object:
             "pyannote.audio is required for diarization. Install with: pip install pyannote.audio"
         ) from e
     return Pipeline
+
+
+def _load_pyannote_pipeline(Pipeline: object, token: str | None, requested_device: str) -> tuple[object, str]:
+    LOGGER.info(
+        "Loading pyannote diarization pipeline preferred=3.1 fallback=3.0 token_present=%s requested_device=%s",
+        bool(token),
+        requested_device,
+    )
+    try:
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
+        return pipeline, "3.1"
+    except Exception as e1:
+        LOGGER.warning("Failed to load pyannote pipeline 3.1; trying 3.0. reason=%s", e1, exc_info=True)
+        try:
+            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.0", use_auth_token=token)
+            return pipeline, "3.0"
+        except Exception as e2:
+            LOGGER.error(
+                "Failed to load pyannote pipeline versions 3.1 and 3.0 requested_device=%s torch_diag=%s",
+                requested_device,
+                _torch_cuda_snapshot(),
+                exc_info=True,
+            )
+            raise RuntimeError(f"Failed to load pyannote pipeline (3.1 then 3.0): {e2}") from e2
 
 
 def run_diarization(
@@ -55,6 +128,7 @@ def run_diarization(
     Returns a list of segments: [{"start": float, "end": float, "speaker": "S1"}, ...]
     """
     ensure_platform_sys_version_compat()
+    backend_override = _prefer_torchaudio_soundfile_backend()
     Pipeline = _lazy_import_pyannote()
     # Some torchaudio builds dropped set_audio_backend; provide a no-op to avoid pipeline errors.
     if not hasattr(torchaudio, "set_audio_backend"):
@@ -67,27 +141,11 @@ def run_diarization(
 
     token = get_hf_token()
     LOGGER.info(
-        "Loading pyannote diarization pipeline preferred=3.1 fallback=3.0 token_present=%s requested_device=%s",
-        bool(token),
+        "Preparing pyannote diarization requested_device=%s audio_backend=%s",
         device,
+        backend_override or "default",
     )
-    try:
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
-        pipeline_version = "3.1"
-    except Exception as e1:
-        LOGGER.warning("Failed to load pyannote pipeline 3.1; trying 3.0. reason=%s", e1, exc_info=True)
-        # fallback to 3.0 if 3.1 still gated or unavailable
-        try:
-            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.0", use_auth_token=token)
-            pipeline_version = "3.0"
-        except Exception as e2:
-            LOGGER.error(
-                "Failed to load pyannote pipeline versions 3.1 and 3.0 requested_device=%s torch_diag=%s",
-                device,
-                _torch_cuda_snapshot(),
-                exc_info=True,
-            )
-            raise RuntimeError(f"Failed to load pyannote pipeline (3.1 then 3.0): {e2}")
+    pipeline, pipeline_version = _load_pyannote_pipeline(Pipeline, token, device)
     LOGGER.info(
         "Loaded pyannote diarization pipeline version=%s token_present=%s",
         pipeline_version,
@@ -112,6 +170,19 @@ def run_diarization(
             _torch_cuda_snapshot(),
             exc_info=True,
         )
+        try:
+            pipeline, pipeline_version = _load_pyannote_pipeline(Pipeline, token, effective_device)
+            LOGGER.info(
+                "Reloaded pyannote diarization pipeline on CPU after %s device move failure.",
+                requested_device,
+            )
+        except Exception:
+            LOGGER.error(
+                "Failed to reload pyannote diarization pipeline on CPU after %s device move failure.",
+                requested_device,
+                exc_info=True,
+            )
+            raise
 
     LOGGER.info(
         "Running diarization inference backend=accurate model=%s requested_device=%s effective_device=%s max_speakers=%s",

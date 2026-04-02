@@ -59,6 +59,10 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 ## Recent Updates (Unreleased)
 
+- Isolated pyannote diarization into a separate spawned subprocess so GPU speaker ID can run cleanly after CUDA ASR models.
+- Forced pyannote audio reads to prefer `torchaudio`'s `soundfile` backend to avoid SoX loader crashes on some systems.
+- Improved Qt transcription worker recovery so unexpected child exits surface a real failure instead of leaving the UI stuck.
+- Hardened Qt **Force Stop** to escalate from terminate to kill when needed.
 - Shared listener security/auth logic between `main.py` and `app.py` via `services/listener_security_service.py`.
 - Hardened listener credential handling: `--auth-pass` is rejected to avoid secret leakage in process lists/history.
 - Improved NeMo Sortformer compatibility across modern and legacy API paths, with CUDA-aware availability checks.
@@ -160,7 +164,7 @@ Note: Interactive LAN mode no longer uses a default password. Set
 
 ## Feature Notes
 
-- **Diarization:** optional; when unavailable/failing, transcription still completes without speaker labels.
+- **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. If diarization still fails, transcription completes without speaker labels.
 - **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and OCR backend selection.
 - **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`.
 - **Benchmarking:** Qt Tools menu includes benchmark runner for bundled sample media.

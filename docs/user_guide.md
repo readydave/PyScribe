@@ -77,6 +77,8 @@ If both transcription and visuals are off, PyScribe blocks run start.
 
 - **Mode**: backend selector for diarization engine.
 - **Max Speakers**: optional speaker cap (blank = auto).
+- Pyannote diarization backends run in a separate worker process so GPU speaker ID can stay isolated from CUDA ASR runtime state.
+- If GPU diarization is unavailable, PyScribe retries diarization on CPU before giving up on speaker labels.
 - Diarization progress bar:
   - Disabled when transcription is off.
   - Shows indeterminate state during long diarization operations.
@@ -105,7 +107,7 @@ Fallback behavior:
 
 - **Process File**: start run.
 - **Cancel**: cooperative cancellation.
-- **Force Stop**: immediate process termination if cancellation stalls.
+- **Force Stop**: immediate process termination if cancellation stalls; Qt escalates from terminate to kill when needed.
 - **Exit**: close app.
 
 ### Output Controls

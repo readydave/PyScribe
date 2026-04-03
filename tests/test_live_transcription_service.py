@@ -132,6 +132,40 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             self.assertEqual(transcript_events[0]["value"], "hello world")
             controller.shutdown()
 
+    def test_stop_during_inflight_decode_queues_forced_final_decode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+            controller = LiveSessionController(self._options(temp_dir))
+            controller.start()
+            controller._request_queue = _FakeRequestQueue()
+            controller._event_queue = queue.Queue()
+
+            audio = np.zeros(int(LIVE_SAMPLE_RATE * 3.1), dtype=np.float32)
+            controller.append_audio_chunk(audio, np.zeros(audio.size, dtype=np.int16).tobytes())
+
+            self.assertEqual(len(controller._request_queue.items), 1)
+            self.assertFalse(controller._request_queue.items[0]["final"])
+
+            controller.request_final_decode()
+            self.assertTrue(controller._awaiting_final_decode)
+            self.assertEqual(len(controller._request_queue.items), 1)
+
+            controller._event_queue.put(
+                {
+                    "type": "result",
+                    "request_id": 1,
+                    "segments": [{"start": 0.0, "end": 2.4, "text": "hello world"}],
+                    "window_start_seconds": 0.0,
+                    "window_end_seconds": 3.1,
+                    "stabilization_tail_seconds": 0.5,
+                    "final": False,
+                }
+            )
+            controller.poll_events()
+
+            self.assertEqual(len(controller._request_queue.items), 2)
+            self.assertTrue(controller._request_queue.items[1]["final"])
+            controller.shutdown()
+
     def test_live_session_error_event_marks_metadata_failed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
             controller = LiveSessionController(self._options(temp_dir, source_mode="loopback"))

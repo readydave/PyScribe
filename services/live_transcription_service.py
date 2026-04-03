@@ -397,7 +397,12 @@ class LiveSessionController:
             )
             if final:
                 events.append({"type": "status", "value": "Live capture finalized. Starting final post-pass..."})
-            self._maybe_queue_decode()
+            elif self._awaiting_final_decode:
+                # If stop was requested while a rolling decode was already in flight,
+                # force the terminal decode now instead of waiting for another hop.
+                self._maybe_queue_decode(force=True, final=True)
+            else:
+                self._maybe_queue_decode()
         return events
 
     def is_idle(self) -> bool:

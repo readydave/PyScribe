@@ -10,9 +10,11 @@ import queue
 import threading
 import time
 from _thread import LockType
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QFont, QKeySequence, QPalette
+from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
 from PySide6.QtWidgets import (
     QSizePolicy,
     QApplication,
@@ -46,9 +48,16 @@ from PySide6.QtWidgets import (
 
 from services import (
     AppConfig,
+    LiveAudioDevice,
+    LiveSessionController,
+    LiveSessionOptions,
+    audio_format_to_dict,
+    build_live_capture_format,
     TranscriptionResult,
     RuntimeInfo,
     check_ocr_backend_ready,
+    choose_live_audio_devices,
+    default_live_output_dir,
     detect_runtime,
     detect_language,
     get_available_diarization_backends,
@@ -62,7 +71,10 @@ from services import (
     estimate_model_download_size_bytes,
     format_bytes,
     is_model_cached,
+    list_live_audio_inputs,
     load_config,
+    live_model_supported,
+    normalize_live_pcm_chunk,
     open_folder,
     recommend_model,
     resolve_transcription_model,
@@ -551,6 +563,19 @@ class MainWindow(QMainWindow):
         )
         self._sidebar_collapsed: bool = False
         self._status_panel_hidden: bool = False
+        self._input_mode: str = "file"
+        self._live_devices: list[LiveAudioDevice] = []
+        self._live_session: LiveSessionController | None = None
+        self._live_capture_active: bool = False
+        self._live_finalizing: bool = False
+        self._live_audio_source: QAudioSource | None = None
+        self._live_audio_io: object | None = None
+        self._live_capture_format: QAudioFormat | None = None
+        self._live_started_at: float | None = None
+        self._live_status_timer: QTimer = QTimer(self)
+        self._live_status_timer.timeout.connect(self._poll_live_session_events)
+        self._live_elapsed_timer: QTimer = QTimer(self)
+        self._live_elapsed_timer.timeout.connect(self._update_live_elapsed_label)
 
         self._build_ui()
         self._build_menus()
@@ -563,6 +588,8 @@ class MainWindow(QMainWindow):
         self._update_visual_ui_state(self.visual_checkbox.isChecked())
         self._on_model_selection_changed(self.model_combo.currentText())
         self._update_service_visibility()
+        self._refresh_live_device_choices()
+        self._update_live_mode_ui()
         QTimer.singleShot(0, self._apply_responsive_layout_state)
         LOGGER.info("Qt MainWindow initialized runtime=%s compute=%s", self.runtime.device, self.runtime.compute_type)
 
@@ -685,6 +712,59 @@ class MainWindow(QMainWindow):
         self.drop_label.browse_requested.connect(self.on_browse)
         drop_layout.addWidget(self.drop_label)
         main_layout.addWidget(drop_card)
+        self.drop_card = drop_card
+
+        live_card = QFrame()
+        live_card.setObjectName("Card")
+        live_layout = QVBoxLayout(live_card)
+        live_layout.setContentsMargins(12, 12, 12, 12)
+        live_layout.setSpacing(8)
+        live_layout.addWidget(QLabel("Live Capture"))
+        live_grid = QGridLayout()
+        live_grid.setHorizontalSpacing(8)
+        live_grid.setVerticalSpacing(6)
+        live_grid.addWidget(QLabel("Source"), 0, 0)
+        self.live_source_combo = QComboBox()
+        self.live_source_combo.addItem("Microphone", "microphone")
+        self.live_source_combo.addItem("Loopback", "loopback")
+        live_source = str(self.config.live_source_mode or "microphone").strip().lower()
+        live_index = self.live_source_combo.findData(live_source)
+        self.live_source_combo.setCurrentIndex(max(live_index, 0))
+        self.live_source_combo.currentIndexChanged.connect(self._on_live_source_changed)
+        live_grid.addWidget(self.live_source_combo, 0, 1)
+        live_grid.addWidget(QLabel("Device"), 1, 0)
+        self.live_device_combo = QComboBox()
+        self.live_device_combo.currentIndexChanged.connect(self._on_live_device_changed)
+        live_grid.addWidget(self.live_device_combo, 1, 1)
+        live_grid.addWidget(QLabel("Output Folder"), 2, 0)
+        live_output_row = QHBoxLayout()
+        self.live_output_dir_input = QLineEdit(self.config.live_output_dir or default_live_output_dir())
+        self.live_output_dir_input.textChanged.connect(self._on_live_output_dir_changed)
+        live_output_row.addWidget(self.live_output_dir_input, 1)
+        self.live_output_dir_btn = QPushButton("Browse...")
+        self.live_output_dir_btn.clicked.connect(self._browse_live_output_dir)
+        live_output_row.addWidget(self.live_output_dir_btn)
+        live_grid.addLayout(live_output_row, 2, 1)
+        live_grid.addWidget(QLabel("Timer"), 3, 0)
+        self.live_timer_label = QLabel("00:00:00")
+        self.live_timer_label.setObjectName("metricsLabel")
+        live_grid.addWidget(self.live_timer_label, 3, 1)
+        live_layout.addLayout(live_grid)
+        self.live_keep_audio_checkbox = QCheckBox("Keep recorded audio after completion")
+        self.live_keep_audio_checkbox.setChecked(bool(self.config.live_keep_audio_on_success))
+        self.live_keep_audio_checkbox.toggled.connect(self._on_live_keep_audio_toggled)
+        live_layout.addWidget(self.live_keep_audio_checkbox)
+        self.live_path_hint_label = QLabel("")
+        self.live_path_hint_label.setObjectName("hint")
+        self.live_path_hint_label.setWordWrap(True)
+        live_layout.addWidget(self.live_path_hint_label)
+        self.live_guidance_label = QLabel("")
+        self.live_guidance_label.setObjectName("hint")
+        self.live_guidance_label.setWordWrap(True)
+        live_layout.addWidget(self.live_guidance_label)
+        live_card.setVisible(False)
+        main_layout.addWidget(live_card)
+        self.live_card = live_card
 
         settings_grid = QGridLayout()
         settings_grid.setHorizontalSpacing(12)
@@ -714,6 +794,12 @@ class MainWindow(QMainWindow):
         self.model_hint_label.setObjectName("hint")
         general_layout.addWidget(self.model_hint_label)
         self.model_combo.currentTextChanged.connect(self._on_model_selection_changed)
+        general_layout.addWidget(QLabel("Input"))
+        self.input_mode_combo = QComboBox()
+        self.input_mode_combo.addItem("File", "file")
+        self.input_mode_combo.addItem("Live", "live")
+        self.input_mode_combo.currentIndexChanged.connect(self._on_input_mode_changed)
+        general_layout.addWidget(self.input_mode_combo)
 
         self.transcribe_checkbox = QCheckBox("Transcribe audio")
         start_mode = str(self.config.run_mode or "full").strip().lower()
@@ -766,7 +852,8 @@ class MainWindow(QMainWindow):
         self.visual_checkbox.toggled.connect(self._update_service_visibility)
         advanced_layout.addWidget(self.visual_checkbox)
 
-        visual_grid = QGridLayout()
+        self.visual_options_widget = QWidget()
+        visual_grid = QGridLayout(self.visual_options_widget)
         visual_grid.setHorizontalSpacing(8)
         visual_grid.setVerticalSpacing(6)
         visual_grid.addWidget(QLabel("Mode"), 0, 0)
@@ -789,7 +876,7 @@ class MainWindow(QMainWindow):
         self.visual_interval_input = QLineEdit()
         self.visual_interval_input.setText(f"{float(self.config.visual_sample_seconds or 1.0):.1f}")
         visual_grid.addWidget(self.visual_interval_input, 2, 1)
-        advanced_layout.addLayout(visual_grid)
+        advanced_layout.addWidget(self.visual_options_widget)
         advanced_layout.addStretch(1)
 
         self._update_transcription_card_columns()
@@ -798,6 +885,10 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         self.transcribe_btn = QPushButton("Process File")
         self.transcribe_btn.clicked.connect(self.start_transcription)
+        self.stop_live_btn = QPushButton("Stop")
+        self.stop_live_btn.setEnabled(False)
+        self.stop_live_btn.setVisible(False)
+        self.stop_live_btn.clicked.connect(self.stop_live_capture)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_transcription)
@@ -824,6 +915,7 @@ class MainWindow(QMainWindow):
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self.copy_transcript)
         actions.addWidget(self.transcribe_btn)
+        actions.addWidget(self.stop_live_btn)
         actions.addWidget(self.cancel_btn)
         actions.addWidget(self.force_stop_btn)
         actions.addWidget(self.save_btn)
@@ -1517,8 +1609,452 @@ class MainWindow(QMainWindow):
         if path:
             self.set_media_path(path)
 
+    def _is_live_mode(self) -> bool:
+        return str(self.input_mode_combo.currentData() or "file").strip().lower() == "live"
+
+    def _selected_live_source_mode(self) -> str:
+        return str(self.live_source_combo.currentData() or "microphone").strip().lower() or "microphone"
+
+    def _selected_live_device(self) -> LiveAudioDevice | None:
+        device_id = str(self.live_device_combo.currentData() or "").strip()
+        if not device_id:
+            return None
+        for device in self._live_devices:
+            if device.id == device_id:
+                return device
+        return None
+
+    def _selected_live_output_dir(self) -> str:
+        text = self.live_output_dir_input.text().strip()
+        return text or default_live_output_dir()
+
+    def _refresh_live_device_choices(self) -> None:
+        try:
+            self._live_devices = list_live_audio_inputs()
+        except Exception as exc:
+            LOGGER.warning("Live audio device enumeration failed: %s", exc, exc_info=True)
+            self._live_devices = []
+
+        source_mode = self._selected_live_source_mode()
+        candidates = choose_live_audio_devices(self._live_devices, source_mode=source_mode)
+        current_id = str(self.config.live_input_device_id or "").strip()
+        self.live_device_combo.blockSignals(True)
+        self.live_device_combo.clear()
+        for device in candidates:
+            self.live_device_combo.addItem(device.name, device.id)
+        target_index = -1
+        if current_id:
+            target_index = self.live_device_combo.findData(current_id)
+        if target_index < 0 and self.live_device_combo.count() > 0:
+            target_index = 0
+        if target_index >= 0:
+            self.live_device_combo.setCurrentIndex(target_index)
+        self.live_device_combo.blockSignals(False)
+        self._update_live_mode_ui()
+
+    @Slot()
+    def _on_input_mode_changed(self, *_unused: object) -> None:
+        self._input_mode = "live" if self._is_live_mode() else "file"
+        self._refresh_live_device_choices()
+        self._update_diar_ui_state(self.diar_checkbox.isChecked())
+        self._update_visual_ui_state(self.visual_checkbox.isChecked())
+        self._update_live_mode_ui()
+
+    @Slot()
+    def _on_live_source_changed(self, *_unused: object) -> None:
+        self._save_config(live_source_mode=self._selected_live_source_mode())
+        self._refresh_live_device_choices()
+
+    @Slot()
+    def _on_live_device_changed(self, *_unused: object) -> None:
+        device = self._selected_live_device()
+        self._save_config(live_input_device_id=device.id if device else None)
+        self._update_live_mode_ui()
+
+    @Slot(str)
+    def _on_live_output_dir_changed(self, text: str) -> None:
+        del text
+        self._save_config(live_output_dir=self._selected_live_output_dir())
+        self._update_live_mode_ui()
+
+    @Slot(bool)
+    def _on_live_keep_audio_toggled(self, checked: bool) -> None:
+        self._save_config(live_keep_audio_on_success=checked)
+
+    @Slot()
+    def _browse_live_output_dir(self) -> None:
+        start_dir = self._selected_live_output_dir()
+        if not os.path.isdir(start_dir):
+            start_dir = os.path.expanduser("~")
+        path = QFileDialog.getExistingDirectory(self, "Select Live Output Folder", start_dir)
+        if path:
+            self.live_output_dir_input.setText(path)
+
+    def _update_live_elapsed_label(self) -> None:
+        if self._live_started_at is None:
+            self.live_timer_label.setText("00:00:00")
+            return
+        elapsed = max(0, int(time.perf_counter() - self._live_started_at))
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        self.live_timer_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+
+    def _update_live_mode_ui(self) -> None:
+        live_mode = self._is_live_mode()
+        self.drop_card.setVisible(not live_mode)
+        self.live_card.setVisible(live_mode)
+        self.stop_live_btn.setVisible(live_mode)
+        self.transcribe_btn.setText("Start Live" if live_mode else "Process File")
+
+        if live_mode:
+            self.path_label.setText(
+                str(self._live_session.session_dir)
+                if self._live_session is not None
+                else "Live capture ready"
+            )
+        else:
+            self.path_label.setText(self.media_path or "No file selected")
+
+        live_supported = live_model_supported(self._selected_model_name() or "base")
+        live_device = self._selected_live_device()
+        live_devices_available = self.live_device_combo.count() > 0 and live_device is not None
+        loopback_selected = self._selected_live_source_mode() == "loopback"
+        if not live_mode:
+            guidance = ""
+        elif not live_supported:
+            guidance = "Live mode requires a timestamp-capable Whisper backend. Granite remains file-only."
+        elif not live_devices_available and loopback_selected:
+            guidance = "No loopback input was detected. On Linux, expose a monitor/loopback source in PipeWire or PulseAudio."
+        elif not live_devices_available:
+            guidance = "No microphone input was detected."
+        elif self._live_capture_active:
+            guidance = f"Recording from {live_device.name}. Stop to run the final post-pass."
+        elif self._live_finalizing:
+            guidance = "Finalizing the live session and preserving the capture folder."
+        else:
+            guidance = "Live capture writes a recoverable WAV while showing rolling transcript updates."
+        self.live_guidance_label.setText(guidance)
+
+        output_root = Path(self._selected_live_output_dir()).expanduser()
+        if self._live_session is not None:
+            self.live_path_hint_label.setText(f"Session folder: {self._live_session.session_dir}")
+        else:
+            self.live_path_hint_label.setText(f"Output root: {output_root}")
+
+        can_start_live = live_mode and live_supported and live_devices_available and not self._live_capture_active and not self._live_finalizing and not self._is_transcription_running()
+        if live_mode:
+            self.transcribe_btn.setEnabled(can_start_live)
+        self.stop_live_btn.setEnabled(self._live_capture_active)
+
+        live_controls_enabled = live_mode and not self._live_capture_active and not self._live_finalizing and not self._is_transcription_running()
+        self.live_source_combo.setEnabled(live_controls_enabled)
+        self.live_device_combo.setEnabled(live_controls_enabled and self.live_device_combo.count() > 0)
+        self.live_output_dir_input.setEnabled(live_controls_enabled)
+        self.live_output_dir_btn.setEnabled(live_controls_enabled)
+        self.live_keep_audio_checkbox.setEnabled(live_controls_enabled)
+
+    def _find_qt_audio_input(self, device_id: str) -> object | None:
+        target = str(device_id or "").strip()
+        for device in QMediaDevices.audioInputs():
+            if str(bytes(device.id()).decode("utf-8", errors="ignore")) == target:
+                return device
+        return None
+
+    def _stop_live_audio_source(self) -> None:
+        audio_io = self._live_audio_io
+        self._live_audio_io = None
+        if audio_io is not None:
+            try:
+                audio_io.readyRead.disconnect(self._on_live_audio_ready)
+            except Exception:
+                pass
+        audio_source = self._live_audio_source
+        self._live_audio_source = None
+        if audio_source is not None:
+            try:
+                audio_source.stop()
+            except Exception:
+                pass
+            audio_source.deleteLater()
+        self._live_capture_format = None
+
+    def _teardown_live_session(self, *, shutdown: bool = True, preserve_error: bool = False) -> None:
+        self._live_status_timer.stop()
+        self._live_elapsed_timer.stop()
+        self._stop_live_audio_source()
+        if self._live_session is not None and shutdown:
+            self._live_session.shutdown(preserve_error=preserve_error)
+        self._live_capture_active = False
+        self._live_finalizing = False
+        self._live_started_at = None
+        self._update_live_elapsed_label()
+
+    @Slot()
+    def _on_live_audio_ready(self) -> None:
+        if not self._live_capture_active or self._live_audio_io is None or self._live_capture_format is None or self._live_session is None:
+            return
+        try:
+            while int(getattr(self._live_audio_io, "bytesAvailable", lambda: 0)()) > 0:
+                chunk = bytes(self._live_audio_io.readAll())
+                if not chunk:
+                    break
+                audio_np, pcm16 = normalize_live_pcm_chunk(
+                    chunk,
+                    sample_rate=self._live_capture_format.sampleRate(),
+                    channel_count=self._live_capture_format.channelCount(),
+                    sample_format=self._live_capture_format.sampleFormat(),
+                )
+                self._live_session.append_audio_chunk(audio_np, pcm16)
+        except Exception as exc:
+            self._handle_live_session_error(str(exc))
+
+    def _poll_live_session_events(self) -> None:
+        session = self._live_session
+        if session is None:
+            return
+        for event in session.poll_events():
+            etype = event.get("type")
+            if etype == "status":
+                self._on_status_update(str(event.get("value", "")))
+            elif etype == "transcript":
+                self._on_transcript_update(str(event.get("value", "")))
+            elif etype == "error":
+                self._handle_live_session_error(str(event.get("value", "Live transcription failed.")))
+                return
+
+        worker_running = bool(self.worker_thread and self.worker_thread.isRunning())
+        if self._live_finalizing and not self._live_capture_active and not worker_running and session.is_idle():
+            self._start_live_final_pass()
+
+    def _handle_live_session_error(self, error_msg: str) -> None:
+        LOGGER.error("Live session failed: %s", error_msg)
+        if self._live_session is not None:
+            try:
+                self._live_session.finalize_failed(error_msg)
+            except Exception:
+                LOGGER.warning("Failed to update live session metadata after error.", exc_info=True)
+        partial = self.transcript_only_text or self.transcript_text
+        self._teardown_live_session(shutdown=True, preserve_error=False)
+        self._live_session = None
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Error")
+        self._append_terminal_log(f"Error: {error_msg}")
+        self.text_area.setPlainText(partial)
+        self.transcribe_btn.setEnabled(self._is_live_mode())
+        self.stop_live_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.force_stop_btn.setEnabled(False)
+        self.save_btn.setEnabled(bool(partial))
+        self.copy_btn.setEnabled(bool(partial))
+        self.stop_hw_monitor()
+        self._update_live_mode_ui()
+        QMessageBox.critical(self, "Live transcription error", error_msg)
+
+    def _start_live_transcription(self) -> None:
+        model_name = normalize_model_name(self.model_combo.currentText().strip())
+        if not model_name:
+            QMessageBox.warning(self, "No model", "Please select a model.")
+            return
+        if not live_model_supported(model_name):
+            QMessageBox.warning(
+                self,
+                "Live mode unavailable",
+                "Live mode requires a timestamp-capable Whisper backend. Granite remains file-only.",
+            )
+            return
+        if not self._confirm_model_download(model_name):
+            return
+        live_device = self._selected_live_device()
+        if live_device is None:
+            QMessageBox.warning(self, "No input device", "Select a live capture device before starting.")
+            return
+        qt_device = self._find_qt_audio_input(live_device.id)
+        if qt_device is None:
+            QMessageBox.warning(self, "Input unavailable", "The selected capture device is no longer available.")
+            self._refresh_live_device_choices()
+            return
+
+        max_speakers_text = self.max_speakers_input.text().strip()
+        max_speakers = int(max_speakers_text) if max_speakers_text.isdigit() else None
+        use_diarization = self.diar_checkbox.isChecked() and self._selected_model_supports_diarization()
+        diar_backend = str(self.diar_backend_combo.currentData() or "").strip().lower() or "accurate"
+        output_root = self._selected_live_output_dir()
+        self._save_config(
+            last_model=model_name,
+            live_source_mode=self._selected_live_source_mode(),
+            live_input_device_id=live_device.id,
+            live_output_dir=output_root,
+            live_keep_audio_on_success=self.live_keep_audio_checkbox.isChecked(),
+            use_diarization=use_diarization,
+            max_speakers=max_speakers,
+            diar_backend=diar_backend,
+        )
+
+        options = LiveSessionOptions(
+            model_name=model_name,
+            device=self.runtime.device,
+            compute_type=self.runtime.compute_type,
+            language=None,
+            source_mode=self._selected_live_source_mode(),
+            input_device_id=live_device.id,
+            input_device_name=live_device.name,
+            output_root=output_root,
+            keep_audio_on_success=self.live_keep_audio_checkbox.isChecked(),
+            use_diarization=use_diarization,
+            diar_backend=diar_backend,
+            max_speakers=max_speakers,
+        )
+
+        try:
+            session = LiveSessionController(options)
+            session.start()
+            capture_format = build_live_capture_format(qt_device)
+            audio_source = QAudioSource(qt_device, capture_format, self)
+            audio_io = audio_source.start()
+            if audio_io is None:
+                raise RuntimeError("Qt audio source did not return a readable capture stream.")
+            audio_io.readyRead.connect(self._on_live_audio_ready)
+        except Exception as exc:
+            if 'session' in locals():
+                try:
+                    session.finalize_failed(str(exc))
+                    session.shutdown()
+                except Exception:
+                    LOGGER.warning("Failed to clean up live session after startup error.", exc_info=True)
+            QMessageBox.critical(self, "Live capture failed", str(exc))
+            return
+
+        self.diarization_warning = None
+        self.transcript_text = ""
+        self.transcript_only_text = ""
+        self.visual_report_text = ""
+        self.text_area.clear()
+        self.terminal_log.clear()
+        self._current_run_mode = "transcribe_only"
+        self._current_use_diarization = use_diarization
+        self._current_use_visual_analysis = False
+        self._live_session = session
+        self._live_audio_source = audio_source
+        self._live_audio_io = audio_io
+        self._live_capture_format = capture_format
+        self._live_capture_active = True
+        self._live_finalizing = False
+        self._live_started_at = time.perf_counter()
+        self.progress_bar.setRange(0, 0)
+        self.diar_progress_bar.setRange(0, 100)
+        self.diar_progress_bar.setValue(0)
+        self.transcription_time_label.setText("Transcription time: live session running...")
+        self.diar_time_label.setText("Diarization time: pending final post-pass")
+        self.visual_time_label.setText("Visual analysis time: n/a (live mode)")
+        self.status_label.setText("Recording live audio...")
+        self._append_terminal_log(
+            f"Live capture started: {live_device.name} | source={options.source_mode} | format={audio_format_to_dict(capture_format)}"
+        )
+        self.path_label.setText(str(session.session_dir))
+        self.transcribe_btn.setEnabled(False)
+        self.stop_live_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(True)
+        self.force_stop_btn.setEnabled(True)
+        self.save_btn.setEnabled(False)
+        self.copy_btn.setEnabled(False)
+        self.start_hw_monitor()
+        self._live_status_timer.start(100)
+        self._live_elapsed_timer.start(500)
+        self._update_live_elapsed_label()
+        self._update_live_mode_ui()
+
+    @Slot()
+    def stop_live_capture(self) -> None:
+        if not self._live_capture_active or self._live_session is None:
+            return
+        self._live_capture_active = False
+        self._live_finalizing = True
+        self._append_terminal_log("Stop requested. Finalizing live capture before post-pass...")
+        self.status_label.setText("Stopping live capture...")
+        self.stop_live_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.force_stop_btn.setEnabled(True)
+        self._stop_live_audio_source()
+        self._live_session.close_capture()
+        self._live_session.request_final_decode()
+        self._update_live_mode_ui()
+
+    def _cancel_live_capture(self) -> None:
+        session = self._live_session
+        if session is None:
+            return
+        self._append_terminal_log("Cancellation requested.")
+        session.finalize_cancelled()
+        self._append_terminal_log(f"Recording preserved in: {session.session_dir}")
+        self._teardown_live_session(shutdown=True, preserve_error=False)
+        self._live_session = None
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Cancelled.")
+        self.stop_hw_monitor()
+        self.transcribe_btn.setEnabled(True)
+        self.stop_live_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.force_stop_btn.setEnabled(False)
+        self.save_btn.setEnabled(bool(self.transcript_text))
+        self.copy_btn.setEnabled(bool(self.transcript_text))
+        self._update_live_mode_ui()
+
+    def _force_stop_live_capture(self) -> None:
+        session = self._live_session
+        if session is None:
+            return
+        self._append_terminal_log("Force-stop requested.")
+        session.finalize_failed("Live session force-stopped.")
+        self._append_terminal_log(f"Recording preserved in: {session.session_dir}")
+        self._teardown_live_session(shutdown=True, preserve_error=False)
+        self._live_session = None
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Force-stopped.")
+        self.stop_hw_monitor()
+        self.transcribe_btn.setEnabled(True)
+        self.stop_live_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.force_stop_btn.setEnabled(False)
+        self.save_btn.setEnabled(bool(self.transcript_text))
+        self.copy_btn.setEnabled(bool(self.transcript_text))
+        self._update_live_mode_ui()
+
+    def _start_live_final_pass(self) -> None:
+        session = self._live_session
+        if session is None:
+            return
+        session.shutdown()
+        session.mark_finalizing()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self._append_terminal_log("Starting final post-pass on saved capture...")
+        self.status_label.setText("Running final post-pass...")
+        self.transcribe_btn.setEnabled(False)
+        self.stop_live_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.force_stop_btn.setEnabled(True)
+        self._launch_transcription_worker(
+            media_path=str(session.capture_path),
+            model_name=session.options.model_name,
+            run_mode="transcribe_only",
+            use_diarization=session.options.use_diarization,
+            diar_backend=session.options.diar_backend,
+            max_speakers=session.options.max_speakers,
+            use_visual_analysis=False,
+            visual_profile="balanced",
+            visual_ocr_backend="auto",
+            visual_sample_seconds=1.0,
+            language=session.options.language,
+        )
+
     @Slot()
     def start_transcription(self) -> None:
+        if self._is_live_mode():
+            self._start_live_transcription()
+            return
         if not self.media_path:
             QMessageBox.warning(self, "No file", "Please choose or drop a media file first.")
             return
@@ -1655,11 +2191,9 @@ class MainWindow(QMainWindow):
         if model_name:
             config_updates["last_model"] = model_name
         self._save_config(**config_updates)
-
-        self.worker_thread = QThread()
-        self.worker = TranscriptionWorker(
-            self.media_path,
-            model_name,
+        self._launch_transcription_worker(
+            media_path=self.media_path,
+            model_name=model_name,
             run_mode=run_mode,
             use_diarization=use_diarization,
             diar_backend=diar_backend_for_run,
@@ -1669,6 +2203,36 @@ class MainWindow(QMainWindow):
             visual_ocr_backend=visual_ocr_backend,
             visual_sample_seconds=visual_sample_seconds,
             language=forced_language,
+        )
+
+    def _launch_transcription_worker(
+        self,
+        *,
+        media_path: str,
+        model_name: str,
+        run_mode: str,
+        use_diarization: bool,
+        diar_backend: str,
+        max_speakers: int | None,
+        use_visual_analysis: bool,
+        visual_profile: str,
+        visual_ocr_backend: str,
+        visual_sample_seconds: float,
+        language: str | None,
+    ) -> None:
+        self.worker_thread = QThread()
+        self.worker = TranscriptionWorker(
+            media_path,
+            model_name,
+            run_mode=run_mode,
+            use_diarization=use_diarization,
+            diar_backend=diar_backend,
+            max_speakers=max_speakers,
+            use_visual_analysis=use_visual_analysis,
+            visual_profile=visual_profile,
+            visual_ocr_backend=visual_ocr_backend,
+            visual_sample_seconds=visual_sample_seconds,
+            language=language,
         )
         self._update_service_visibility()
         self.worker.moveToThread(self.worker_thread)
@@ -1686,6 +2250,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def cancel_transcription(self) -> None:
+        if self._live_capture_active:
+            self._cancel_live_capture()
+            return
         if self.worker is not None:
             self.worker.request_cancel()
         self.status_label.setText("Cancelling... waiting for current stage to yield.")
@@ -1694,6 +2261,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def force_stop_transcription(self) -> None:
+        if self._live_capture_active or (self._live_finalizing and self.worker is None):
+            self._force_stop_live_capture()
+            return
         if self.worker is not None:
             self.worker.request_force_stop()
         self.status_label.setText("Force stop requested...")
@@ -1744,6 +2314,7 @@ class MainWindow(QMainWindow):
         self.visual_report_text = visual_report
         self.text_area.setPlainText(transcript)
         self.transcribe_btn.setEnabled(True)
+        self.stop_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
         self.stop_hw_monitor()
@@ -1784,6 +2355,18 @@ class MainWindow(QMainWindow):
             self.visual_time_label.setText(f"Visual analysis time: {self._format_seconds(visual_analysis_seconds)}")
         else:
             self.visual_time_label.setText("Visual analysis time: n/a (disabled)")
+        if self._live_session is not None and self._live_finalizing:
+            final_text = (transcript_only or transcript or "").strip()
+            try:
+                self._live_session.finalize_success(final_text)
+                self._append_terminal_log(f"Recording saved in: {self._live_session.session_dir}")
+            except Exception as exc:
+                LOGGER.warning("Failed to finalize live session after success: %s", exc, exc_info=True)
+            self._teardown_live_session(shutdown=False)
+            self._live_session = None
+            done = "Live transcription complete." if not cancelled else "Live transcription cancelled."
+            self.status_label.setText(done)
+            self._append_terminal_log(done)
         if transcript or visual_report:
             self.save_btn.setEnabled(True)
             self.copy_btn.setEnabled(True)
@@ -1794,7 +2377,6 @@ class MainWindow(QMainWindow):
         if self.diarization_warning:
             QMessageBox.warning(self, "Diarization", self.diarization_warning)
         self._hide_download_progress_dialog()
-        self._update_service_visibility()
         self._cleanup_worker()
 
     @Slot(str)
@@ -1802,6 +2384,7 @@ class MainWindow(QMainWindow):
         LOGGER.error("Qt worker failed: %s", error_msg)
         self.visual_report_text = ""
         self.transcribe_btn.setEnabled(True)
+        self.stop_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
         self.stop_hw_monitor()
@@ -1812,9 +2395,16 @@ class MainWindow(QMainWindow):
         self.transcription_time_label.setText("Transcription time: --")
         self.diar_time_label.setText("Diarization time: --")
         self.visual_time_label.setText("Visual analysis time: --")
+        if self._live_session is not None and self._live_finalizing:
+            try:
+                self._live_session.finalize_failed(error_msg)
+            except Exception:
+                LOGGER.warning("Failed to update live session metadata after final-pass failure.", exc_info=True)
+            self._teardown_live_session(shutdown=False)
+            self._append_terminal_log(f"Recording preserved in: {self._live_session.session_dir}")
+            self._live_session = None
         QMessageBox.critical(self, "Transcription error", error_msg)
         self._hide_download_progress_dialog()
-        self._update_service_visibility()
         self._cleanup_worker()
 
     @Slot(int)
@@ -1859,7 +2449,7 @@ class MainWindow(QMainWindow):
     @Slot(bool)
     def _update_visual_ui_state(self, enabled: bool) -> None:
         del enabled
-        visual_controls_enabled = True
+        visual_controls_enabled = not self._is_live_mode()
         self.visual_profile_combo.setEnabled(visual_controls_enabled)
         self.visual_backend_combo.setEnabled(visual_controls_enabled)
         self.visual_interval_input.setEnabled(visual_controls_enabled)
@@ -1899,8 +2489,14 @@ class MainWindow(QMainWindow):
             self._update_diar_toggle_label(self.diar_checkbox.isChecked())
         if hasattr(self, "transcribe_checkbox"):
             self._update_service_visibility()
+        if hasattr(self, "live_card"):
+            self._update_live_mode_ui()
 
     def _effective_service_flags(self) -> tuple[str, bool, bool, bool]:
+        if self._is_live_mode():
+            allow_transcription = True
+            run_diarization = self.diar_checkbox.isChecked() and self._selected_model_supports_diarization()
+            return "transcribe_only", allow_transcription, run_diarization, False
         allow_transcription = self.transcribe_checkbox.isChecked()
         allow_visual = self.visual_checkbox.isChecked()
         run_diarization = allow_transcription and self.diar_checkbox.isChecked() and self._selected_model_supports_diarization()
@@ -1917,6 +2513,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _update_service_visibility(self) -> None:
         mode, allow_transcription, run_diarization, run_visual = self._effective_service_flags()
+        live_mode = self._is_live_mode()
         show_main_progress = allow_transcription or run_visual
         diarization_supported = self._selected_model_supports_diarization()
         if not diarization_supported and self.diar_checkbox.isChecked():
@@ -1927,13 +2524,19 @@ class MainWindow(QMainWindow):
         self.diar_time_label.setVisible(run_diarization)
         self.visual_time_label.setVisible(run_visual)
 
-        self.model_combo.setEnabled(allow_transcription)
-        self.diar_checkbox.setEnabled(allow_transcription and diarization_supported)
+        controls_idle = not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing
+        self.model_combo.setEnabled(allow_transcription and controls_idle)
+        self.input_mode_combo.setEnabled(not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing)
+        self.transcribe_checkbox.setEnabled(not live_mode and controls_idle)
+        self.transcribe_checkbox.setChecked(True if live_mode else self.transcribe_checkbox.isChecked())
+        self.diar_checkbox.setEnabled(allow_transcription and diarization_supported and not self._live_capture_active)
         self.diar_checkbox.setToolTip(
             ""
             if diarization_supported
             else "Granite Speech is transcript-only in PyScribe and does not provide timestamps for speaker attribution."
         )
+        self.visual_checkbox.setVisible(not live_mode)
+        self.visual_options_widget.setVisible(not live_mode)
         if not allow_transcription:
             self.diar_backend_combo.setEnabled(False)
             self.max_speakers_input.setEnabled(False)
@@ -1943,13 +2546,19 @@ class MainWindow(QMainWindow):
             self.visual_interval_input.setEnabled(False)
         else:
             diar_controls_enabled = run_diarization and diarization_supported
-            self.diar_backend_combo.setEnabled(diar_controls_enabled and not self._diar_probe_running())
-            self.max_speakers_input.setEnabled(diar_controls_enabled)
+            self.diar_backend_combo.setEnabled(diar_controls_enabled and not self._diar_probe_running() and not self._live_capture_active)
+            self.max_speakers_input.setEnabled(diar_controls_enabled and not self._live_capture_active)
+            self.visual_profile_combo.setEnabled(not live_mode and not self._is_transcription_running())
+            self.visual_backend_combo.setEnabled(not live_mode and not self._is_transcription_running())
+            self.visual_interval_input.setEnabled(not live_mode and not self._is_transcription_running())
 
         if mode == "visual_only":
             self.progress_bar.setFormat("Visual analysis %p%")
+        elif live_mode and self._live_capture_active:
+            self.progress_bar.setFormat("Live transcription")
         else:
             self.progress_bar.setFormat("Transcription %p%")
+        self._update_live_mode_ui()
 
     @Slot(int)
     def _on_model_download_progress(self, value: int) -> None:
@@ -1998,6 +2607,8 @@ class MainWindow(QMainWindow):
                 self.worker_thread.wait(3000)
         self.worker_thread = None
         self.worker = None
+        self._update_service_visibility()
+        self._update_live_mode_ui()
         LOGGER.info("Qt cleanup worker end")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
@@ -2009,6 +2620,14 @@ class MainWindow(QMainWindow):
                 self,
                 "Transcription running",
                 "A job is still running. Please wait for the current stage to finish, then close.",
+            )
+            event.ignore()
+            return
+        if self._live_capture_active or self._live_finalizing:
+            QMessageBox.information(
+                self,
+                "Live transcription running",
+                "A live session is still active. Stop or cancel it before closing the app.",
             )
             event.ignore()
             return
@@ -2428,7 +3047,11 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def open_transcriptions_folder(self) -> None:
-        if self.media_path:
+        if self._live_session is not None:
+            folder = str(self._live_session.session_dir)
+        elif self._is_live_mode():
+            folder = self._selected_live_output_dir()
+        elif self.media_path:
             folder = os.path.dirname(self.media_path)
         elif self.last_open_dir and os.path.isdir(self.last_open_dir):
             folder = self.last_open_dir
@@ -2492,7 +3115,11 @@ class MainWindow(QMainWindow):
         self._save_config()
 
     def _is_transcription_running(self) -> bool:
-        return bool(self.worker_thread and self.worker_thread.isRunning())
+        return bool(
+            (self.worker_thread and self.worker_thread.isRunning())
+            or self._live_capture_active
+            or self._live_finalizing
+        )
 
     def _save_config(
         self,
@@ -2507,6 +3134,10 @@ class MainWindow(QMainWindow):
         visual_profile: str | object = _UNSET,
         visual_ocr_backend: str | object = _UNSET,
         visual_sample_seconds: float | object = _UNSET,
+        live_source_mode: str | object = _UNSET,
+        live_input_device_id: str | None | object = _UNSET,
+        live_output_dir: str | object = _UNSET,
+        live_keep_audio_on_success: bool | object = _UNSET,
     ) -> None:
         try:
             if last_model is not _UNSET:
@@ -2529,6 +3160,14 @@ class MainWindow(QMainWindow):
                 self.config.visual_ocr_backend = str(visual_ocr_backend)
             if visual_sample_seconds is not _UNSET:
                 self.config.visual_sample_seconds = float(visual_sample_seconds)
+            if live_source_mode is not _UNSET:
+                self.config.live_source_mode = str(live_source_mode)
+            if live_input_device_id is not _UNSET:
+                self.config.live_input_device_id = live_input_device_id
+            if live_output_dir is not _UNSET:
+                self.config.live_output_dir = str(live_output_dir)
+            if live_keep_audio_on_success is not _UNSET:
+                self.config.live_keep_audio_on_success = bool(live_keep_audio_on_success)
             self.config.confirmed_visual_backends = sorted(self._confirmed_visual_backend_downloads)
             self.config.last_open_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
             self.config.last_save_dir = self.last_save_dir if self.last_save_dir and os.path.isdir(self.last_save_dir) else self.config.last_save_dir

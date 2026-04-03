@@ -30,6 +30,10 @@ class AppConfig:
     llm_ocr_fallback_for_images_default: bool = True
     llm_payload_preview_required: bool = False
     llm_allow_remote_lan: bool = False
+    live_source_mode: str = "microphone"
+    live_input_device_id: str | None = None
+    live_output_dir: str | None = None
+    live_keep_audio_on_success: bool = True
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".pyscribe_config.json"
@@ -67,6 +71,10 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         ),
         llm_payload_preview_required=_as_bool(data.get("llm_payload_preview_required"), default=False),
         llm_allow_remote_lan=_as_bool(data.get("llm_allow_remote_lan"), default=False),
+        live_source_mode=_as_live_source_mode(data.get("live_source_mode")),
+        live_input_device_id=_as_optional_str(data.get("live_input_device_id")),
+        live_output_dir=_as_optional_str(data.get("live_output_dir")),
+        live_keep_audio_on_success=_as_bool(data.get("live_keep_audio_on_success"), default=True),
     )
 
 
@@ -140,6 +148,14 @@ def _as_theme_mode(value: object) -> str:
     if normalized in allowed:
         return normalized
     return "system"
+
+
+def _as_live_source_mode(value: object) -> str:
+    allowed = {"microphone", "loopback"}
+    normalized = str(value or "").strip().lower()
+    if normalized in allowed:
+        return normalized
+    return "microphone"
 
 
 def _as_backend_list(value: object) -> list[str]:

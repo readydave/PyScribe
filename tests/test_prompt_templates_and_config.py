@@ -165,6 +165,10 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
         self.assertFalse(cfg.llm_allow_remote_lan)
         self.assertEqual(cfg.llm_profiles, [])
         self.assertEqual(cfg.visual_ocr_backend, "auto")
+        self.assertEqual(cfg.live_source_mode, "microphone")
+        self.assertIsNone(cfg.live_input_device_id)
+        self.assertIsNone(cfg.live_output_dir)
+        self.assertTrue(cfg.live_keep_audio_on_success)
 
     def test_save_and_reload_additive_llm_fields(self) -> None:
         cfg = AppConfig(
@@ -176,6 +180,10 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
             llm_ocr_fallback_for_images_default=True,
             llm_payload_preview_required=False,
             llm_allow_remote_lan=True,
+            live_source_mode="loopback",
+            live_input_device_id="monitor-1",
+            live_output_dir="/tmp/pyscribe-live",
+            live_keep_audio_on_success=False,
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "config.json"
@@ -190,6 +198,10 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
         self.assertTrue(reloaded.llm_ocr_fallback_for_images_default)
         self.assertFalse(reloaded.llm_payload_preview_required)
         self.assertTrue(reloaded.llm_allow_remote_lan)
+        self.assertEqual(reloaded.live_source_mode, "loopback")
+        self.assertEqual(reloaded.live_input_device_id, "monitor-1")
+        self.assertEqual(reloaded.live_output_dir, "/tmp/pyscribe-live")
+        self.assertFalse(reloaded.live_keep_audio_on_success)
         self.assertEqual(len(reloaded.llm_profiles), 1)
         self.assertIn("llm_profiles", payload)
 

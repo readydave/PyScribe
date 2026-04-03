@@ -4,9 +4,10 @@
 
 1. Use **Browse Files** in the drop zone (or drag and drop a media file) to select audio/video.
 2. Pick a model in the **Model** dropdown (built-in or custom `owner/repo`).
-3. Choose processing options (**Transcribe audio**, **Speaker Identification**, **Analyze visuals**).
-4. Click **Process File**.
-5. Save or copy output when complete.
+3. Choose **Input = File** for the traditional workflow, or **Input = Live** for microphone/loopback capture.
+4. For file mode, choose processing options (**Transcribe audio**, **Speaker Identification**, **Analyze visuals**) and click **Process File**.
+5. For live mode, choose source/device/output folder and click **Start Live**, then **Stop** to run the final post-pass.
+6. Save or copy output when complete.
 
 ## Main Window
 
@@ -15,6 +16,9 @@
 - **Status panel toggle**: hide/show the right status rail on the transcription page.
 - **Drop zone**: choose a local media file via drag/drop or **Browse Files**.
 - **Model**: supports built-in model names and custom Hugging Face repo IDs.
+- **Input**:
+  - `File`: normal file transcription flow.
+  - `Live`: Linux-first microphone/loopback capture flow.
 - **Recommended model label**: shows the hardware-based recommendation.
 - **Status + metrics**:
   - Run status messages
@@ -33,17 +37,38 @@
 
 - **Transcribe audio**:
   - Enables/disables ASR transcription stage.
+  - In live mode, transcription is always on.
 - **Speaker Identification**:
   - Enables/disables diarization (speaker labels).
   - Choose backend mode and optional max speakers (blank = auto).
   - Pyannote diarization runs in a separate worker process so GPU speaker ID is isolated from CUDA ASR runtime state.
   - If CUDA diarization is unavailable, PyScribe retries diarization on CPU before dropping speaker labels.
+  - In live mode, diarization runs only after **Stop** during the final post-pass on the saved capture.
 - **Analyze visuals (slides/chat OCR, beta)**:
   - Optional video-frame OCR to capture on-screen text.
   - Choose visual mode: `fast`, `balanced`, `accurate`.
   - Choose OCR backend: `paddleocr`, `surya`, `pytesseract`, or `auto`.
   - Set sample interval in seconds (`0.5` to `10.0`; lower = more coverage, slower runtime).
   - Backend/model downloads may be prompted on first use.
+  - Live mode disables visual analysis.
+
+## Live Capture
+
+- **Source**:
+  - `Microphone`
+  - `Loopback`
+- **Device**: audio input filtered to the selected source type.
+- **Output Folder**: root for timestamped live session folders.
+- **Keep recorded audio after completion**:
+  - when enabled, `capture.wav` remains after a successful final pass
+  - when disabled, successful runs keep metadata and final transcript but remove the raw capture
+- **Timer**: elapsed recording time for the active session.
+- Live mode writes a recoverable session folder containing:
+  - `capture.wav`
+  - `session.json`
+  - `final_transcript.txt` after a successful stop/finalize cycle
+- Granite is unavailable in live mode because live capture requires timestamp-capable Whisper models.
+- Loopback capture depends on the OS exposing a monitor/loopback input. On Linux that usually means a PipeWire/PulseAudio monitor source.
 
 Run mode is inferred automatically:
 
@@ -105,14 +130,19 @@ Before transcription, PyScribe may detect language and prompt:
 ## Transcription Controls
 
 - **Process File**: starts a new job.
+- **Start Live**: begins live capture.
+- **Stop**: stops live capture and starts the final post-pass on the saved recording.
 - **Cancel**: cooperative stop (safe).
+  - In live mode, cancel stops capture immediately and keeps the saved session folder without running the final post-pass.
 - **Force Stop**: immediate stop if cancel is stuck; escalates to a hard kill if the worker does not exit cleanly.
+  - In live mode, force stop preserves the session folder and recorded audio.
 - **Save** (dropdown, default action = Save All):
   - **Save All (Transcript + OCR)**
   - **Save Transcript Only**
   - **Save OCR Only**
 - **Copy**: copy transcript to clipboard.
 - **Open Folder**: open selected media folder (or last-open folder when no file selected).
+  - In live mode, this opens the active live session folder or configured live output root.
 - **Exit**: close app (blocked while a job is running).
 
 ## LLM Post-Process Dialog
@@ -136,6 +166,9 @@ Before transcription, PyScribe may detect language and prompt:
 
 - **No file selected**
   - Select a media file first.
+- **No loopback device**
+  - Confirm your Linux audio stack exposes a monitor/loopback input.
+  - Many PulseAudio/PipeWire setups label these devices with `Monitor` or `Loopback`.
 - **No task selected**
   - Enable at least one of **Transcribe audio** or **Analyze visuals**.
 - **No output / error dialog**

@@ -48,6 +48,19 @@ If you run `python main.py` with no mode, you get an interactive launcher menu.
 - **Drag-and-drop zone**: drop a media file directly.
 - **Open Folder**: open selected file directory (or last-used folder if no file selected).
 
+### Input Modes
+
+- **Input** selector:
+  - `File`: existing file-based transcription workflow.
+  - `Live`: Qt-only live capture workflow (Linux-first).
+- Live mode hides the drop zone and disables visual OCR controls.
+- Live mode supports one source per session:
+  - **Microphone**
+  - **Loopback**
+- Loopback requires the OS to expose a monitor/loopback input device. On Linux this is typically a PipeWire/PulseAudio monitor source.
+- Each live session writes into `~/PyScribe Live Sessions` by default unless you choose another output folder.
+- Granite Speech is blocked in live mode because live mode requires timestamp-capable Whisper backends.
+
 ### Model Selection
 
 - **Model** dropdown is editable.
@@ -72,6 +85,26 @@ Qt automatically derives run mode:
 - visuals only -> `visual_only`
 
 If both transcription and visuals are off, PyScribe blocks run start.
+
+In live mode:
+
+- transcription is always on
+- visual analysis is always off
+- speaker identification can still be enabled, but it only runs after **Stop** during the final post-pass on the saved capture file
+
+### Live Capture Controls
+
+- **Source**: choose microphone or loopback capture.
+- **Device**: pick the matching Qt audio input for the selected source type.
+- **Output Folder**: root folder for live session subfolders.
+- **Keep recorded audio after completion**:
+  - On: keep `capture.wav` after a successful final pass.
+  - Off: remove `capture.wav` after a successful final pass, but keep the session folder, `session.json`, and `final_transcript.txt`.
+- **Timer**: elapsed recording time for the current session.
+- Each live session folder contains:
+  - `capture.wav`
+  - `session.json`
+  - `final_transcript.txt` after a successful stop/finalize cycle
 
 ### Diarization Controls
 
@@ -106,13 +139,18 @@ Fallback behavior:
 ### Job Controls
 
 - **Process File**: start run.
+- **Start Live**: begin live microphone or loopback capture.
+- **Stop** (live mode): stop capture cleanly, finalize the rolling draft, and start the final post-pass on the saved recording.
 - **Cancel**: cooperative cancellation.
+  - In live mode, cancel stops capture immediately and skips the final post-pass.
 - **Force Stop**: immediate process termination if cancellation stalls; Qt escalates from terminate to kill when needed.
+  - In live mode, force stop preserves the live session folder and recorded audio.
 - **Exit**: close app.
 
 ### Output Controls
 
 - **Transcript panel**: live transcript text output.
+  - In live mode, this shows a rolling draft first, then the final cleaned transcript after **Stop** completes.
 - **Copy**: copy transcript panel text to clipboard.
 - **Save menu**:
   - **Save All (Transcript + OCR)**
@@ -125,6 +163,7 @@ Fallback behavior:
 
 - Main status label shows current stage and results.
 - Transcription view includes a terminal-style live event log panel.
+  - Live mode logs device selection, recording start/stop, final post-pass handoff, and preserved session paths on cancel/failure.
 - HF token status label shows whether a token is configured.
 - Progress bars:
   - transcription progress
@@ -191,6 +230,7 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 - For `.en` models with non-English detected audio, Qt prompts to force English or cancel.
 - For non-English detected audio on non-`.en` models, Qt prompts to use detected language or force English.
 - If detection fails, run continues with model auto behavior.
+- Live mode uses model auto language behavior during rolling ASR and then reprocesses the saved capture during the final post-pass.
 
 ### LLM Post-Processing Workflow (Qt)
 
@@ -357,5 +397,6 @@ Qt benchmark dialog supports:
 - Ensure `ffmpeg` is installed and in PATH.
 - Confirm required Python deps are installed in active environment.
 - For gated/private models, configure HF token and accept model terms.
+- For Qt live loopback capture on Linux, confirm your audio stack exposes a monitor/loopback input.
 - For OCR backends, install runtime dependencies (`pytesseract` + OS package, or PaddleOCR stack).
 - If Linux dynamic library issues occur, run from a clean shell and avoid conflicting injected library paths.

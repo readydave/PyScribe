@@ -13,6 +13,7 @@ class ModelServiceTests(unittest.TestCase):
 
         self.assertEqual(spec.backend_kind, "granite_transformers")
         self.assertFalse(spec.supports_diarization)
+        self.assertFalse(spec.supports_timestamps)
         self.assertTrue(spec.is_experimental)
 
     def test_resolve_transcription_model_identifies_granite_url(self) -> None:
@@ -26,6 +27,7 @@ class ModelServiceTests(unittest.TestCase):
 
         self.assertEqual(spec.backend_kind, "faster_whisper")
         self.assertTrue(spec.supports_diarization)
+        self.assertTrue(spec.supports_timestamps)
         self.assertTrue(model_supports_diarization("owner/custom-ct2-model"))
 
 

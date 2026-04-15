@@ -6,7 +6,7 @@
 2. Pick a model in the **Model** dropdown (built-in or custom `owner/repo`).
 3. Choose **Input = File** for the traditional workflow, or **Input = Live** for microphone/loopback capture.
 4. For file mode, choose processing options (**Transcribe audio**, **Speaker Identification**, **Analyze visuals**) and click **Process File**.
-5. For live mode, choose source/device/output folder and click **Start Live**, then **Stop** to run the final post-pass.
+5. For live mode, choose source/device/output folder and click **Start Live**. Use **Pause / Resume** when needed, then **Stop** to run the final post-pass.
 6. Save or copy output when complete.
 
 ## Main Window
@@ -62,7 +62,7 @@
 - **Keep recorded audio after completion**:
   - when enabled, `capture.wav` remains after a successful final pass
   - when disabled, successful runs keep metadata and final transcript but remove the raw capture
-- **Timer**: elapsed recording time for the active session.
+- **Timer**: elapsed recorded time for the active session. It freezes while capture is paused.
 - Live mode writes a recoverable session folder containing:
   - `capture.wav`
   - `session.json`
@@ -131,9 +131,10 @@ Before transcription, PyScribe may detect language and prompt:
 
 - **Process File**: starts a new job.
 - **Start Live**: begins live capture.
+- **Pause / Resume**: temporarily suspend or resume live capture without creating a new session folder.
 - **Stop**: stops live capture and starts the final post-pass on the saved recording.
 - **Cancel**: cooperative stop (safe).
-  - In live mode, cancel stops capture immediately and keeps the saved session folder without running the final post-pass.
+  - In live mode, cancel asks for confirmation, then stops capture immediately and keeps the saved session folder without running the final post-pass.
 - **Force Stop**: immediate stop if cancel is stuck; escalates to a hard kill if the worker does not exit cleanly.
   - In live mode, force stop preserves the session folder and recorded audio.
 - **Save** (dropdown, default action = Save All):

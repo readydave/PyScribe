@@ -568,6 +568,9 @@ class MainWindow(QMainWindow):
         self._live_session: LiveSessionController | None = None
         self._live_capture_active: bool = False
         self._live_finalizing: bool = False
+        self._live_paused: bool = False
+        self._live_paused_at: float | None = None
+        self._live_total_paused_seconds: float = 0.0
         self._live_audio_source: QAudioSource | None = None
         self._live_audio_io: object | None = None
         self._live_capture_format: QAudioFormat | None = None
@@ -889,6 +892,10 @@ class MainWindow(QMainWindow):
         self.stop_live_btn.setEnabled(False)
         self.stop_live_btn.setVisible(False)
         self.stop_live_btn.clicked.connect(self.stop_live_capture)
+        self.pause_live_btn = QPushButton("Pause")
+        self.pause_live_btn.setEnabled(False)
+        self.pause_live_btn.setVisible(False)
+        self.pause_live_btn.clicked.connect(self.toggle_live_pause)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_transcription)
@@ -916,6 +923,7 @@ class MainWindow(QMainWindow):
         self.copy_btn.clicked.connect(self.copy_transcript)
         actions.addWidget(self.transcribe_btn)
         actions.addWidget(self.stop_live_btn)
+        actions.addWidget(self.pause_live_btn)
         actions.addWidget(self.cancel_btn)
         actions.addWidget(self.force_stop_btn)
         actions.addWidget(self.save_btn)
@@ -1694,7 +1702,11 @@ class MainWindow(QMainWindow):
         if self._live_started_at is None:
             self.live_timer_label.setText("00:00:00")
             return
-        elapsed = max(0, int(time.perf_counter() - self._live_started_at))
+        now = time.perf_counter()
+        paused_seconds = self._live_total_paused_seconds
+        if self._live_paused and self._live_paused_at is not None:
+            paused_seconds += max(0.0, now - self._live_paused_at)
+        elapsed = max(0, int(now - self._live_started_at - paused_seconds))
         hours, remainder = divmod(elapsed, 3600)
         minutes, seconds = divmod(remainder, 60)
         self.live_timer_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
@@ -1704,7 +1716,9 @@ class MainWindow(QMainWindow):
         self.drop_card.setVisible(not live_mode)
         self.live_card.setVisible(live_mode)
         self.stop_live_btn.setVisible(live_mode)
+        self.pause_live_btn.setVisible(live_mode)
         self.transcribe_btn.setText("Start Live" if live_mode else "Process File")
+        self.pause_live_btn.setText("Resume" if self._live_paused else "Pause")
 
         if live_mode:
             self.path_label.setText(
@@ -1719,18 +1733,25 @@ class MainWindow(QMainWindow):
         live_device = self._selected_live_device()
         live_devices_available = self.live_device_combo.count() > 0 and live_device is not None
         loopback_selected = self._selected_live_source_mode() == "loopback"
+        device_name = "selected input"
+        if live_device is not None:
+            device_name = live_device.name
+        elif self._live_session is not None:
+            device_name = self._live_session.options.input_device_name
         if not live_mode:
             guidance = ""
+        elif self._live_finalizing:
+            guidance = "Finalizing the live session and preserving the capture folder."
+        elif self._live_paused:
+            guidance = f"Live capture paused for {device_name}. Resume to keep recording into the current session."
+        elif self._live_capture_active:
+            guidance = f"Recording from {device_name}. Stop to run the final post-pass."
         elif not live_supported:
             guidance = "Live mode requires a timestamp-capable Whisper backend. Granite remains file-only."
         elif not live_devices_available and loopback_selected:
             guidance = "No loopback input was detected. On Linux, expose a monitor/loopback source in PipeWire or PulseAudio."
         elif not live_devices_available:
             guidance = "No microphone input was detected."
-        elif self._live_capture_active:
-            guidance = f"Recording from {live_device.name}. Stop to run the final post-pass."
-        elif self._live_finalizing:
-            guidance = "Finalizing the live session and preserving the capture folder."
         else:
             guidance = "Live capture writes a recoverable WAV while showing rolling transcript updates."
         self.live_guidance_label.setText(guidance)
@@ -1745,6 +1766,7 @@ class MainWindow(QMainWindow):
         if live_mode:
             self.transcribe_btn.setEnabled(can_start_live)
         self.stop_live_btn.setEnabled(self._live_capture_active)
+        self.pause_live_btn.setEnabled(self._live_capture_active and self._live_session is not None and not self._live_finalizing)
 
         live_controls_enabled = live_mode and not self._live_capture_active and not self._live_finalizing and not self._is_transcription_running()
         self.live_source_combo.setEnabled(live_controls_enabled)
@@ -1752,6 +1774,50 @@ class MainWindow(QMainWindow):
         self.live_output_dir_input.setEnabled(live_controls_enabled)
         self.live_output_dir_btn.setEnabled(live_controls_enabled)
         self.live_keep_audio_checkbox.setEnabled(live_controls_enabled)
+
+    def _attach_live_audio_source(self, qt_device: object) -> QAudioFormat:
+        capture_format = build_live_capture_format(qt_device)
+        audio_source = QAudioSource(qt_device, capture_format, self)
+        audio_io = audio_source.start()
+        if audio_io is None:
+            raise RuntimeError("Qt audio source did not return a readable capture stream.")
+        audio_io.readyRead.connect(self._on_live_audio_ready)
+        self._live_audio_source = audio_source
+        self._live_audio_io = audio_io
+        self._live_capture_format = capture_format
+        return capture_format
+
+    def _resume_or_attach_live_audio_source(self) -> None:
+        if self._live_audio_source is not None:
+            self._live_audio_source.resume()
+            return
+        live_device = self._selected_live_device()
+        if live_device is None:
+            raise RuntimeError("Select a live capture device before resuming.")
+        qt_device = self._find_qt_audio_input(live_device.id)
+        if qt_device is None:
+            raise RuntimeError("The selected capture device is no longer available.")
+        self._attach_live_audio_source(qt_device)
+
+    def _begin_live_pause(self, *, at_time: float | None = None) -> None:
+        if self._live_paused:
+            return
+        self._live_paused = True
+        self._live_paused_at = time.perf_counter() if at_time is None else at_time
+
+    def _commit_live_pause(self, *, at_time: float | None = None) -> None:
+        if not self._live_paused:
+            return
+        current = time.perf_counter() if at_time is None else at_time
+        if self._live_paused_at is not None:
+            self._live_total_paused_seconds += max(0.0, current - self._live_paused_at)
+        self._live_paused = False
+        self._live_paused_at = None
+
+    def _reset_live_pause_state(self) -> None:
+        self._live_paused = False
+        self._live_paused_at = None
+        self._live_total_paused_seconds = 0.0
 
     def _find_qt_audio_input(self, device_id: str) -> object | None:
         target = str(device_id or "").strip()
@@ -1787,11 +1853,18 @@ class MainWindow(QMainWindow):
         self._live_capture_active = False
         self._live_finalizing = False
         self._live_started_at = None
+        self._reset_live_pause_state()
         self._update_live_elapsed_label()
 
     @Slot()
     def _on_live_audio_ready(self) -> None:
-        if not self._live_capture_active or self._live_audio_io is None or self._live_capture_format is None or self._live_session is None:
+        if (
+            not self._live_capture_active
+            or self._live_paused
+            or self._live_audio_io is None
+            or self._live_capture_format is None
+            or self._live_session is None
+        ):
             return
         try:
             while int(getattr(self._live_audio_io, "bytesAvailable", lambda: 0)()) > 0:
@@ -1822,6 +1895,8 @@ class MainWindow(QMainWindow):
                 self._handle_live_session_error(str(event.get("value", "Live transcription failed.")))
                 return
 
+        if self._live_paused:
+            self.status_label.setText("Live capture paused.")
         worker_running = bool(self.worker_thread and self.worker_thread.isRunning())
         if self._live_finalizing and not self._live_capture_active and not worker_running and session.is_idle():
             self._start_live_final_pass()
@@ -1843,6 +1918,7 @@ class MainWindow(QMainWindow):
         self.text_area.setPlainText(partial)
         self.transcribe_btn.setEnabled(self._is_live_mode())
         self.stop_live_btn.setEnabled(False)
+        self.pause_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
         self.save_btn.setEnabled(bool(partial))
@@ -1909,12 +1985,7 @@ class MainWindow(QMainWindow):
         try:
             session = LiveSessionController(options)
             session.start()
-            capture_format = build_live_capture_format(qt_device)
-            audio_source = QAudioSource(qt_device, capture_format, self)
-            audio_io = audio_source.start()
-            if audio_io is None:
-                raise RuntimeError("Qt audio source did not return a readable capture stream.")
-            audio_io.readyRead.connect(self._on_live_audio_ready)
+            capture_format = self._attach_live_audio_source(qt_device)
         except Exception as exc:
             if 'session' in locals():
                 try:
@@ -1935,11 +2006,9 @@ class MainWindow(QMainWindow):
         self._current_use_diarization = use_diarization
         self._current_use_visual_analysis = False
         self._live_session = session
-        self._live_audio_source = audio_source
-        self._live_audio_io = audio_io
-        self._live_capture_format = capture_format
         self._live_capture_active = True
         self._live_finalizing = False
+        self._reset_live_pause_state()
         self._live_started_at = time.perf_counter()
         self.progress_bar.setRange(0, 0)
         self.diar_progress_bar.setRange(0, 100)
@@ -1954,6 +2023,7 @@ class MainWindow(QMainWindow):
         self.path_label.setText(str(session.session_dir))
         self.transcribe_btn.setEnabled(False)
         self.stop_live_btn.setEnabled(True)
+        self.pause_live_btn.setEnabled(True)
         self.cancel_btn.setEnabled(True)
         self.force_stop_btn.setEnabled(True)
         self.save_btn.setEnabled(False)
@@ -1968,16 +2038,45 @@ class MainWindow(QMainWindow):
     def stop_live_capture(self) -> None:
         if not self._live_capture_active or self._live_session is None:
             return
+        self._commit_live_pause()
         self._live_capture_active = False
         self._live_finalizing = True
         self._append_terminal_log("Stop requested. Finalizing live capture before post-pass...")
         self.status_label.setText("Stopping live capture...")
         self.stop_live_btn.setEnabled(False)
+        self.pause_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(True)
         self._stop_live_audio_source()
         self._live_session.close_capture()
         self._live_session.request_final_decode()
+        self._update_live_mode_ui()
+
+    @Slot()
+    def toggle_live_pause(self) -> None:
+        if not self._live_capture_active or self._live_session is None or self._live_finalizing:
+            return
+        try:
+            if self._live_paused:
+                now = time.perf_counter()
+                self._resume_or_attach_live_audio_source()
+                self._commit_live_pause(at_time=now)
+                self.status_label.setText("Recording live audio...")
+                self._append_terminal_log("Live capture resumed.")
+            else:
+                audio_source = self._live_audio_source
+                if audio_source is None:
+                    raise RuntimeError("Live audio capture is unavailable for pause/resume.")
+                now = time.perf_counter()
+                audio_source.suspend()
+                self._begin_live_pause(at_time=now)
+                self.status_label.setText("Live capture paused.")
+                self._append_terminal_log("Live capture paused.")
+        except Exception as exc:
+            LOGGER.warning("Live pause/resume failed: %s", exc, exc_info=True)
+            QMessageBox.critical(self, "Live capture pause/resume failed", str(exc))
+            return
+        self._update_live_elapsed_label()
         self._update_live_mode_ui()
 
     def _cancel_live_capture(self) -> None:
@@ -1995,6 +2094,7 @@ class MainWindow(QMainWindow):
         self.stop_hw_monitor()
         self.transcribe_btn.setEnabled(True)
         self.stop_live_btn.setEnabled(False)
+        self.pause_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
         self.save_btn.setEnabled(bool(self.transcript_text))
@@ -2016,6 +2116,7 @@ class MainWindow(QMainWindow):
         self.stop_hw_monitor()
         self.transcribe_btn.setEnabled(True)
         self.stop_live_btn.setEnabled(False)
+        self.pause_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
         self.save_btn.setEnabled(bool(self.transcript_text))
@@ -2034,6 +2135,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Running final post-pass...")
         self.transcribe_btn.setEnabled(False)
         self.stop_live_btn.setEnabled(False)
+        self.pause_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(True)
         self._launch_transcription_worker(
@@ -2251,6 +2353,19 @@ class MainWindow(QMainWindow):
     @Slot()
     def cancel_transcription(self) -> None:
         if self._live_capture_active:
+            answer = QMessageBox.question(
+                self,
+                "Cancel live transcription",
+                (
+                    "Cancel live transcription now?\n\n"
+                    "This will stop live capture immediately, skip the final post-pass, "
+                    "and preserve the current session folder and recorded audio."
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
             self._cancel_live_capture()
             return
         if self.worker is not None:
@@ -2315,6 +2430,7 @@ class MainWindow(QMainWindow):
         self.text_area.setPlainText(transcript)
         self.transcribe_btn.setEnabled(True)
         self.stop_live_btn.setEnabled(False)
+        self.pause_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
         self.stop_hw_monitor()
@@ -2385,6 +2501,7 @@ class MainWindow(QMainWindow):
         self.visual_report_text = ""
         self.transcribe_btn.setEnabled(True)
         self.stop_live_btn.setEnabled(False)
+        self.pause_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(False)
         self.stop_hw_monitor()

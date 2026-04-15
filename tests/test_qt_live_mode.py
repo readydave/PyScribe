@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from services import AppConfig
 from services.model_service import RuntimeInfo
@@ -81,6 +81,26 @@ class _FakeThread:
         return True
 
 
+class _FakeAudioSource:
+    def __init__(self) -> None:
+        self.suspend_calls = 0
+        self.resume_calls = 0
+        self.stop_calls = 0
+        self.deleted = False
+
+    def suspend(self) -> None:
+        self.suspend_calls += 1
+
+    def resume(self) -> None:
+        self.resume_calls += 1
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+
+    def deleteLater(self) -> None:
+        self.deleted = True
+
+
 class QtLiveModeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -120,6 +140,7 @@ class QtLiveModeTests(unittest.TestCase):
 
         self.assertTrue(win.drop_card.isVisible())
         self.assertFalse(win.live_card.isVisible())
+        self.assertFalse(win.pause_live_btn.isVisible())
 
         win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
         QApplication.processEvents()
@@ -127,6 +148,8 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertFalse(win.drop_card.isVisible())
         self.assertTrue(win.live_card.isVisible())
         self.assertTrue(win.stop_live_btn.isVisible())
+        self.assertTrue(win.pause_live_btn.isVisible())
+        self.assertFalse(win.pause_live_btn.isEnabled())
         self.assertEqual(win.transcribe_btn.text(), "Start Live")
 
     def test_loopback_mode_disables_start_without_loopback_device(self) -> None:
@@ -163,6 +186,70 @@ class QtLiveModeTests(unittest.TestCase):
         win._live_finalizing = False
         win._live_session = None
 
+    def test_pause_resume_live_capture_updates_button_state_and_timer(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+        win._live_session = _FakeLiveSession()
+        win._live_capture_active = True
+        win._live_audio_source = _FakeAudioSource()
+        win._live_started_at = 100.0
+        win.cancel_btn.setEnabled(True)
+        win.force_stop_btn.setEnabled(True)
+        win._update_live_mode_ui()
+
+        with patch("ui_qt.main_window.time.perf_counter", return_value=107.0):
+            win.toggle_live_pause()
+
+        self.assertTrue(win._live_paused)
+        self.assertEqual(win._live_audio_source.suspend_calls, 1)
+        self.assertEqual(win.pause_live_btn.text(), "Resume")
+        self.assertEqual(win.status_label.text(), "Live capture paused.")
+        self.assertTrue(win.stop_live_btn.isEnabled())
+        self.assertTrue(win.force_stop_btn.isEnabled())
+
+        with patch("ui_qt.main_window.time.perf_counter", return_value=113.0):
+            win._update_live_elapsed_label()
+        self.assertEqual(win.live_timer_label.text(), "00:00:07")
+
+        with patch("ui_qt.main_window.time.perf_counter", return_value=113.0):
+            win.toggle_live_pause()
+
+        self.assertFalse(win._live_paused)
+        self.assertEqual(win._live_audio_source.resume_calls, 1)
+        self.assertEqual(win.pause_live_btn.text(), "Pause")
+        self.assertEqual(win.status_label.text(), "Recording live audio...")
+
+        with patch("ui_qt.main_window.time.perf_counter", return_value=116.0):
+            win._update_live_elapsed_label()
+        self.assertEqual(win.live_timer_label.text(), "00:00:10")
+
+        win._teardown_live_session(shutdown=False)
+        win._live_session = None
+
+    def test_cancel_live_capture_confirmation_decline_preserves_session(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+
+        cancel_session = _FakeLiveSession()
+        win._live_session = cancel_session
+        win._live_capture_active = True
+
+        with patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.No) as question:
+            win.cancel_transcription()
+
+        question.assert_called_once()
+        self.assertIs(win._live_session, cancel_session)
+        self.assertTrue(win._live_capture_active)
+        self.assertEqual(cancel_session.finalize_cancelled_calls, 0)
+        self.assertNotIn("Cancellation requested.", win.terminal_log.toPlainText())
+
+        win._live_capture_active = False
+        win._live_session = None
+
     def test_cancel_and_force_stop_reset_live_ui_and_log_session_path(self) -> None:
         win = self._build_window(
             [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
@@ -173,7 +260,8 @@ class QtLiveModeTests(unittest.TestCase):
         win._live_session = cancel_session
         win._live_capture_active = True
         win.transcript_text = "partial transcript"
-        win.cancel_transcription()
+        with patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.Yes):
+            win.cancel_transcription()
 
         self.assertIsNone(win._live_session)
         self.assertEqual(cancel_session.finalize_cancelled_calls, 1)

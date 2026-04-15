@@ -100,7 +100,7 @@ In live mode:
 - **Keep recorded audio after completion**:
   - On: keep `capture.wav` after a successful final pass.
   - Off: remove `capture.wav` after a successful final pass, but keep the session folder, `session.json`, and `final_transcript.txt`.
-- **Timer**: elapsed recording time for the current session.
+- **Timer**: elapsed recorded time for the current session. It freezes while live capture is paused.
 - Each live session folder contains:
   - `capture.wav`
   - `session.json`
@@ -140,9 +140,10 @@ Fallback behavior:
 
 - **Process File**: start run.
 - **Start Live**: begin live microphone or loopback capture.
+- **Pause / Resume** (live mode): temporarily suspend or resume live capture while keeping the same session folder and `capture.wav`.
 - **Stop** (live mode): stop capture cleanly, finalize the rolling draft, and start the final post-pass on the saved recording.
 - **Cancel**: cooperative cancellation.
-  - In live mode, cancel stops capture immediately and skips the final post-pass.
+  - In live mode, cancel asks for confirmation, then stops capture immediately, skips the final post-pass, and preserves the session folder and recorded audio.
 - **Force Stop**: immediate process termination if cancellation stalls; Qt escalates from terminate to kill when needed.
   - In live mode, force stop preserves the live session folder and recorded audio.
 - **Exit**: close app.
@@ -163,7 +164,7 @@ Fallback behavior:
 
 - Main status label shows current stage and results.
 - Transcription view includes a terminal-style live event log panel.
-  - Live mode logs device selection, recording start/stop, final post-pass handoff, and preserved session paths on cancel/failure.
+  - Live mode logs device selection, recording start/pause/resume/stop, final post-pass handoff, and preserved session paths on cancel/failure.
 - HF token status label shows whether a token is configured.
 - Progress bars:
   - transcription progress

@@ -18,13 +18,14 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt desktop mode and Gradio listener mode
 - Qt unified dashboard layout with left navigation and stacked workspaces
 - Qt live transcription mode for microphone or loopback capture (Linux-first)
+- Live pause/resume during Qt capture without breaking the current session folder
 - Responsive transcription cards (two-column on wide windows, single-column on narrow windows)
 - Hide/show controls for the left navigation panel and right status panel
 - Optional speaker diarization with selectable backend
 - Optional visual analysis (OCR on sampled video frames)
 - Live status, progress, and transcript updates
 - Real-time terminal-style pipeline log in Qt transcription view
-- Qt controls for cancel and force stop
+- Qt controls for pause, cancel, and force stop
 - Save modes: combined output, transcript-only, OCR-only
 - Optional Hugging Face token support for gated/private model access
 - Qt LLM connection profiles (local/LAN) with connection diagnostics
@@ -65,6 +66,8 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Improved Qt transcription worker recovery so unexpected child exits surface a real failure instead of leaving the UI stuck.
 - Hardened Qt **Force Stop** to escalate from terminate to kill when needed.
 - Added Qt live transcription mode with rolling ASR, autosaved capture sessions, microphone/loopback selection, and final post-pass cleanup.
+- Added Qt live **Pause / Resume** for microphone/loopback capture while keeping the same session folder and `capture.wav`.
+- Added confirmation before canceling an active Qt live transcription session.
 - Shared listener security/auth logic between `main.py` and `app.py` via `services/listener_security_service.py`.
 - Hardened listener credential handling: `--auth-pass` is rejected to avoid secret leakage in process lists/history.
 - Improved NeMo Sortformer compatibility across modern and legacy API paths, with CUDA-aware availability checks.
@@ -167,7 +170,7 @@ Note: Interactive LAN mode no longer uses a default password. Set
 ## Feature Notes
 
 - **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. If diarization still fails, transcription completes without speaker labels.
-- **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable `capture.wav` while showing rolling transcript text, then runs a final file-based cleanup pass when you press **Stop**. Speaker identification, when enabled, runs only in that final pass. Granite remains file-only.
+- **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable `capture.wav` while showing rolling transcript text, supports **Pause / Resume** within the same session, and runs a final file-based cleanup pass when you press **Stop**. Cancel asks for confirmation and preserves the session folder/audio when accepted. Speaker identification, when enabled, runs only in that final pass. Granite remains file-only.
 - **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and OCR backend selection.
 - **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`.
 - **Benchmarking:** Qt Tools menu includes benchmark runner for bundled sample media.

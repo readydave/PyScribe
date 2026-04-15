@@ -9,9 +9,10 @@ The format is inspired by Keep a Changelog.
 ### Added
 
 - Qt live transcription mode with microphone/loopback capture, rolling ASR updates, recoverable session folders, and final post-pass cleanup.
+- Qt live **Pause / Resume** control for temporarily suspending capture without creating a new session folder.
 - `services/live_transcription_service.py` with live session coordination, Qt audio-device filtering, rolling transcript reconciliation, and session metadata handling.
 - `tests/test_live_transcription_service.py` covering live session merge logic, retention behavior, and Granite/live gating.
-- `tests/test_qt_live_mode.py` covering Qt live-mode visibility, loopback gating, stop handoff, and cancel/force-stop reset behavior.
+- `tests/test_qt_live_mode.py` covering Qt live-mode visibility, loopback gating, pause/resume behavior, stop handoff, and cancel/force-stop reset behavior.
 - Shared listener auth/bind validation service in `services/listener_security_service.py`.
 - `tests/test_listener_and_diar_backends.py` covering listener security helpers and NeMo Sortformer compatibility paths.
 - `tests/test_diarization.py` covering diarization runtime safeguards (`soundfile` backend preference and CPU pipeline reload after CUDA failure).
@@ -78,12 +79,15 @@ The format is inspired by Keep a Changelog.
 - Qt transcription settings cards now adapt between two-column and single-column layouts based on available width.
 - Qt startup sizing now fits to available screen area to avoid oversized initial windows on smaller displays.
 - Qt diarization backend selector now remains usable while lazy backend probing resolves capability details.
+- Qt live-mode timer now reflects recorded duration and freezes while capture is paused.
+- Qt live-mode documentation updated for pause/resume and confirmed live cancel behavior.
 
 ### Fixed
 
 - Listener and Qt config-save failures now log warnings instead of failing silently.
 - Fixed Qt live-session handoff so **Stop** can finalize the rolling draft and transition into the existing file-based post-pass workflow.
 - Fixed Qt live mode leaving controls disabled after the final post-pass completed.
+- Fixed Qt live cancel flow to require confirmation before tearing down an active capture session.
 - Fixed Qt transcription runs that could remain stuck when a worker process exited without emitting a terminal event.
 - Fixed Qt **Force Stop** so Linux worker cleanup escalates beyond `terminate()` when necessary.
 - Fixed diarization crashes caused by `torchaudio`'s SoX backend during pyannote audio reads.

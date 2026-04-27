@@ -38,40 +38,53 @@ def _prefer_torchaudio_soundfile_backend() -> str | None:
     """
     Prefer torchaudio's soundfile backend for pyannote IO.
 
-    pyannote still calls ``torchaudio.set_audio_backend("soundfile")``, but on
-    modern torchaudio that API is a no-op and the dispatcher picks the first
-    available backend. On this Linux host, the default SoX backend segfaults
-    during WAV reads, while ``backend="soundfile"`` works reliably.
+    pyannote may still call ``torchaudio.set_audio_backend("soundfile")``, but on
+    modern torchaudio (2.9+) that API and ``list_audio_backends`` are removed.
+    The dispatcher now picks the best available backend automatically.
     """
 
     global _TORCHAUDIO_SOUNDFILE_PATCHED
     if _TORCHAUDIO_SOUNDFILE_PATCHED:
         return "soundfile"
 
-    try:
-        available = list(torchaudio.list_audio_backends())
-    except Exception as exc:
-        LOGGER.warning("Unable to inspect torchaudio backends for diarization. reason=%s", exc, exc_info=True)
-        return None
+    # For torchaudio < 2.9, we check available backends.
+    # For torchaudio >= 2.9, list_audio_backends is removed.
+    available = []
+    if hasattr(torchaudio, "list_audio_backends"):
+        try:
+            available = list(torchaudio.list_audio_backends())
+        except Exception as exc:
+            LOGGER.warning("Unable to inspect torchaudio backends for diarization. reason=%s", exc, exc_info=True)
+            return None
+    else:
+        # Modern torchaudio uses a dispatcher. We'll assume soundfile is available
+        # or that the dispatcher will handle it. We still want to force soundfile
+        # for pyannote if possible to avoid SoX segfaults.
+        available = ["soundfile", "ffmpeg"]
 
     if "soundfile" not in available:
         LOGGER.info("TorchAudio soundfile backend unavailable for diarization. available=%s", available)
         return None
 
-    original_info = torchaudio.info
-    original_load = torchaudio.load
+    # Some experimental torchaudio versions (e.g. 2.11.0) might lack 'info' attribute
+    # but still have 'load'.
+    original_info = getattr(torchaudio, "info", None)
+    original_load = getattr(torchaudio, "load", None)
 
     def _wrap_with_soundfile_default(func):
         def _wrapped(*args, **kwargs):
-            kwargs.setdefault("backend", "soundfile")
+            # If a backend is explicitly requested by the caller, honor it.
+            # Otherwise, default to soundfile.
+            if "backend" not in kwargs:
+                kwargs["backend"] = "soundfile"
             return func(*args, **kwargs)
 
         setattr(_wrapped, "__pyscribe_soundfile_default__", True)
         return _wrapped
 
-    if not getattr(original_info, "__pyscribe_soundfile_default__", False):
+    if original_info and not getattr(original_info, "__pyscribe_soundfile_default__", False):
         torchaudio.info = _wrap_with_soundfile_default(original_info)
-    if not getattr(original_load, "__pyscribe_soundfile_default__", False):
+    if original_load and not getattr(original_load, "__pyscribe_soundfile_default__", False):
         torchaudio.load = _wrap_with_soundfile_default(original_load)
 
     _TORCHAUDIO_SOUNDFILE_PATCHED = True

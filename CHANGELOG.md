@@ -8,7 +8,10 @@ The format is inspired by Keep a Changelog.
 
 ### Added
 
+- Qt live transcription session title support. Users can provide an optional title before starting a session to customize the session folder and finalized filename.
 - Qt live transcription mode with microphone/loopback capture, rolling ASR updates, recoverable session folders, and final post-pass cleanup.
+- Automatic detection and configuration of Torch/CUDA library paths on Linux to support bleeding-edge environments (Torch 2.11+).
+- Support for `nemo_toolkit[asr]` version 2.7.3 and optimized Sortformer diarization.
 - Qt live **Pause / Resume** control for temporarily suspending capture without creating a new session folder.
 - `services/live_transcription_service.py` with live session coordination, Qt audio-device filtering, rolling transcript reconciliation, and session metadata handling.
 - `tests/test_live_transcription_service.py` covering live session merge logic, retention behavior, and Granite/live gating.

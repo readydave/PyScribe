@@ -20,6 +20,7 @@ from services.live_transcription_service import (
     classify_live_audio_device,
     live_model_supported,
     reconcile_live_transcript,
+    normalize_session_title,
 )
 
 
@@ -39,7 +40,7 @@ class _FakeRequestQueue:
 
 class LiveTranscriptionServiceTests(unittest.TestCase):
     @staticmethod
-    def _options(tmp_dir: str, *, source_mode: str = "microphone", keep_audio: bool = True) -> LiveSessionOptions:
+    def _options(tmp_dir: str, *, source_mode: str = "microphone", keep_audio: bool = True, session_title: str | None = None) -> LiveSessionOptions:
         return LiveSessionOptions(
             model_name="deepdml/faster-whisper-large-v3-turbo-ct2",
             device="cpu",
@@ -53,7 +54,61 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             use_diarization=False,
             diar_backend="off",
             max_speakers=None,
+            session_title=session_title,
         )
+
+    def test_normalize_session_title(self) -> None:
+        self.assertEqual(normalize_session_title("Weekly Meeting"), "Weekly-Meeting")
+        self.assertEqual(normalize_session_title("Title with Symbols! @#$%^&*()"), "Title-with-Symbols")
+        self.assertEqual(normalize_session_title("   Spaces   "), "Spaces")
+        self.assertEqual(normalize_session_title("Repeated---Hyphens"), "Repeated-Hyphens")
+        self.assertEqual(normalize_session_title("Final-"), "Final")
+        self.assertIsNone(normalize_session_title("   "))
+        self.assertIsNone(normalize_session_title(""))
+
+    def test_live_session_dir_uses_title(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+            title = "My-Session"
+            controller = LiveSessionController(self._options(temp_dir, session_title=title))
+            self.assertIn(title, controller.session_dir.name)
+            self.assertTrue(controller.session_dir.name.startswith("20"))  # Starts with year
+
+    def test_live_session_update_title_mid_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+            controller = LiveSessionController(self._options(temp_dir, session_title="Initial"))
+            controller.start()
+            self.assertEqual(controller.metadata.session_title, "Initial")
+            
+            controller.update_title("Updated Title")
+            self.assertEqual(controller.metadata.session_title, "Updated Title")
+            
+            metadata = json.loads(Path(controller.metadata_path).read_text(encoding="utf-8"))
+            self.assertEqual(metadata["session_title"], "Updated Title")
+            controller.shutdown()
+
+    def test_live_session_finalize_renames_files_with_title(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+            title = "Final-Title"
+            controller = LiveSessionController(self._options(temp_dir, session_title=title))
+            controller.start()
+            controller.append_audio_chunk(np.zeros(LIVE_SAMPLE_RATE, dtype=np.float32), np.zeros(LIVE_SAMPLE_RATE, dtype=np.int16).tobytes())
+            controller.close_capture()
+            
+            self.assertTrue(controller.capture_path.exists())
+            controller.finalize_success("transcript text")
+            
+            # capture.wav should be gone, replaced by T-Final-Title.wav
+            self.assertFalse(controller.capture_path.exists())
+            
+            timestamp = controller.metadata.session_id.split("_")[0]
+            expected_audio = controller.session_dir / f"{timestamp}-{title}.wav"
+            expected_txt = controller.session_dir / f"{timestamp}-{title}.txt"
+            
+            self.assertTrue(expected_audio.exists())
+            self.assertTrue(expected_txt.exists())
+            self.assertEqual(controller.metadata.saved_audio_path, str(expected_audio))
+            self.assertEqual(controller.metadata.final_transcript_path, str(expected_txt))
+            controller.shutdown()
 
     def test_classify_live_audio_device_detects_loopback_markers(self) -> None:
         self.assertEqual(classify_live_audio_device("Monitor of Built-in Audio"), "loopback")

@@ -88,6 +88,7 @@ def prepare_linux_dynamic_loader_environment() -> dict[str, str | bool]:
     result: dict[str, str | bool] = {
         "changed": False,
         "paddle_lib_dir": "",
+        "torch_lib_dir": "",
         "nvidia_lib_dirs": "",
         "ld_library_path": os.environ.get("LD_LIBRARY_PATH", ""),
     }
@@ -110,6 +111,12 @@ def prepare_linux_dynamic_loader_environment() -> dict[str, str | bool]:
         cleaned = [p for p in cleaned if p != paddle_lib_dir]
         cleaned = [paddle_lib_dir] + cleaned
         result["paddle_lib_dir"] = paddle_lib_dir
+
+    torch_lib_dir = _detect_torch_lib_dir()
+    if torch_lib_dir:
+        cleaned = [p for p in cleaned if p != torch_lib_dir]
+        cleaned = [torch_lib_dir] + cleaned
+        result["torch_lib_dir"] = torch_lib_dir
 
     new_ld = ":".join(cleaned)
     if new_ld != original_ld:
@@ -173,6 +180,20 @@ def _detect_paddle_libs_dir() -> str:
 
     for search_path in sys.path:
         candidate = os.path.join(search_path, "paddle", "libs")
+        if os.path.isdir(candidate):
+            return os.path.abspath(candidate)
+    return ""
+
+
+def _detect_torch_lib_dir() -> str:
+    spec = importlib.util.find_spec("torch")
+    if spec and spec.origin:
+        candidate = str((Path(spec.origin).resolve().parent / "lib"))
+        if os.path.isdir(candidate):
+            return candidate
+
+    for search_path in sys.path:
+        candidate = os.path.join(search_path, "torch", "lib")
         if os.path.isdir(candidate):
             return os.path.abspath(candidate)
     return ""

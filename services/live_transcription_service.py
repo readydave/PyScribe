@@ -57,6 +57,7 @@ class LiveSessionOptions:
     use_diarization: bool
     diar_backend: str
     max_speakers: int | None
+    session_title: str | None = None
 
 
 @dataclass
@@ -70,6 +71,7 @@ class LiveSessionMetadata:
     source_mode: str
     status: str
     saved_audio_path: str
+    session_title: str | None = None
     final_transcript_path: str | None = None
     error_text: str | None = None
 
@@ -84,6 +86,7 @@ class LiveSessionSnapshot:
     capture_path: str
     metadata_path: str
     final_transcript_path: str
+    session_title: str | None = None
 
 
 @dataclass
@@ -111,6 +114,21 @@ def classify_live_audio_device(name: str) -> str:
     if any(marker in lowered for marker in _LOOPBACK_MARKERS):
         return "loopback"
     return "microphone"
+
+
+def normalize_session_title(title: str | None) -> str | None:
+    """Normalizes a title into a filesystem-safe format."""
+    if not title:
+        return None
+    import re
+    # Trim and replace spaces with hyphens
+    s = str(title).strip().replace(" ", "-")
+    # Remove filesystem-invalid characters
+    s = re.sub(r"[^a-zA-Z0-9\-_]", "", s)
+    # Collapse repeated separators
+    s = re.sub(r"-+", "-", s)
+    s = re.sub(r"_+", "_", s)
+    return s.strip("-").strip("_") or None
 
 
 def list_live_audio_inputs() -> list[LiveAudioDevice]:
@@ -259,12 +277,23 @@ class LiveSessionController:
             raise ValueError("Selected model does not support live transcription.")
 
         output_root = Path(options.output_root or default_live_output_dir()).expanduser()
-        session_id = _dt.datetime.now().strftime("%Y-%m-%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+        timestamp = _dt.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        safe_title = normalize_session_title(options.session_title)
+        
+        # Use timestamp + title for session directory name if title exists
+        dir_name = timestamp
+        if safe_title:
+            dir_name = f"{timestamp}-{safe_title}"
+        
+        session_id = dir_name + "_" + uuid.uuid4().hex[:8]
         self.options = options
         self.session_dir = output_root / session_id
         self.capture_path = self.session_dir / "capture.wav"
         self.metadata_path = self.session_dir / "session.json"
+        
+        # Final transcript path will be calculated during finalization
         self.final_transcript_path = self.session_dir / "final_transcript.txt"
+        
         self.metadata = LiveSessionMetadata(
             session_id=session_id,
             started_at=_now_iso(),
@@ -275,6 +304,7 @@ class LiveSessionController:
             source_mode=options.source_mode,
             status="capturing",
             saved_audio_path=str(self.capture_path),
+            session_title=options.session_title,
         )
         self._wave_file: wave.Wave_write | None = None
         self._buffer = np.zeros(0, dtype=np.float32)
@@ -292,6 +322,11 @@ class LiveSessionController:
         self.last_error: str | None = None
         self._last_emitted_transcript = ""
         self._started = False
+
+    def update_title(self, title: str | None) -> None:
+        """Updates the session title in metadata. Does not rename directories or files while active."""
+        self.metadata.session_title = title
+        self._write_metadata()
 
     @property
     def recording_seconds(self) -> float:
@@ -318,6 +353,7 @@ class LiveSessionController:
             capture_path=str(self.capture_path),
             metadata_path=str(self.metadata_path),
             final_transcript_path=str(self.final_transcript_path),
+            session_title=self.metadata.session_title,
         )
 
     def append_audio_chunk(self, audio_np: np.ndarray, pcm16_bytes: bytes) -> None:
@@ -426,16 +462,45 @@ class LiveSessionController:
         self._write_metadata()
 
     def finalize_success(self, transcript: str) -> None:
-        self.final_transcript_path.write_text(transcript or "", encoding="utf-8")
+        safe_title = normalize_session_title(self.metadata.session_title)
+        timestamp = self.metadata.session_id.split("_")[0]
+        
+        final_audio_path = self.capture_path
+        final_txt_path = self.final_transcript_path
+        
+        if safe_title:
+            base_name = f"{timestamp}-{safe_title}"
+            candidate_audio = self.session_dir / f"{base_name}.wav"
+            candidate_txt = self.session_dir / f"{base_name}.txt"
+            
+            # Simple collision avoidance if needed
+            counter = 1
+            while candidate_audio.exists() or candidate_txt.exists():
+                counter += 1
+                candidate_audio = self.session_dir / f"{base_name}-{counter}.wav"
+                candidate_txt = self.session_dir / f"{base_name}-{counter}.txt"
+            
+            final_audio_path = candidate_audio
+            final_txt_path = candidate_txt
+            
+            if self.capture_path.exists():
+                try:
+                    self.capture_path.rename(final_audio_path)
+                    self.metadata.saved_audio_path = str(final_audio_path)
+                except OSError:
+                    LOGGER.warning("Failed to rename capture.wav to %s", final_audio_path, exc_info=True)
+        
+        final_txt_path.write_text(transcript or "", encoding="utf-8")
         self.metadata.status = "completed"
-        self.metadata.final_transcript_path = str(self.final_transcript_path)
+        self.metadata.final_transcript_path = str(final_txt_path)
         self.metadata.error_text = None
         self._write_metadata()
-        if not self.options.keep_audio_on_success and self.capture_path.exists():
+        
+        if not self.options.keep_audio_on_success and final_audio_path.exists():
             try:
-                self.capture_path.unlink()
+                final_audio_path.unlink()
             except OSError:
-                LOGGER.warning("Failed to delete live capture after success: %s", self.capture_path, exc_info=True)
+                LOGGER.warning("Failed to delete live capture after success: %s", final_audio_path, exc_info=True)
 
     def finalize_cancelled(self) -> None:
         self.metadata.status = "cancelled"

@@ -11,9 +11,15 @@ import diarization
 class DiarizationRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self._patched_flag = diarization._TORCHAUDIO_SOUNDFILE_PATCHED
+        self._original_info = getattr(diarization.torchaudio, "info", None)
+        self._original_load = getattr(diarization.torchaudio, "load", None)
 
     def tearDown(self) -> None:
         diarization._TORCHAUDIO_SOUNDFILE_PATCHED = self._patched_flag
+        if self._original_info:
+            diarization.torchaudio.info = self._original_info
+        if self._original_load:
+            diarization.torchaudio.load = self._original_load
 
     def test_prefer_torchaudio_soundfile_backend_wraps_default_io(self) -> None:
         info_calls: list[dict] = []
@@ -27,31 +33,52 @@ class DiarizationRuntimeTests(unittest.TestCase):
             load_calls.append(dict(kwargs))
             return "load"
 
-        with patch.object(diarization.torchaudio, "list_audio_backends", return_value=["sox", "soundfile"]), patch.object(
-            diarization.torchaudio,
-            "info",
-            fake_info,
-        ), patch.object(
-            diarization.torchaudio,
-            "load",
-            fake_load,
-        ):
+        # Helper to conditionally patch list_audio_backends
+        def maybe_patch_list_backends(return_val):
+            if hasattr(diarization.torchaudio, "list_audio_backends"):
+                return patch.object(diarization.torchaudio, "list_audio_backends", return_value=return_val)
+            # If not present, we don't need to patch it for the success case
+            # as our code handles its absence.
+            return patch("builtins.dir", return_value=[])
+
+        patches = [
+            maybe_patch_list_backends(["sox", "soundfile"]),
+            patch.object(diarization.torchaudio, "load", fake_load),
+        ]
+        if hasattr(diarization.torchaudio, "info"):
+            patches.append(patch.object(diarization.torchaudio, "info", fake_info))
+
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+                
             diarization._TORCHAUDIO_SOUNDFILE_PATCHED = False
 
             backend = diarization._prefer_torchaudio_soundfile_backend()
             self.assertEqual(backend, "soundfile")
 
-            self.assertEqual(diarization.torchaudio.info("clip.wav"), "info")
+            # The wrappers should be installed now
+            if hasattr(diarization.torchaudio, "info"):
+                self.assertTrue(getattr(diarization.torchaudio.info, "__pyscribe_soundfile_default__", False))
+                self.assertEqual(diarization.torchaudio.info("clip.wav"), "info")
+                self.assertEqual(info_calls[-1]["backend"], "soundfile")
+
+            self.assertTrue(getattr(diarization.torchaudio.load, "__pyscribe_soundfile_default__", False))
             self.assertEqual(diarization.torchaudio.load("clip.wav"), "load")
-            self.assertEqual(info_calls[-1]["backend"], "soundfile")
             self.assertEqual(load_calls[-1]["backend"], "soundfile")
 
-            diarization.torchaudio.info("clip.wav", backend="sox")
+            if hasattr(diarization.torchaudio, "info"):
+                diarization.torchaudio.info("clip.wav", backend="sox")
+                self.assertEqual(info_calls[-1]["backend"], "sox")
+
             diarization.torchaudio.load("clip.wav", backend="sox")
-            self.assertEqual(info_calls[-1]["backend"], "sox")
             self.assertEqual(load_calls[-1]["backend"], "sox")
 
     def test_prefer_torchaudio_soundfile_backend_skips_when_unavailable(self) -> None:
+        if not hasattr(diarization.torchaudio, "list_audio_backends"):
+            self.skipTest("torchaudio 2.9+ dispatcher logic does not support 'unavailable' soundfile check via list_audio_backends")
+
         with patch.object(diarization.torchaudio, "list_audio_backends", return_value=["sox"]):
             diarization._TORCHAUDIO_SOUNDFILE_PATCHED = False
             self.assertIsNone(diarization._prefer_torchaudio_soundfile_backend())

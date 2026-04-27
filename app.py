@@ -34,13 +34,14 @@ COMPUTE_TYPE = "int8"
 RECOMMENDED_MODEL = "small"
 ALL_MODELS: list[str] = []
 AVAILABLE_DIAR_BACKENDS: list[str] = []
+UNAVAILABLE_DIAR_BACKEND_REASONS: dict[str, str] = {}
 APP_CONFIG = pyscribe_services.AppConfig()
 
 
 def _ensure_listener_runtime() -> None:
     global _LISTENER_RUNTIME_READY
     global RUNTIME, DEVICE, COMPUTE_TYPE, RECOMMENDED_MODEL
-    global ALL_MODELS, AVAILABLE_DIAR_BACKENDS, APP_CONFIG
+    global ALL_MODELS, AVAILABLE_DIAR_BACKENDS, UNAVAILABLE_DIAR_BACKEND_REASONS, APP_CONFIG
     if _LISTENER_RUNTIME_READY:
         return
     ensure_platform_sys_version_compat()
@@ -52,6 +53,7 @@ def _ensure_listener_runtime() -> None:
     RECOMMENDED_MODEL = pyscribe_services.recommend_model(RUNTIME)
     ALL_MODELS = pyscribe_services.get_model_choices()
     AVAILABLE_DIAR_BACKENDS = pyscribe_services.get_available_diarization_backends(include_off=False)
+    UNAVAILABLE_DIAR_BACKEND_REASONS = pyscribe_services.get_unavailable_diarization_backend_reasons(include_off=False)
     if not AVAILABLE_DIAR_BACKENDS:
         AVAILABLE_DIAR_BACKENDS = ["accurate"]
     APP_CONFIG = pyscribe_services.load_config()
@@ -672,6 +674,17 @@ def copy_to_clipboard(text: str) -> None:
 def set_cancel_flag() -> None:
     _cancel_event.set()
 
+
+def _format_diar_backend_info(selected_backend: str) -> str:
+    info = pyscribe_services.get_backend_label(selected_backend)
+    if not UNAVAILABLE_DIAR_BACKEND_REASONS:
+        return info
+    details = []
+    for backend_id, reason in UNAVAILABLE_DIAR_BACKEND_REASONS.items():
+        details.append(f"{pyscribe_services.get_backend_label(backend_id)} hidden: {reason}")
+    return f"{info}. Unavailable options: {'; '.join(details)}"
+
+
 # --- Gradio Interface Definition ---
 def create_interface() -> gr.Blocks:
     _ensure_listener_runtime()
@@ -777,7 +790,7 @@ def create_interface() -> gr.Blocks:
                     choices=AVAILABLE_DIAR_BACKENDS,
                     value=default_backend,
                     label="Diarization mode",
-                    info=pyscribe_services.get_backend_label(default_backend),
+                    info=_format_diar_backend_info(default_backend),
                     visible=initial_allow_transcription and APP_CONFIG.use_diarization,
                 )
                 max_speakers_input = gr.Textbox(

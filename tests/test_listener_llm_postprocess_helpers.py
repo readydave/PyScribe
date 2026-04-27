@@ -44,6 +44,18 @@ def _template() -> PromptTemplate:
 
 
 class ListenerLLMPostprocessHelperTests(unittest.TestCase):
+    def test_diar_backend_info_exposes_hidden_backend_reasons(self) -> None:
+        with patch.dict(
+            app.UNAVAILABLE_DIAR_BACKEND_REASONS,
+            {"sortformer": "CUDA is unavailable to PyTorch."},
+            clear=True,
+        ):
+            info = app._format_diar_backend_info("accurate")
+
+        self.assertIn("Accurate", info)
+        self.assertIn("GPU Sortformer", info)
+        self.assertIn("CUDA is unavailable", info)
+
     def test_source_mode_visibility_current_transcript(self) -> None:
         file_update, paste_update = app._update_postprocess_source_fields("Current transcript")
         self.assertFalse(bool(file_update.get("visible")))

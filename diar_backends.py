@@ -5,12 +5,19 @@ from __future__ import annotations
 
 import inspect
 import sys
+from dataclasses import dataclass
 from typing import List, Dict, Optional, Callable
 
 from diarization import run_diarization as run_pyannote
 
 ProgressCB = Optional[Callable[[float], None]]
 StatusCB = Optional[Callable[[str], None]]
+
+
+@dataclass(frozen=True)
+class BackendAvailability:
+    available: bool
+    reason: str | None = None
 
 
 def _bump(cb: ProgressCB, value: float) -> None:
@@ -160,9 +167,9 @@ BACKENDS = {
 }
 
 
-def _is_sortformer_available() -> bool:
+def _sortformer_availability() -> BackendAvailability:
     """
-    Return True when Sortformer dependencies appear installed.
+    Return Sortformer dependency availability and an actionable unavailable reason.
 
     Keep this check lightweight so UI startup/probing does not trigger heavyweight
     imports. Runtime execution still validates actual CUDA usability.
@@ -171,15 +178,26 @@ def _is_sortformer_available() -> bool:
 
     try:
         if importlib.util.find_spec("nemo.collections.asr") is None:
-            return False
-    except Exception:
-        return False
+            return BackendAvailability(
+                False,
+                "NeMo ASR is not installed. Install with: pip install nemo_toolkit[asr]",
+            )
+    except ModuleNotFoundError:
+        return BackendAvailability(
+            False,
+            "NeMo ASR is not installed. Install with: pip install nemo_toolkit[asr]",
+        )
+    except Exception as exc:
+        return BackendAvailability(False, f"Unable to inspect NeMo ASR availability: {exc}")
 
     try:
         if importlib.util.find_spec("torch") is None:
-            return False
-    except Exception:
-        return False
+            return BackendAvailability(
+                False,
+                "PyTorch is not installed. Install a CUDA-enabled PyTorch build for Sortformer.",
+            )
+    except Exception as exc:
+        return BackendAvailability(False, f"Unable to inspect PyTorch availability: {exc}")
 
     # If torch is already loaded, use its CUDA signal without importing torch here.
     torch_module = sys.modules.get("torch")
@@ -188,12 +206,21 @@ def _is_sortformer_available() -> bool:
             cuda_attr = getattr(torch_module, "cuda", None)
             is_available = getattr(cuda_attr, "is_available", None)
             if callable(is_available):
-                return bool(is_available())
-        except Exception:
-            return True
+                if bool(is_available()):
+                    return BackendAvailability(True)
+                return BackendAvailability(
+                    False,
+                    "CUDA is unavailable to PyTorch. Install/repair the NVIDIA driver and a CUDA-enabled PyTorch build.",
+                )
+        except Exception as exc:
+            return BackendAvailability(False, f"Unable to verify PyTorch CUDA availability: {exc}")
 
     # Avoid importing torch during capability probe.
-    return True
+    return BackendAvailability(True)
+
+
+def _is_sortformer_available() -> bool:
+    return _sortformer_availability().available
 
 
 def _module_exists(module_name: str) -> bool:
@@ -205,20 +232,27 @@ def _module_exists(module_name: str) -> bool:
         return False
 
 
-def available_backends() -> Dict[str, bool]:
-    """Return a map of backend_id -> available (installed)."""
-    availability = {}
+def backend_availability() -> Dict[str, BackendAvailability]:
+    """Return a map of backend_id -> availability with unavailable reason."""
+    availability: Dict[str, BackendAvailability] = {}
     for key, meta in BACKENDS.items():
         if key == "sortformer":
-            availability[key] = _is_sortformer_available()
+            availability[key] = _sortformer_availability()
             continue
         req = meta["requires"]
         if req is None:
-            availability[key] = True
+            availability[key] = BackendAvailability(True)
         else:
             module_name = req.split()[0].split("[")[0].split("==")[0]
-            availability[key] = _module_exists(module_name)
+            available = _module_exists(module_name)
+            reason = None if available else f"Required module '{module_name}' is not installed."
+            availability[key] = BackendAvailability(available, reason)
     return availability
+
+
+def available_backends() -> Dict[str, bool]:
+    """Return a map of backend_id -> available (installed)."""
+    return {key: status.available for key, status in backend_availability().items()}
 
 
 def run_diarization_backend(

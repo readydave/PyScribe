@@ -164,6 +164,29 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertFalse(win.transcribe_btn.isEnabled())
         self.assertIn("No loopback input", win.live_guidance_label.text())
 
+    def test_diar_backend_probe_keeps_sortformer_disabled_with_reason(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        reason = "CUDA is unavailable to PyTorch."
+
+        win._on_diar_backend_probe_finished(
+            {
+                "accurate": (True, None),
+                "fast": (True, None),
+                "sortformer": (False, reason),
+            },
+            "",
+        )
+
+        sortformer_idx = win.diar_backend_combo.findData("sortformer")
+        self.assertGreaterEqual(sortformer_idx, 0)
+        item = win.diar_backend_combo.model().item(sortformer_idx)
+        self.assertIsNotNone(item)
+        self.assertFalse(item.isEnabled())
+        self.assertIn(reason, item.toolTip())
+        self.assertNotEqual(win.diar_backend_combo.currentData(), "sortformer")
+
     def test_stop_live_capture_starts_final_post_pass(self) -> None:
         win = self._build_window(
             [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]

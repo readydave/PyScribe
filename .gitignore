@@ -44,9 +44,10 @@ htmlcov/
 # --------------------------------------------------------------------
 
 AGENT.md
-AGENTS.md
 IGNORE.md
 TODO.md
+
+# AGENTS.md is intentionally committed as a compatibility wrapper.
 
 # --------------------------------------------------------------------
 # Tool-specific AI agent instruction files

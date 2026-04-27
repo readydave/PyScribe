@@ -748,10 +748,17 @@ class MainWindow(QMainWindow):
         self.live_output_dir_btn.clicked.connect(self._browse_live_output_dir)
         live_output_row.addWidget(self.live_output_dir_btn)
         live_grid.addLayout(live_output_row, 2, 1)
-        live_grid.addWidget(QLabel("Timer"), 3, 0)
+
+        live_grid.addWidget(QLabel("Session Title"), 3, 0)
+        self.live_title_input = QLineEdit()
+        self.live_title_input.setPlaceholderText("Optional title for filenames")
+        self.live_title_input.textChanged.connect(self._on_live_title_changed)
+        live_grid.addWidget(self.live_title_input, 3, 1)
+
+        live_grid.addWidget(QLabel("Timer"), 4, 0)
         self.live_timer_label = QLabel("00:00:00")
         self.live_timer_label.setObjectName("metricsLabel")
-        live_grid.addWidget(self.live_timer_label, 3, 1)
+        live_grid.addWidget(self.live_timer_label, 4, 1)
         live_layout.addLayout(live_grid)
         self.live_keep_audio_checkbox = QCheckBox("Keep recorded audio after completion")
         self.live_keep_audio_checkbox.setChecked(bool(self.config.live_keep_audio_on_success))
@@ -1719,6 +1726,12 @@ class MainWindow(QMainWindow):
         self._save_config(live_output_dir=self._selected_live_output_dir())
         self._update_live_mode_ui()
 
+    @Slot(str)
+    def _on_live_title_changed(self, text: str) -> None:
+        if self._live_session is not None:
+            self._live_session.update_title(text.strip() or None)
+        self._update_live_mode_ui()
+
     @Slot(bool)
     def _on_live_keep_audio_toggled(self, checked: bool) -> None:
         self._save_config(live_keep_audio_on_success=checked)
@@ -1780,6 +1793,8 @@ class MainWindow(QMainWindow):
             guidance = f"Live capture paused for {device_name}. Resume to keep recording into the current session."
         elif self._live_capture_active:
             guidance = f"Recording from {device_name}. Stop to run the final post-pass."
+            if self.live_title_input.text().strip():
+                guidance += f" (Title: {self.live_title_input.text().strip()})"
         elif not live_supported:
             guidance = "Live mode requires a timestamp-capable Whisper backend. Granite remains file-only."
         elif not live_devices_available and loopback_selected:
@@ -2014,6 +2029,7 @@ class MainWindow(QMainWindow):
             use_diarization=use_diarization,
             diar_backend=diar_backend,
             max_speakers=max_speakers,
+            session_title=self.live_title_input.text().strip() or None,
         )
 
         try:
@@ -3167,11 +3183,19 @@ class MainWindow(QMainWindow):
         if payload is None:
             return
         content, suffix = payload
+        
         stem = "transcript"
-        if self.media_path:
+        if self._is_live_mode() and self.live_title_input.text().strip():
+            stem = self.live_title_input.text().strip()
+        elif self.media_path:
             stem = os.path.splitext(os.path.basename(self.media_path))[0]
+            
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        suggested = f"{ts}_{stem}_{suffix}.txt"
+        if self._is_live_mode() and self.live_title_input.text().strip():
+            suggested = f"{ts}_{stem}.txt"
+        else:
+            suggested = f"{ts}_{stem}_{suffix}.txt"
+
         default_dir = os.path.dirname(self.media_path) if self.media_path else self.last_save_dir
         if not default_dir or not os.path.isdir(default_dir):
             default_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")

@@ -47,6 +47,8 @@ If `.venv` does not exist, ask Dave before creating one.
 ## External Runtime Requirements
 
 - FFmpeg must be available in `PATH`.
+- **NVIDIA GPU with CUDA 12+** is highly recommended for diarization and Whisper acceleration.
+- **Linux Dynamic Loader**: PyScribe automatically manages `LD_LIBRARY_PATH` to resolve CUDA dependencies (like `libtorch_cuda_linalg.so`) in bleeding-edge Torch environments.
 
 Windows:
 
@@ -292,6 +294,7 @@ gitleaks detect --source . --redact
 - Interactive LAN listener mode requires authentication.
 - Public share mode requires authentication.
 - Some diarization backends require CUDA.
+- **NeMo Sortformer**: Requires `nemo_toolkit[asr]>=2.7.3`, `setuptools<70`, and CUDA availability.
 - Sortformer availability depends on both NeMo importability and CUDA availability.
 - Granite remains file-only.
 - Qt live transcription is Linux-first.

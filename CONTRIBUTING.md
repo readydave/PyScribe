@@ -5,8 +5,9 @@ Thanks for contributing.
 ## Development Setup
 
 1. Clone the repository.
-2. Create a virtual environment.
-3. Install dependencies.
+2. Create a project-local virtual environment.
+3. Activate the virtual environment.
+4. Install dependencies from `requirements.txt`.
 
 Windows:
 
@@ -23,6 +24,8 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Do not install project dependencies into the global or user Python environment.
 
 ## Run Locally
 
@@ -49,20 +52,43 @@ python -m pytest -q tests/smoke_cli.py
 Note: `bash -n scripts/run_listener.sh` is the same syntax check CI runs on Linux.
 If you are on Windows without Bash, run this check in Git Bash/WSL or skip it locally.
 
+## Security Checks
+
+Run the relevant security checks before release prep, dependency changes, listener/network changes, authentication changes, file handling changes, model download changes, or LLM/OCR integration changes.
+
+```bash
+python -m bandit -r . -x .venv,venv,env,build,dist,__pycache__ -ll
+python -m pip_audit -r requirements.txt
+gitleaks detect --source . --no-git --redact
+```
+
+Notes:
+
+- Do not run broad automated fix commands without reviewing the impact first.
+- Do not commit security scan reports if they contain sensitive paths, exploit details, secrets, or private environment information.
+- CUDA-specific PyTorch wheels may require separate vendor advisory review because dependency audit tools may not fully assess them.
+- Re-run the relevant scan after fixing a security finding.
+
 ## Code Guidelines
 
 - Keep changes focused and small when possible.
-- Add/maintain type hints on function signatures.
+- Follow existing project conventions.
+- Add or maintain type hints on function signatures.
 - Prefer clear names over abbreviations.
-- Avoid checking in runtime artifacts (`.gradio/`, cache folders, logs).
-- Do not commit secrets or local credentials.
+- Add or maintain tests for changed behavior.
+- Preserve secure defaults for listener, auth, token handling, TLS, model downloads, logging, and config persistence.
+- Avoid checking in runtime artifacts such as `.gradio/`, cache folders, logs, local config, generated output, or temporary files.
+- Do not commit secrets, tokens, passwords, local credentials, private endpoints, or local certificates.
+- Do not commit local agent-control files unless Dave explicitly asks.
 
 ## Pull Request Guidance
 
 - Explain what changed and why.
 - Mention any user-visible behavior changes.
-- Include test/verification notes.
-- Update docs (`README.md`, `docs/`) when behavior changes.
+- Include test and verification notes.
+- Include security scan notes when the change touches security-sensitive areas.
+- Update docs such as `README.md`, `CHANGELOG.md`, `PROJECT.md`, `STACK.md`, or `docs/` when behavior, setup, commands, architecture, or security posture changes.
+- Keep PRs focused and reviewable.
 
 ## Commit Messages
 

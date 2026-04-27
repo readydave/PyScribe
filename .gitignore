@@ -1,51 +1,184 @@
-# Virtual Environment
+# --------------------------------------------------------------------
+# Virtual environments
+# --------------------------------------------------------------------
+
 .venv/
 .venv-x/
 venv/
+env/
 *.venv
 
-# Python cache
+# --------------------------------------------------------------------
+# Python cache / tooling
+# --------------------------------------------------------------------
+
 __pycache__/
 .pycache_tmp/
+*.py[cod]
 *.pyc
 *.pyo
 *.pyd
 
-# Editor/IDE specific
-.vscode/
-.idea/
-
-# Secrets
-.env
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
-
-# Temporary files
-*.log
-*.tmp
-.cache/
-.pyscribe_logs/
-launch.bat
-scripts/launch_windows.bat
-
-# Runtime/tooling artifacts
-.gradio/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .hypothesis/
 .tox/
 .nox/
+
+# --------------------------------------------------------------------
+# Editor / IDE specific
+# --------------------------------------------------------------------
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --------------------------------------------------------------------
+# Local agent/framework control files
+# --------------------------------------------------------------------
+
+AGENT.md
+AGENTS.md
+IGNORE.md
+TODO.md
+
+# --------------------------------------------------------------------
+# Tool-specific AI agent instruction files
+# --------------------------------------------------------------------
+
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+CODEX.md
+COPILOT.md
+CURSOR.md
+WINDSURF.md
+AIDER.md
+ROO.md
+CODY.md
+QWEN.md
+DEVIN.md
+AMP.md
+REPLIT.md
+TABNINE.md
+
+.github/copilot-instructions.md
+.github/instructions/
+.github/instructions/*.instructions.md
+
+.cursorrules
+.cursor/
+.windsurf/
+.claude/
+.codex/
+.copilot/
+.continue/
+
+# Preserve existing local Continue MCP config ignore
+.continue/mcpServers/searxng.yaml
+
+# --------------------------------------------------------------------
+# Local/private markdown files
+# --------------------------------------------------------------------
+
+*.local.md
+*.private.md
+NOTES.md
+NOTES.local.md
+SCRATCH.md
+scratch.md
+
+SECURITY.local.md
+SECURITY_REVIEW.md
+security_best_practices_report.md
+security_review_private.md
+security_findings_private.md
+
+# Note:
+# Do not ignore SECURITY.md in PyScribe because it is already a committed
+# public security policy file for this repo.
+
+# --------------------------------------------------------------------
+# Secrets and local config
+# --------------------------------------------------------------------
+
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.asc
+*.gpg
+
+secrets/
+credentials/
+private/
+.local/
+
+.python-version
+
+# --------------------------------------------------------------------
+# Build artifacts
+# --------------------------------------------------------------------
+
+build/
+dist/
+*.egg-info/
+
+# --------------------------------------------------------------------
+# Temporary files / logs / runtime artifacts
+# --------------------------------------------------------------------
+
+*.log
+*.tmp
+*.out
+*.err
+
+.cache/
+.pyscribe_logs/
+.gradio/
+
+tmp/
+temp/
+scratch/
+tasks/
+
+launch.bat
+scripts/launch_windows.bat
+
+# --------------------------------------------------------------------
+# OS artifacts
+# --------------------------------------------------------------------
+
 .DS_Store
 Thumbs.db
 Desktop.ini
+desktop.ini
 
+# --------------------------------------------------------------------
+# Archives / local exports
+# --------------------------------------------------------------------
 
-.continue/mcpServers/searxng.yaml
-.python-version
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.bak
+*.backup
+*.old
+*.orig
+
+exports/
+output/
+outputs/
+generated/

@@ -649,6 +649,8 @@ class MainWindow(QMainWindow):
         self._live_audio_io: object | None = None
         self._live_capture_format: QAudioFormat | None = None
         self._live_started_at: float | None = None
+        self._last_live_session: LiveSessionController | None = None
+        self._last_live_transcript: str = ""
         self._live_status_timer: QTimer = QTimer(self)
         self._live_status_timer.timeout.connect(self._poll_live_session_events)
         self._live_elapsed_timer: QTimer = QTimer(self)
@@ -1001,6 +1003,13 @@ class MainWindow(QMainWindow):
         self.save_btn.setMenu(self.save_menu)
         self.save_btn.clicked.connect(lambda: self.save_output("all"))
         self.save_btn.setEnabled(False)
+
+        self.rename_with_title_btn = QPushButton("Rename with Title")
+        self.rename_with_title_btn.setEnabled(False)
+        self.rename_with_title_btn.setVisible(False)
+        self.rename_with_title_btn.setToolTip("Apply current title to last session's files")
+        self.rename_with_title_btn.clicked.connect(self._on_rename_with_title_clicked)
+
         self.open_btn = QPushButton("Open Folder")
         self.open_btn.clicked.connect(self.open_transcriptions_folder)
         self.copy_btn = QPushButton("Copy")
@@ -1012,6 +1021,7 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.cancel_btn)
         actions.addWidget(self.force_stop_btn)
         actions.addWidget(self.save_btn)
+        actions.addWidget(self.rename_with_title_btn)
         actions.addWidget(self.open_btn)
         actions.addWidget(self.copy_btn)
         actions.addStretch(1)
@@ -2029,6 +2039,26 @@ class MainWindow(QMainWindow):
             self._live_session.update_title(text.strip() or None)
         self._update_live_mode_ui()
 
+    @Slot()
+    def _on_rename_with_title_clicked(self) -> None:
+        if self._last_live_session is None:
+            return
+        
+        title = self.live_title_input.text().strip()
+        if not title:
+            QMessageBox.information(self, "Rename", "Please enter a Session Title first.")
+            return
+            
+        try:
+            self._last_live_session.update_title(title)
+            self._last_live_session.finalize_success(self._last_live_transcript)
+            self.status_label.setText("Files renamed with title.")
+            self._append_terminal_log(f"Session files renamed using title: {title}")
+            self.rename_with_title_btn.setEnabled(False)
+        except Exception as exc:
+            LOGGER.error("Failed to rename last session files: %s", exc, exc_info=True)
+            QMessageBox.critical(self, "Rename failed", str(exc))
+
     @Slot(bool)
     def _on_live_keep_audio_toggled(self, checked: bool) -> None:
         self._save_config(live_keep_audio_on_success=checked)
@@ -2063,6 +2093,12 @@ class MainWindow(QMainWindow):
         self.pause_live_btn.setVisible(live_mode)
         self.transcribe_btn.setText("Start Live" if live_mode else "Process File")
         self.pause_live_btn.setText("Resume" if self._live_paused else "Pause")
+        
+        # Rename button is only for live mode when a session just ended
+        self.rename_with_title_btn.setVisible(live_mode)
+        has_last_session = self._last_live_session is not None
+        can_rename = has_last_session and not self._live_capture_active and not self._live_finalizing
+        self.rename_with_title_btn.setEnabled(can_rename and bool(self.live_title_input.text().strip()))
 
         if live_mode:
             self.path_label.setText(
@@ -2829,6 +2865,8 @@ class MainWindow(QMainWindow):
         if self._live_session is not None and self._live_finalizing:
             final_text = (transcript_only or transcript or "").strip()
             try:
+                self._last_live_session = self._live_session
+                self._last_live_transcript = final_text
                 self._live_session.finalize_success(final_text)
                 self._append_terminal_log(f"Recording saved in: {self._live_session.session_dir}")
             except Exception as exc:

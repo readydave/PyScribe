@@ -18,6 +18,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt desktop mode and Gradio listener mode
 - Qt unified dashboard layout with left navigation and stacked workspaces
 - Qt live transcription mode for microphone or loopback capture (Linux-first)
+- Qt batch transcription queue for sequential processing of multiple files or entire folders
 - Live pause/resume during Qt capture without breaking the current session folder
 - Responsive transcription cards (two-column on wide windows, single-column on narrow windows)
 - Hide/show controls for the left navigation panel and right status panel

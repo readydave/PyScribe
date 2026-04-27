@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from dataclasses import dataclass
 import logging
 import multiprocessing as mp
 import os
@@ -12,7 +13,7 @@ import time
 from _thread import LockType
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QAbstractListModel, QModelIndex, QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QFont, QKeySequence, QPalette
 from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
 from PySide6.QtWidgets import (
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -105,6 +107,77 @@ ALLOWED_MEDIA_EXTS = {
     ".avi",
     ".flv",
 }
+
+@dataclass
+class BatchQueueItem:
+    path: str
+    display_name: str
+    status: str = "queued"
+    progress: float = 0.0
+    error_message: str | None = None
+
+class BatchQueueModel(QAbstractListModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._items: list[BatchQueueItem] = []
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._items)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or not (0 <= index.row() < len(self._items)):
+            return None
+        item = self._items[index.row()]
+        if role == Qt.DisplayRole:
+            return f"{item.display_name} - {item.status.capitalize()}"
+        if role == Qt.ToolTipRole:
+            return f"Path: {item.path}\nStatus: {item.status}\nError: {item.error_message or 'None'}"
+        return None
+
+    def add_item(self, path: str) -> bool:
+        if any(item.path == path for item in self._items):
+            return False
+        self.beginInsertRows(QModelIndex(), len(self._items), len(self._items))
+        self._items.append(BatchQueueItem(path, os.path.basename(path)))
+        self.endInsertRows()
+        return True
+
+    def remove_item(self, row: int):
+        if 0 <= row < len(self._items):
+            self.beginRemoveRows(QModelIndex(), row, row)
+            self._items.pop(row)
+            self.endRemoveRows()
+
+    def update_item_status(self, row: int, status: str, progress: float = 0.0, error: str | None = None):
+        if 0 <= row < len(self._items):
+            self._items[row].status = status
+            self._items[row].progress = progress
+            self._items[row].error_message = error
+            idx = self.index(row, 0)
+            self.dataChanged.emit(idx, idx, [Qt.DisplayRole, Qt.ToolTipRole])
+
+    def clear(self):
+        self.beginResetModel()
+        self._items.clear()
+        self.endResetModel()
+
+    def clear_completed(self):
+        # Reverse iterate to safely remove items while maintaining indices
+        for i in range(len(self._items) - 1, -1, -1):
+            if self._items[i].status in {"completed", "failed", "canceled", "skipped"}:
+                self.remove_item(i)
+
+    def get_item(self, row: int) -> BatchQueueItem | None:
+        if 0 <= row < len(self._items):
+            return self._items[row]
+        return None
+
+    def get_next_queued_index(self) -> int:
+        for i, item in enumerate(self._items):
+            if item.status == "queued":
+                return i
+        return -1
+
 _UNSET = object()
 LOGGER = logging.getLogger(__name__)
 
@@ -530,6 +603,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setAcceptDrops(True)
         self._window_title_base = "PyScribe Qt"
         self.setWindowTitle(self._window_title_base)
         self.setMinimumSize(840, 560)
@@ -579,6 +653,10 @@ class MainWindow(QMainWindow):
         self._live_status_timer.timeout.connect(self._poll_live_session_events)
         self._live_elapsed_timer: QTimer = QTimer(self)
         self._live_elapsed_timer.timeout.connect(self._update_live_elapsed_label)
+
+        self.batch_queue_model = BatchQueueModel(self)
+        self._batch_active: bool = False
+        self._current_batch_index: int = -1
 
         self._build_ui()
         self._build_menus()
@@ -1009,6 +1087,63 @@ class MainWindow(QMainWindow):
         metrics_layout.addWidget(self.diar_time_label)
         metrics_layout.addWidget(self.visual_time_label)
         status_layout.addWidget(metrics_card)
+
+        # Batch Queue section
+        status_layout.addWidget(QLabel("Batch Queue"))
+        queue_card = QFrame()
+        queue_card.setObjectName("Card")
+        queue_layout = QVBoxLayout(queue_card)
+        queue_layout.setContentsMargins(10, 10, 10, 10)
+        queue_layout.setSpacing(6)
+
+        self.batch_queue_view = QListView()
+        self.batch_queue_view.setModel(self.batch_queue_model)
+        self.batch_queue_view.setMinimumHeight(120)
+        self.batch_queue_view.setObjectName("BatchQueueView")
+        queue_layout.addWidget(self.batch_queue_view)
+
+        # Row 1: Add and Import
+        add_row = QHBoxLayout()
+        self.add_to_queue_btn = QPushButton("Add Files")
+        self.add_to_queue_btn.clicked.connect(self._on_add_to_queue)
+        self.import_folder_btn = QPushButton("Folder")
+        self.import_folder_btn.clicked.connect(self._on_import_folder)
+        add_row.addWidget(self.add_to_queue_btn)
+        add_row.addWidget(self.import_folder_btn)
+        queue_layout.addLayout(add_row)
+
+        # Row 2: Remove and Clear
+        manage_row = QHBoxLayout()
+        self.remove_from_queue_btn = QPushButton("Remove")
+        self.remove_from_queue_btn.clicked.connect(self._on_remove_from_queue)
+        self.clear_queue_btn = QPushButton("Clear All")
+        self.clear_queue_btn.clicked.connect(self._on_clear_queue)
+        manage_row.addWidget(self.remove_from_queue_btn)
+        manage_row.addWidget(self.clear_queue_btn)
+        queue_layout.addLayout(manage_row)
+
+        # Row 3: Action buttons
+        queue_action_row = QHBoxLayout()
+        self.start_batch_btn = QPushButton("Start Batch")
+        self.start_batch_btn.clicked.connect(self._on_start_batch)
+        self.clear_completed_btn = QPushButton("Clear Done")
+        self.clear_completed_btn.clicked.connect(self._on_clear_completed)
+        queue_action_row.addWidget(self.start_batch_btn)
+        queue_action_row.addWidget(self.clear_completed_btn)
+        queue_layout.addLayout(queue_action_row)
+
+        self.queue_overall_progress = QProgressBar()
+        self.queue_overall_progress.setRange(0, 100)
+        self.queue_overall_progress.setValue(0)
+        self.queue_overall_progress.setTextVisible(True)
+        self.queue_overall_progress.hide()
+        queue_layout.addWidget(self.queue_overall_progress)
+
+        self.queue_status_summary = QLabel("Queue: Empty")
+        self.queue_status_summary.setObjectName("metricsLabel")
+        queue_layout.addWidget(self.queue_status_summary)
+
+        status_layout.addWidget(queue_card)
         status_layout.addStretch(1)
 
         self.status_panel = status_panel
@@ -1650,6 +1785,168 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Selected: {os.path.basename(path)}")
         self._append_terminal_log(f"Selected file: {os.path.basename(path)}")
         self._save_config()
+
+    @Slot()
+    def _on_add_to_queue(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Add to Queue",
+            self.last_open_dir,
+            AUDIO_VIDEO_FILTER,
+        )
+        if not paths:
+            return
+        
+        self._handle_incoming_paths(paths)
+
+    @Slot()
+    def _on_import_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Import Folder to Queue",
+            self.last_open_dir,
+        )
+        if folder:
+            self._handle_incoming_paths([folder])
+
+    def _handle_incoming_paths(self, paths: list[str]) -> None:
+        added_count = 0
+        valid_paths = []
+        
+        for p in paths:
+            if os.path.isdir(p):
+                folder_media = self._scan_folder_for_media(p)
+                valid_paths.extend(folder_media)
+            elif os.path.isfile(p):
+                ext = os.path.splitext(p)[1].lower()
+                if ext in ALLOWED_MEDIA_EXTS:
+                    valid_paths.append(p)
+        
+        for path in valid_paths:
+            if self.batch_queue_model.add_item(path):
+                added_count += 1
+        
+        if added_count > 0:
+            self.last_open_dir = os.path.dirname(valid_paths[0]) or self.last_open_dir
+            self._save_config()
+        
+        self._update_queue_summary()
+
+    def _scan_folder_for_media(self, folder_path: str) -> list[str]:
+        """Scans a folder (non-recursively) for supported media files."""
+        results = []
+        try:
+            for entry in os.scandir(folder_path):
+                if entry.is_file():
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if ext in ALLOWED_MEDIA_EXTS:
+                        results.append(entry.path)
+        except Exception as exc:
+            LOGGER.warning("Failed to scan folder: %s reason=%s", folder_path, exc)
+        
+        return sorted(results)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        paths = []
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                paths.append(url.toLocalFile())
+        
+        if paths:
+            self._handle_incoming_paths(paths)
+            event.acceptProposedAction()
+
+    @Slot()
+    def _on_remove_from_queue(self) -> None:
+        selection = self.batch_queue_view.selectionModel()
+        if not selection or not selection.hasSelection():
+            return
+        
+        # Remove from bottom to top to preserve indices
+        rows = sorted([idx.row() for idx in selection.selectedRows()], reverse=True)
+        for row in rows:
+            self.batch_queue_model.remove_item(row)
+        
+        self._update_queue_summary()
+
+    @Slot()
+    def _on_clear_queue(self) -> None:
+        if self.batch_queue_model.rowCount() == 0:
+            return
+        
+        self.batch_queue_model.clear()
+        self._update_queue_summary()
+
+    def _update_queue_summary(self) -> None:
+        count = self.batch_queue_model.rowCount()
+        if count == 0:
+            self.queue_status_summary.setText("Queue: Empty")
+        else:
+            completed = sum(1 for i in range(count) if self.batch_queue_model.get_item(i).status == "completed")
+            failed = sum(1 for i in range(count) if self.batch_queue_model.get_item(i).status == "failed")
+            self.queue_status_summary.setText(f"Queue: {count} item(s) ({completed} done, {failed} failed)")
+
+    @Slot()
+    def _on_start_batch(self) -> None:
+        if self._batch_active:
+            return
+        
+        index = self.batch_queue_model.get_next_queued_index()
+        if index == -1:
+            QMessageBox.information(self, "Batch", "No queued items found.")
+            return
+
+        self._batch_active = True
+        self.queue_overall_progress.show()
+        self._process_next_batch_item()
+
+    @Slot()
+    def _on_clear_completed(self) -> None:
+        self.batch_queue_model.clear_completed()
+        self._update_queue_summary()
+
+    def _process_next_batch_item(self) -> None:
+        if not self._batch_active:
+            return
+        
+        index = self.batch_queue_model.get_next_queued_index()
+        if index == -1:
+            self._batch_active = False
+            self.queue_overall_progress.hide()
+            self.status_label.setText("Batch processing complete.")
+            self._update_queue_summary()
+            self._update_service_visibility()
+            return
+        
+        self._current_batch_index = index
+        item = self.batch_queue_model.get_item(index)
+        self.batch_queue_model.update_item_status(index, "processing")
+        
+        # Update overall progress
+        count = self.batch_queue_model.rowCount()
+        done = sum(1 for i in range(count) if self.batch_queue_model.get_item(i).status in {"completed", "failed", "canceled", "skipped"})
+        self.queue_overall_progress.setValue(int((done / count) * 100))
+        self.queue_overall_progress.setFormat(f"Batch: {done}/{count}")
+        
+        self._update_queue_summary()
+        
+        # Re-use existing transcription logic
+        # We need to temporarily set self.media_path so start_transcription uses it
+        original_media_path = self.media_path
+        self.media_path = item.path
+        
+        try:
+            # We call start_transcription directly. 
+            # Note: start_transcription will call _launch_transcription_worker
+            self.start_transcription()
+        finally:
+            # Restore media path so UI doesn't look weird if user clicked away
+            # but actually start_transcription updates self.path_label too.
+            pass
 
     @Slot()
     def on_browse(self) -> None:
@@ -2420,6 +2717,14 @@ class MainWindow(QMainWindow):
             return
         if self.worker is not None:
             self.worker.request_cancel()
+        elif self._batch_active:
+            self._batch_active = False
+            self.queue_overall_progress.hide()
+            self.status_label.setText("Batch cancelled.")
+            self._update_queue_summary()
+            self._update_service_visibility()
+            return
+
         self.status_label.setText("Cancelling... waiting for current stage to yield.")
         self._append_terminal_log("Cancellation requested.")
         self.cancel_btn.setEnabled(False)
@@ -2533,6 +2838,22 @@ class MainWindow(QMainWindow):
             done = "Live transcription complete." if not cancelled else "Live transcription cancelled."
             self.status_label.setText(done)
             self._append_terminal_log(done)
+
+        # Batch handling
+        if self._batch_active and self._current_batch_index != -1:
+            status = "canceled" if cancelled else "completed"
+            self.batch_queue_model.update_item_status(self._current_batch_index, status)
+            self._current_batch_index = -1
+            # Schedule next item processing
+            QTimer.singleShot(500, self._process_next_batch_item)
+            if cancelled:
+                # If current item was cancelled, we stop the whole batch for safety
+                self._batch_active = False
+                self.queue_overall_progress.hide()
+                self.status_label.setText("Batch cancelled.")
+                self._update_queue_summary()
+                return
+
         if transcript or visual_report:
             self.save_btn.setEnabled(True)
             self.copy_btn.setEnabled(True)
@@ -2562,6 +2883,14 @@ class MainWindow(QMainWindow):
         self.transcription_time_label.setText("Transcription time: --")
         self.diar_time_label.setText("Diarization time: --")
         self.visual_time_label.setText("Visual analysis time: --")
+        
+        # Batch handling
+        if self._batch_active and self._current_batch_index != -1:
+            self.batch_queue_model.update_item_status(self._current_batch_index, "failed", error=error_msg)
+            self._current_batch_index = -1
+            # Continue with next item even after failure
+            QTimer.singleShot(500, self._process_next_batch_item)
+
         if self._live_session is not None and self._live_finalizing:
             try:
                 self._live_session.finalize_failed(error_msg)

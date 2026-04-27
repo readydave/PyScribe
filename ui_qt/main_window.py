@@ -60,7 +60,7 @@ from services import (
     default_live_output_dir,
     detect_runtime,
     detect_language,
-    get_available_diarization_backends,
+    get_diarization_backend_availability,
     get_backend_label,
     get_enabled_llm_profiles,
     get_hf_token,
@@ -519,8 +519,8 @@ class DiarBackendProbeWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            backends = get_available_diarization_backends(include_off=False) or ["accurate"]
-            self.finished.emit(list(backends), "")
+            availability = get_diarization_backend_availability(include_off=False)
+            self.finished.emit(dict(availability), "")
         except Exception as exc:
             self.finished.emit([], str(exc))
 
@@ -1525,7 +1525,14 @@ class MainWindow(QMainWindow):
             return
         self.setWindowTitle(self._window_title_base)
 
-    def _populate_diar_backend_combo(self, backends: list[str], *, preferred: str | None = None) -> None:
+    def _populate_diar_backend_combo(
+        self,
+        backends: list[str],
+        *,
+        preferred: str | None = None,
+        disabled_reasons: dict[str, str] | None = None,
+    ) -> None:
+        disabled_reasons = disabled_reasons or {}
         unique: list[str] = []
         for key in backends:
             backend = str(key or "").strip().lower()
@@ -1538,11 +1545,20 @@ class MainWindow(QMainWindow):
         self.diar_backend_combo.clear()
         for key in unique:
             self.diar_backend_combo.addItem(get_backend_label(key), key)
+            reason = disabled_reasons.get(key)
+            if reason:
+                idx = self.diar_backend_combo.count() - 1
+                item = self.diar_backend_combo.model().item(idx)
+                if item is not None:
+                    item.setEnabled(False)
+                    item.setToolTip(reason)
         target = str(preferred or self.config.diar_backend or "").strip().lower()
-        if target in unique:
+        enabled = [key for key in unique if key not in disabled_reasons]
+        if target in enabled:
             self.diar_backend_combo.setCurrentIndex(unique.index(target))
             return
-        self.diar_backend_combo.setCurrentIndex(0)
+        fallback = enabled[0] if enabled else unique[0]
+        self.diar_backend_combo.setCurrentIndex(unique.index(fallback))
 
     def _diar_probe_running(self) -> bool:
         return bool(self._diar_probe_thread and self._diar_probe_thread.isRunning())
@@ -1568,10 +1584,28 @@ class MainWindow(QMainWindow):
 
     @Slot(object, str)
     def _on_diar_backend_probe_finished(self, backends: object, error_text: str) -> None:
-        backend_list = [str(item).strip().lower() for item in (backends if isinstance(backends, list) else [])]
+        disabled_reasons: dict[str, str] = {}
+        if isinstance(backends, dict):
+            backend_list = []
+            for key, raw_status in backends.items():
+                backend = str(key or "").strip().lower()
+                if not backend:
+                    continue
+                available = True
+                reason = None
+                if isinstance(raw_status, tuple):
+                    available = bool(raw_status[0]) if raw_status else False
+                    reason = str(raw_status[1] or "") if len(raw_status) > 1 else ""
+                else:
+                    available = bool(raw_status)
+                backend_list.append(backend)
+                if not available:
+                    disabled_reasons[backend] = reason or "Backend unavailable."
+        else:
+            backend_list = [str(item).strip().lower() for item in (backends if isinstance(backends, list) else [])]
         backend_list = [item for item in backend_list if item]
         current = str(self.diar_backend_combo.currentData() or "").strip().lower() or self.config.diar_backend
-        self._populate_diar_backend_combo(backend_list or ["accurate"], preferred=current)
+        self._populate_diar_backend_combo(backend_list or ["accurate"], preferred=current, disabled_reasons=disabled_reasons)
         self._diar_backends_resolved = True
         self._set_window_title_status(None)
         # Avoid clobbering active processing status text while a run is in progress.

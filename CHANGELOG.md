@@ -97,6 +97,7 @@ The format is inspired by Keep a Changelog.
 - Public listener share mode now requires authentication credentials, including localhost share scenarios.
 - Fixed Qt startup/import error for missing `QSplitter` symbol in the refactored transcription layout.
 - Fixed Qt font warning spam (`QFont::setPointSize <= 0`) triggered during dynamic resize in the new GUI layout.
+- Fixed cross-platform file pathing and directory resolution to ensure correct handling between Windows and Linux file systems.
 
 ## [2026-02-04]
 

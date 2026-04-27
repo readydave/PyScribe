@@ -11,8 +11,10 @@ from importlib import import_module
 _EXPORTS = {
     "BASE_MODEL_CHOICES": (".catalog_service", "BASE_MODEL_CHOICES"),
     "get_available_diarization_backends": (".catalog_service", "get_available_diarization_backends"),
+    "get_diarization_backend_availability": (".catalog_service", "get_diarization_backend_availability"),
     "get_backend_label": (".catalog_service", "get_backend_label"),
     "get_model_choices": (".catalog_service", "get_model_choices"),
+    "get_unavailable_diarization_backend_reasons": (".catalog_service", "get_unavailable_diarization_backend_reasons"),
     "AppConfig": (".config_service", "AppConfig"),
     "load_config": (".config_service", "load_config"),
     "save_config": (".config_service", "save_config"),

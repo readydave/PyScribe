@@ -78,6 +78,51 @@ class DiarBackendsCompatibilityTests(unittest.TestCase):
             with patch.dict(sys.modules, {"torch": fake_torch}):
                 self.assertTrue(self.diar_backends._is_sortformer_available())
 
+    def test_sortformer_availability_reports_missing_nemo_asr(self) -> None:
+        def _fake_find_spec(name: str, *args: object, **kwargs: object) -> object | None:
+            del args, kwargs
+            if name == "nemo.collections.asr":
+                return None
+            return object()
+
+        with patch("importlib.util.find_spec", side_effect=_fake_find_spec):
+            status = self.diar_backends._sortformer_availability()
+
+        self.assertFalse(status.available)
+        self.assertIn("NeMo ASR", status.reason or "")
+
+    def test_sortformer_availability_reports_missing_pytorch(self) -> None:
+        def _fake_find_spec(name: str, *args: object, **kwargs: object) -> object | None:
+            del args, kwargs
+            if name == "nemo.collections.asr":
+                return object()
+            if name == "torch":
+                return None
+            return object()
+
+        with patch("importlib.util.find_spec", side_effect=_fake_find_spec):
+            status = self.diar_backends._sortformer_availability()
+
+        self.assertFalse(status.available)
+        self.assertIn("PyTorch", status.reason or "")
+
+    def test_sortformer_availability_reports_cuda_unavailable_when_torch_loaded(self) -> None:
+        fake_torch = types.ModuleType("torch")
+        fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+
+        def _fake_find_spec(name: str, *args: object, **kwargs: object) -> object | None:
+            del args, kwargs
+            if name in {"nemo.collections.asr", "torch"}:
+                return object()
+            return None
+
+        with patch("importlib.util.find_spec", side_effect=_fake_find_spec):
+            with patch.dict(sys.modules, {"torch": fake_torch}):
+                status = self.diar_backends._sortformer_availability()
+
+        self.assertFalse(status.available)
+        self.assertIn("CUDA", status.reason or "")
+
     def test_run_nemo_sortformer_modern_neural_diarizer_path(self) -> None:
         class _Turn:
             def __init__(self, start: float, end: float) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent
@@ -493,15 +493,21 @@ class LLMPostprocessDialog(QDialog):
     def _sync_combo_tooltip(self, combo: QComboBox) -> None:
         combo.setToolTip((combo.currentText() or "").strip())
 
+    @staticmethod
+    def _uses_windows_path_style(path_text: str) -> bool:
+        return "\\" in path_text or (len(path_text) >= 2 and path_text[1] == ":")
+
     def _default_output_save_path(self) -> str:
         template_id = self._selected_template_id() or "template"
         if self._loaded_transcript_path:
-            transcript_path = Path(self._loaded_transcript_path)
+            path_cls = PureWindowsPath if self._uses_windows_path_style(self._loaded_transcript_path) else Path
+            transcript_path = path_cls(self._loaded_transcript_path)
             base_name = f"{transcript_path.stem}_postprocess_{template_id}.md"
             return str(transcript_path.with_name(base_name))
         last_save_dir = str(self._config.last_save_dir or "").strip()
         if last_save_dir:
-            return str(Path(last_save_dir) / f"postprocess_{template_id}.md")
+            path_cls = PureWindowsPath if self._uses_windows_path_style(last_save_dir) else Path
+            return str(path_cls(last_save_dir) / f"postprocess_{template_id}.md")
         return f"postprocess_{template_id}.md"
 
     def _populate_profiles(self, *, default_name: str | None) -> None:

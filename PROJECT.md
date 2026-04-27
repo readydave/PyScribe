@@ -44,6 +44,7 @@ and practical support for GPU-heavy speech/OCR workloads.
 ## Core Workflows
 
 - Desktop transcription: `python main.py qt` starts the Qt UI, users select media/model/options, and shared services perform transcription, diarization, OCR, and output saving.
+- Batch transcription: Qt batch queue supports drag-and-drop or folder selection for multiple media files, processing them sequentially with status tracking and overall progress visualization.
 - Live desktop transcription: Qt live mode records microphone or loopback audio into a recoverable session, shows rolling transcript updates, supports pause/resume, and runs a final cleanup pass on stop. **Session titles** can be provided to automatically name output folders and files.
 - Listener transcription: `python main.py serve --port 7860` starts the Gradio listener. Localhost is the default; LAN/public exposure requires explicit flags and authentication.
 - LLM post-processing: users configure local or LAN LLM profiles, choose prompt templates, add optional text/image context, preview payloads, and process current or saved transcripts.

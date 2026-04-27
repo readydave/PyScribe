@@ -8,6 +8,7 @@ The format is inspired by Keep a Changelog.
 
 ### Added
 
+- Qt batch transcription queue for sequential processing of multiple media files or entire folders. Supports drag-and-drop, status tracking, and overall progress visualization.
 - Qt live transcription session title support. Users can provide an optional title before starting a session to customize the session folder and finalized filename.
 - Qt live transcription mode with microphone/loopback capture, rolling ASR updates, recoverable session folders, and final post-pass cleanup.
 - Automatic detection and configuration of Torch/CUDA library paths on Linux to support bleeding-edge environments (Torch 2.11+).

@@ -215,7 +215,29 @@ def _sortformer_availability() -> BackendAvailability:
         except Exception as exc:
             return BackendAvailability(False, f"Unable to verify PyTorch CUDA availability: {exc}")
 
-    # Avoid importing torch during capability probe.
+    # Avoid importing torch during capability probe, but try to verify CUDA existence
+    # via lightweight environment check if possible.
+    has_cuda = False
+    if sys.platform == "win32":
+        # Check for NVIDIA driver / CUDA DLLs in common paths or via env
+        cuda_path = os.environ.get("CUDA_PATH")
+        if cuda_path and os.path.isdir(cuda_path):
+            has_cuda = True
+        elif os.path.exists(os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "nvrtc64_120_0.dll")):
+            # Common CUDA 12.x DLL on Windows
+            has_cuda = True
+    else:
+        # Linux check
+        if os.path.exists("/proc/driver/nvidia/version") or os.path.exists("/dev/nvidia0"):
+            has_cuda = True
+
+    if not has_cuda:
+        # If we can't find evidence of NVIDIA hardware/drivers, don't claim it's available.
+        return BackendAvailability(
+            False,
+            "No NVIDIA GPU or CUDA drivers detected. NeMo Sortformer requires a CUDA-capable environment.",
+        )
+
     return BackendAvailability(True)
 
 

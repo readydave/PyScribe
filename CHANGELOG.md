@@ -9,17 +9,19 @@ The format is inspired by Keep a Changelog.
 ### Added
 
 - Qt transcription drop zone now supports a full-area mouse click to open the file browser, in addition to the explicit browse button.
-- Application logging now uses timestamped filenames (e.g., `pyscribe_YYYYMMDD_HHMMSS.log`) per session instead of a single growing file.
+- Application logging now consolidates all output for the current session into a single `pyscribe.log` file, with automatic timestamped archiving of previous logs on startup.
 - Automatic log rotation that keeps only the 21 most recent log files to manage disk space.
 
 ### Changed
 
 - Qt speaker identification mode (backend) selection is now saved immediately to the configuration when changed.
 - Qt "Browse Files" button in the drop zone updated with a modern pill-shaped design, explicit minimum height, and improved text visibility for all themes.
+- Improved lightweight CUDA detection on Windows by checking for `nvcuda.dll` and `nvidia-smi` to better support varied driver installations.
 
 ### Fixed
 
 - Fixed a bug where the speaker mode dropdown would stay disabled after the hardware probe finished, requiring a manual toggle of the "Identify Speakers" checkbox to re-enable.
+- Fixed a race condition where the diarization backend selection would be reset to default when the background hardware probe completed.
 - Improved Qt drop zone styling to prevent text clipping on high-DPI displays.
 - Standardized logging directory permissions to ensure secure log storage.
 - Qt live transcription **Rename with Title** support. Users can now apply a session title after a recording is complete to automatically rename the session files.

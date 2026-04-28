@@ -223,13 +223,25 @@ def _sortformer_availability() -> BackendAvailability:
         cuda_path = os.environ.get("CUDA_PATH")
         if cuda_path and os.path.isdir(cuda_path):
             has_cuda = True
-        elif os.path.exists(os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "nvrtc64_120_0.dll")):
-            # Common CUDA 12.x DLL on Windows
-            has_cuda = True
+        else:
+            # nvcuda.dll is the core driver API and is always in System32 on NVIDIA systems.
+            sys32 = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32")
+            if os.path.exists(os.path.join(sys32, "nvcuda.dll")):
+                has_cuda = True
+            elif os.path.exists(os.path.join(sys32, "nvrtc64_120_0.dll")):
+                has_cuda = True
+            else:
+                import shutil
+                if shutil.which("nvidia-smi"):
+                    has_cuda = True
     else:
         # Linux check
         if os.path.exists("/proc/driver/nvidia/version") or os.path.exists("/dev/nvidia0"):
             has_cuda = True
+        else:
+            import shutil
+            if shutil.which("nvidia-smi"):
+                has_cuda = True
 
     if not has_cuda:
         # If we can't find evidence of NVIDIA hardware/drivers, don't claim it's available.

@@ -1725,26 +1725,38 @@ class MainWindow(QMainWindow):
         try:
             self.diar_backend_combo.clear()
             for key in unique:
-                self.diar_backend_combo.addItem(get_backend_label(key), key)
+                label = get_backend_label(key)
                 reason = disabled_reasons.get(key)
+                if reason:
+                    label += " (Needs Install)"
+                
+                self.diar_backend_combo.addItem(label, key)
+                
                 if reason:
                     idx = self.diar_backend_combo.count() - 1
                     item = self.diar_backend_combo.model().item(idx)
                     if item is not None:
                         item.setEnabled(False)
                         item.setToolTip(reason)
+            
             target = str(preferred or self.config.diar_backend or "").strip().lower()
             enabled = [key for key in unique if key not in disabled_reasons]
             LOGGER.info("Resolved target backend: %s (enabled_count=%d)", target, len(enabled))
+            
             if target in enabled:
                 idx = unique.index(target)
-                LOGGER.info("Setting diar_backend_combo to index %d (%s)", idx, target)
                 self.diar_backend_combo.setCurrentIndex(idx)
                 return
+            
+            # If the user specifically wanted something that is now disabled, inform them.
+            if target and target in unique and target in disabled_reasons:
+                reason = disabled_reasons[target]
+                msg = f"{get_backend_label(target)} is unavailable: {reason}"
+                self.status_label.setText(msg)
+                self._append_terminal_log(msg)
+
             fallback = enabled[0] if enabled else unique[0]
-            idx = unique.index(fallback)
-            LOGGER.info("Target %s not enabled; falling back to index %d (%s)", target, idx, fallback)
-            self.diar_backend_combo.setCurrentIndex(idx)
+            self.diar_backend_combo.setCurrentIndex(unique.index(fallback))
         finally:
             self.diar_backend_combo.blockSignals(False)
 
@@ -1796,15 +1808,18 @@ class MainWindow(QMainWindow):
         self._populate_diar_backend_combo(backend_list or ["accurate"], preferred=current, disabled_reasons=disabled_reasons)
         self._diar_backends_resolved = True
         self._set_window_title_status(None)
-        # Avoid clobbering active processing status text while a run is in progress.
+        # Avoid clobbering active processing status text or recent 'Needs Install' warnings.
         if self.transcribe_btn.isEnabled():
             if error_text:
                 LOGGER.warning("Speaker backend probe failed; using fallback backend list. reason=%s", error_text)
                 self.status_label.setText("Speaker backend check failed; using fallback backend list.")
-            elif self._diar_probe_status_before.strip():
-                self.status_label.setText(self._diar_probe_status_before)
-            else:
-                self.status_label.setText("Ready")
+            elif self.status_label.text().startswith("Ready") or "backends" in self.status_label.text().lower():
+                # Only reset if we were in a 'Loading...' or 'Ready' state.
+                # If we just posted a 'Needs Install' warning, keep it visible.
+                if self._diar_probe_status_before.strip():
+                    self.status_label.setText(self._diar_probe_status_before)
+                else:
+                    self.status_label.setText("Ready")
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
 
     @Slot()

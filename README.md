@@ -71,7 +71,6 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Added confirmation before canceling an active Qt live transcription session.
 - Shared listener security/auth logic between `main.py` and `app.py` via `services/listener_security_service.py`.
 - Hardened listener credential handling: `--auth-pass` is rejected to avoid secret leakage in process lists/history.
-- Improved NeMo Sortformer compatibility across modern and legacy API paths, with CUDA-aware availability checks.
 - Throttled live transcript text updates in the transcription pipeline for smoother UI updates during long runs.
 - Added regression tests for listener security helpers and diarization backend compatibility.
 - Refreshed Qt main window with a sidebar + stacked dashboard layout and modernized light/dark QSS styling.
@@ -90,6 +89,8 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Optional OCR runtime:
   - `pytesseract` + OS `tesseract` executable
   - or PaddleOCR runtime dependencies
+- Optional Diarization backends:
+  - `pyannote.audio` (default, included in core)
 
 ## Installation
 

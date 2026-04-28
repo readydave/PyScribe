@@ -61,7 +61,7 @@ _EXPORTS = {
     "get_failure_suggestions": (".llm_connection_service", "get_failure_suggestions"),
     "load_llm_profiles": (".llm_connection_service", "load_llm_profiles"),
     "scan_lan_for_llm_instances": (".llm_connection_service", "scan_lan_for_llm_instances"),
-    "test_connection": (".llm_connection_service", "test_connection"),
+    "run_connection_test": (".llm_connection_service", "run_connection_test"),
     "LLMPostprocessRequest": (".llm_postprocess_service", "LLMPostprocessRequest"),
     "LLMPreparedPayload": (".llm_postprocess_service", "LLMPreparedPayload"),
     "LLMPostprocessResult": (".llm_postprocess_service", "LLMPostprocessResult"),

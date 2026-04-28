@@ -35,7 +35,8 @@ and practical support for GPU-heavy speech/OCR workloads.
 - `app.py` builds the Gradio listener UI. It uses lazy runtime initialization so importing listener code does not immediately load heavyweight ML dependencies.
 - `ui_qt/` contains the PySide6 desktop UI, including the main window, benchmark dialog, LLM connection dialog, and LLM post-process dialog.
 - `services/` contains shared business logic for both frontends. Important services include transcription, live transcription, model/runtime selection, model downloads, config persistence, prompt templates, LLM profiles, LLM post-processing, listener security, logging, and OCR/multimodal helpers.
-- `diarization.py` and `diar_backends.py` contain diarization diagnostics and backend integration, including pyannote and NeMo Sortformer paths.
+- \`diarization.py\` and \`diar_backends.py\` contain diarization diagnostics and backend integration for pyannote.
+
 - `models.py` defines curated speech model tiers, labels, and hardware-aware ranking helpers.
 - `assets/prompts/` contains built-in prompt templates used by LLM post-processing.
 - `docs/` contains user-facing feature documentation and Qt help content.

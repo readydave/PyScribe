@@ -4,16 +4,22 @@
 from __future__ import annotations
 
 import logging
+import sys
+import types
 from typing import Callable
-import torchaudio
+
 import numpy as np
 import torch
+import torchaudio
+
 from services.hf_auth_service import get_hf_token
 from services.runtime_compat import ensure_platform_sys_version_compat
+
 LOGGER = logging.getLogger(__name__)
 ProgressCallback = Callable[[float], None]
 StatusCallback = Callable[[str], None]
 Segment = dict[str, object]
+
 _TORCHAUDIO_SOUNDFILE_PATCHED = False
 
 # Robust monkeypatch for legacy torchaudio backend APIs removed in 2.9+
@@ -31,6 +37,14 @@ if not hasattr(torchaudio, "get_audio_backend"):
     def _noop_get_backend() -> str:
         return "soundfile"
     torchaudio.get_audio_backend = _noop_get_backend  # type: ignore
+
+# Guard against 'No module named torchaudio.backend' in modern torchaudio
+if "torchaudio.backend" not in sys.modules:
+    _dummy_backend = types.ModuleType("torchaudio.backend")
+    # Some older torchaudio-dependent code might look for 'common' or 'utils' inside backend
+    _dummy_backend.common = types.ModuleType("torchaudio.backend.common")  # type: ignore
+    sys.modules["torchaudio.backend"] = _dummy_backend
+    sys.modules["torchaudio.backend.common"] = _dummy_backend.common  # type: ignore
 
 
 def _torch_cuda_snapshot() -> str:
@@ -66,7 +80,7 @@ def _prefer_torchaudio_soundfile_backend() -> str | None:
     # For torchaudio < 2.9, we check available backends.
     # For torchaudio >= 2.9, list_audio_backends is removed.
     available = []
-    if hasattr(torchaudio, "list_audio_backends"):
+    if hasattr(torchaudio, "list_audio_backends") and getattr(torchaudio.list_audio_backends, "__name__", None) != "_noop_list_backends":
         try:
             available = list(torchaudio.list_audio_backends())
         except Exception as exc:

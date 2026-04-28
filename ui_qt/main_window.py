@@ -1720,23 +1720,27 @@ class MainWindow(QMainWindow):
         if not unique:
             unique = ["accurate"]
         self._diar_backends = unique
-        self.diar_backend_combo.clear()
-        for key in unique:
-            self.diar_backend_combo.addItem(get_backend_label(key), key)
-            reason = disabled_reasons.get(key)
-            if reason:
-                idx = self.diar_backend_combo.count() - 1
-                item = self.diar_backend_combo.model().item(idx)
-                if item is not None:
-                    item.setEnabled(False)
-                    item.setToolTip(reason)
-        target = str(preferred or self.config.diar_backend or "").strip().lower()
-        enabled = [key for key in unique if key not in disabled_reasons]
-        if target in enabled:
-            self.diar_backend_combo.setCurrentIndex(unique.index(target))
-            return
-        fallback = enabled[0] if enabled else unique[0]
-        self.diar_backend_combo.setCurrentIndex(unique.index(fallback))
+        self.diar_backend_combo.blockSignals(True)
+        try:
+            self.diar_backend_combo.clear()
+            for key in unique:
+                self.diar_backend_combo.addItem(get_backend_label(key), key)
+                reason = disabled_reasons.get(key)
+                if reason:
+                    idx = self.diar_backend_combo.count() - 1
+                    item = self.diar_backend_combo.model().item(idx)
+                    if item is not None:
+                        item.setEnabled(False)
+                        item.setToolTip(reason)
+            target = str(preferred or self.config.diar_backend or "").strip().lower()
+            enabled = [key for key in unique if key not in disabled_reasons]
+            if target in enabled:
+                self.diar_backend_combo.setCurrentIndex(unique.index(target))
+                return
+            fallback = enabled[0] if enabled else unique[0]
+            self.diar_backend_combo.setCurrentIndex(unique.index(fallback))
+        finally:
+            self.diar_backend_combo.blockSignals(False)
 
     def _diar_probe_running(self) -> bool:
         return bool(self._diar_probe_thread and self._diar_probe_thread.isRunning())

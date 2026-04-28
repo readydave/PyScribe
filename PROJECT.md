@@ -68,6 +68,8 @@ and practical support for GPU-heavy speech/OCR workloads.
 | 2026-02-04 | Keep `SECURITY.md`, `CONTRIBUTING.md`, and user docs in the repo. | Public project guidance belongs with the code. | Security policy and contribution workflow are versioned. |
 | 2026-04-27 | Add `PROJECT.md` and `STACK.md` as committed project context. | Future coding agents need repo-specific scope, commands, and risk notes. | Feature work should start from these files plus README/docs. |
 | 2026-04-27 | Ignore local Codex marker files and local agent control files. | Local tool artifacts should not pollute `git status` or commits. | `.codex`, `.codex/`, `AGENT.md`, and similar local files remain uncommitted by default. |
+| 2026-04-28 | Implement session-based timestamped logging with auto-rotation. | Avoid single large log file; improve session-level debugging; manage disk space automatically. | Logs are now per-launch (latest 21 kept); standard FileHandler used. |
+| 2026-04-28 | Make Qt drop zone clickable and persist diarization mode. | Improve file browsing ergonomics; prevent re-selection annoyance on launch. | Entire drop area triggers file picker; diarization backend saved to config immediately. |
 
 ## Current Priorities
 

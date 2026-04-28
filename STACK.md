@@ -213,7 +213,7 @@ gitleaks detect --source . --redact
 ### Core Services
 
 - `services/config_service.py` - configuration persistence and additive settings
-- `services/logging_service.py` - logging setup
+- `services/logging_service.py` - session-based timestamped logging with automatic rotation (keeps latest 21 logs)
 - `services/model_service.py` - model-related behavior
 - `services/transcription_service.py` - transcription pipeline and transcript updates
 - `services/live_transcription_service.py` - live transcription session coordination

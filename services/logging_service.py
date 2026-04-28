@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-from logging.handlers import RotatingFileHandler
+import time
+from logging import FileHandler
 from pathlib import Path
 
 _CONFIGURED = False
@@ -17,17 +18,21 @@ def configure_logging() -> Path:
     """
     global _CONFIGURED, _LOG_PATH
 
-    configured = _find_writable_log_path()
+    log_dir = _find_log_directory()
     if _CONFIGURED:
-        return _LOG_PATH or configured
+        return _LOG_PATH or (log_dir / "pyscribe.log")
+
+    # Cleanup old logs before starting new one
+    _cleanup_old_logs(log_dir, keep_count=21)
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"pyscribe_{timestamp}.log"
 
     level_name = os.environ.get("PYSCRIBE_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
     root = logging.getLogger()
     root.setLevel(level)
-
-    # Keep handlers idempotent in case modules call configure_logging repeatedly.
     root.handlers.clear()
 
     formatter = logging.Formatter(
@@ -35,7 +40,7 @@ def configure_logging() -> Path:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    file_handler = _make_file_handler(configured)
+    file_handler = FileHandler(log_file, encoding="utf-8")
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
@@ -46,19 +51,20 @@ def configure_logging() -> Path:
         stream_handler.setFormatter(formatter)
         root.addHandler(stream_handler)
 
-    actual_path = Path(file_handler.baseFilename)
-    logging.getLogger(__name__).info("Logging initialized at %s", actual_path)
-    _LOG_PATH = actual_path
+    logging.getLogger(__name__).info("Logging initialized at %s", log_file)
+    _LOG_PATH = log_file
     _CONFIGURED = True
-    return actual_path
+    return log_file
 
 
 def get_log_path() -> Path:
-    """Returns the active log file path (or best-effort default before init)."""
-    return _LOG_PATH or _find_writable_log_path()
+    """Returns the active log file path."""
+    if _LOG_PATH:
+        return _LOG_PATH
+    return _find_log_directory() / "pyscribe.log"
 
 
-def _find_writable_log_path() -> Path:
+def _find_log_directory() -> Path:
     custom = os.environ.get("PYSCRIBE_LOG_DIR")
     candidates = []
     if custom:
@@ -68,33 +74,28 @@ def _find_writable_log_path() -> Path:
         try:
             directory.mkdir(parents=True, exist_ok=True)
             _tighten_directory_permissions(directory)
-            return directory / "pyscribe.log"
+            return directory
         except Exception:
             continue
-    # Last resort: return a path in current dir; handler creation will surface clear errors.
-    return Path("pyscribe.log")
+    return Path(".")
 
 
-def _make_file_handler(primary_path: Path) -> RotatingFileHandler:
-    for path in (primary_path,):
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            _tighten_directory_permissions(path.parent)
-            return RotatingFileHandler(
-                path,
-                maxBytes=2 * 1024 * 1024,
-                backupCount=5,
-                encoding="utf-8",
-            )
-        except Exception:
-            continue
-    # Final fallback: if even this fails, let logging raise a clear error.
-    return RotatingFileHandler(
-        "pyscribe.log",
-        maxBytes=2 * 1024 * 1024,
-        backupCount=5,
-        encoding="utf-8",
-    )
+def _cleanup_old_logs(log_dir: Path, keep_count: int) -> None:
+    """Keep only the N most recent timestamped log files."""
+    try:
+        logs = sorted(
+            log_dir.glob("pyscribe_*.log"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if len(logs) > keep_count:
+            for old_log in logs[keep_count:]:
+                try:
+                    old_log.unlink()
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
 
 def _tighten_directory_permissions(directory: Path) -> None:

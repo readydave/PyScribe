@@ -1619,6 +1619,10 @@ class MainWindow(QMainWindow):
                 padding: 10px 12px;
                 selection-background-color: {accent};
             }}
+            QComboBox::item:disabled {{
+                color: #94a3b8;
+                background: transparent;
+            }}
             QGroupBox {{
                 background: {card_bg};
                 border: 1px solid {border};

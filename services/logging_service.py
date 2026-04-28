@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from logging import FileHandler
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 _CONFIGURED = False
@@ -15,18 +15,36 @@ _LOG_PATH: Path | None = None
 def configure_logging() -> Path:
     """
     Configures app-wide logging once and returns the log file path.
+    All processes in a single session will share the same 'pyscribe.log'.
     """
     global _CONFIGURED, _LOG_PATH
 
     log_dir = _find_log_directory()
+    log_file = log_dir / "pyscribe.log"
+
     if _CONFIGURED:
-        return _LOG_PATH or (log_dir / "pyscribe.log")
+        return _LOG_PATH or log_file
 
-    # Cleanup old logs before starting new one
-    _cleanup_old_logs(log_dir, keep_count=21)
-
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"pyscribe_{timestamp}.log"
+    # Only the primary process rotates the log at the start of a session.
+    # Child processes (e.g. spawned transcription workers) inherit this env var.
+    if os.environ.get("PYSCRIBE_SESSION_STARTED") is None:
+        if log_file.exists():
+            try:
+                mtime = log_file.stat().st_mtime
+                timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(mtime))
+                archive_name = log_dir / f"pyscribe_{timestamp}.log"
+                # Avoid collision if restarted in the same second
+                if archive_name.exists():
+                    timestamp += f"_{os.getpid()}"
+                    archive_name = log_dir / f"pyscribe_{timestamp}.log"
+                log_file.rename(archive_name)
+            except Exception:
+                # If we can't rename (e.g. file locked), we just append.
+                pass
+        
+        # Cleanup old archives
+        _cleanup_old_logs(log_dir, keep_count=21)
+        os.environ["PYSCRIBE_SESSION_STARTED"] = "1"
 
     level_name = os.environ.get("PYSCRIBE_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
@@ -40,7 +58,13 @@ def configure_logging() -> Path:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    file_handler = FileHandler(log_file, encoding="utf-8")
+    # Use RotatingFileHandler to also prevent indefinite growth within a long session.
+    file_handler = RotatingFileHandler(
+        log_file, 
+        maxBytes=10 * 1024 * 1024, 
+        backupCount=5, 
+        encoding="utf-8"
+    )
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)

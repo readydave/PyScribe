@@ -1720,6 +1720,7 @@ class MainWindow(QMainWindow):
         if not unique:
             unique = ["accurate"]
         self._diar_backends = unique
+        LOGGER.info("Populating diar_backend_combo with %s (preferred=%s, disabled=%s)", unique, preferred, disabled_reasons)
         self.diar_backend_combo.blockSignals(True)
         try:
             self.diar_backend_combo.clear()
@@ -1734,11 +1735,16 @@ class MainWindow(QMainWindow):
                         item.setToolTip(reason)
             target = str(preferred or self.config.diar_backend or "").strip().lower()
             enabled = [key for key in unique if key not in disabled_reasons]
+            LOGGER.info("Resolved target backend: %s (enabled_count=%d)", target, len(enabled))
             if target in enabled:
-                self.diar_backend_combo.setCurrentIndex(unique.index(target))
+                idx = unique.index(target)
+                LOGGER.info("Setting diar_backend_combo to index %d (%s)", idx, target)
+                self.diar_backend_combo.setCurrentIndex(idx)
                 return
             fallback = enabled[0] if enabled else unique[0]
-            self.diar_backend_combo.setCurrentIndex(unique.index(fallback))
+            idx = unique.index(fallback)
+            LOGGER.info("Target %s not enabled; falling back to index %d (%s)", target, idx, fallback)
+            self.diar_backend_combo.setCurrentIndex(idx)
         finally:
             self.diar_backend_combo.blockSignals(False)
 
@@ -3030,6 +3036,7 @@ class MainWindow(QMainWindow):
     def _on_diar_backend_changed(self, index: int) -> None:
         del index
         backend = str(self.diar_backend_combo.currentData() or "").strip().lower()
+        LOGGER.info("User changed diar_backend selection to: %s", backend)
         if backend:
             self._save_config(diar_backend=backend)
 

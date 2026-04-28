@@ -16,7 +16,6 @@ The format is inspired by Keep a Changelog.
 
 - Qt speaker identification mode (backend) selection is now saved immediately to the configuration when changed.
 - Qt "Browse Files" button in the drop zone updated with a modern pill-shaped design, explicit minimum height, and improved text visibility for all themes.
-- Improved lightweight CUDA detection on Windows by checking for `nvcuda.dll` and `nvidia-smi` to better support varied driver installations.
 
 ### Fixed
 
@@ -28,13 +27,12 @@ The format is inspired by Keep a Changelog.
 - Qt live transcription session title support. Users can provide an optional title before starting a session to customize the session folder and finalized filename.
 - Qt live transcription mode with microphone/loopback capture, rolling ASR updates, recoverable session folders, and final post-pass cleanup.
 - Automatic detection and configuration of Torch/CUDA library paths on Linux to support bleeding-edge environments (Torch 2.11+).
-- Support for `nemo_toolkit[asr]` version 2.7.3 and optimized Sortformer diarization.
 - Qt live **Pause / Resume** control for temporarily suspending capture without creating a new session folder.
 - `services/live_transcription_service.py` with live session coordination, Qt audio-device filtering, rolling transcript reconciliation, and session metadata handling.
 - `tests/test_live_transcription_service.py` covering live session merge logic, retention behavior, and Granite/live gating.
 - `tests/test_qt_live_mode.py` covering Qt live-mode visibility, loopback gating, pause/resume behavior, stop handoff, and cancel/force-stop reset behavior.
 - Shared listener auth/bind validation service in `services/listener_security_service.py`.
-- `tests/test_listener_and_diar_backends.py` covering listener security helpers and NeMo Sortformer compatibility paths.
+- `tests/test_listener_and_diar_backends.py` covering listener security helpers.
 - `tests/test_diarization.py` covering diarization runtime safeguards (`soundfile` backend preference and CPU pipeline reload after CUDA failure).
 - `tests/test_qt_main_window_worker.py` covering Qt worker force-stop escalation and missing-terminal-event recovery.
 - Prompt template scaffold in `assets/prompts/` with YAML index and built-in templates for meeting summary workflows.
@@ -68,8 +66,6 @@ The format is inspired by Keep a Changelog.
 - Pyannote diarization backends now run in an isolated spawned subprocess so CUDA speaker ID does not share cuDNN runtime state with `faster-whisper` ASR.
 - Diarization now prefers `torchaudio`'s `soundfile` backend for audio loading because the default SoX path can crash on some systems.
 - Diarization CPU retry detection now treats cuDNN mismatch and related GPU runtime failures as retryable for pyannote backends.
-- NeMo Sortformer handling now supports both modern callable diarizer APIs and legacy RTTM-output APIs.
-- Sortformer availability checks now require both NeMo ASR importability and CUDA availability.
 - Streaming transcript text updates are throttled in `services/transcription_service.py` to reduce UI churn while preserving final output.
 - Qt transcript text area behavior in `ui_qt/main_window.py` updated for wrapping, sizing, and scroll behavior.
 - `services/config_service.py` now includes additive LLM/template defaults for upcoming post-processing features.
@@ -112,7 +108,6 @@ The format is inspired by Keep a Changelog.
 - Fixed Qt **Force Stop** so Linux worker cleanup escalates beyond `terminate()` when necessary.
 - Fixed diarization crashes caused by `torchaudio`'s SoX backend during pyannote audio reads.
 - Fixed CUDA speaker-ID failures after `faster-whisper` ASR by isolating pyannote diarization into a fresh subprocess.
-- Prevented startup stalls from eager NeMo/Sortformer availability checks during initial Qt window construction.
 - LLM post-processing now retries once with an extended timeout when the first request times out (helps cold model starts).
 - Public listener share mode now requires authentication credentials, including localhost share scenarios.
 - Fixed Qt startup/import error for missing `QSplitter` symbol in the refactored transcription layout.

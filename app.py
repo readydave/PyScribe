@@ -250,7 +250,7 @@ def test_listener_llm_connection(profile_name: str, model_override: str) -> tupl
     if profile is None:
         return "Connection test: no enabled profile selected.", gr.update()
 
-    result = pyscribe_services.test_connection(profile)
+    result = pyscribe_services.run_connection_test(profile)
     lines: list[str] = [f"Overall: {result.status.upper()}"]
     if result.selected_model:
         lines.append(f"Selected model: {result.selected_model}")

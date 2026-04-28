@@ -48,7 +48,6 @@ def _should_retry_diarization_on_cpu(exc: Exception, *, backend: str, device: st
     if device.lower() != "cuda":
         return False
     if backend not in _PYANNOTE_BACKENDS:
-        # sortformer is CUDA-only; don't auto-switch backend implicitly.
         return False
     message = str(exc).lower()
     cuda_linker_markers = (

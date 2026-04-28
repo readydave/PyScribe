@@ -39,7 +39,6 @@ class TranscriptionServiceTests(unittest.TestCase):
     def test_should_isolate_diarization_backend_for_pyannote_backends(self) -> None:
         self.assertTrue(_should_isolate_diarization_backend("accurate"))
         self.assertTrue(_should_isolate_diarization_backend("fast"))
-        self.assertFalse(_should_isolate_diarization_backend("sortformer"))
         self.assertFalse(_should_isolate_diarization_backend("off"))
 
     def test_can_spawn_isolated_diarization_requires_real_main_file(self) -> None:

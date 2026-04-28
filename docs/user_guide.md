@@ -110,6 +110,8 @@ In live mode:
 ### Diarization Controls
 
 - **Mode**: backend selector for diarization engine.
+  - `Accurate` (pyannote): default high-quality engine.
+  - `Fast` (pyannote): faster variant.
 - **Max Speakers**: optional speaker cap (blank = auto).
 - Pyannote diarization backends run in a separate worker process so GPU speaker ID can stay isolated from CUDA ASR runtime state.
 - If GPU diarization is unavailable, PyScribe retries diarization on CPU before giving up on speaker labels.
@@ -344,10 +346,11 @@ python main.py serve [options]
 
 ## 7) Logging Features
 
-PyScribe uses timestamped log files per session with automatic rotation.
+PyScribe uses a consolidated `pyscribe.log` file for the active session, with automatic timestamped archiving of previous logs on startup.
 
-- **Timestamped Logs**: each application launch creates a new log file named `pyscribe_YYYYMMDD_HHMMSS.log`.
-- **Automatic Rotation**: the system automatically scans the log directory on startup and keeps only the **21 most recent** log files to manage disk space.
+- **Consolidated Logs**: the active session always logs to a single file named `pyscribe.log`.
+- **Session Archiving**: on application startup, the previous `pyscribe.log` is automatically moved to a timestamped file (for example `pyscribe_20260428_130148.log`).
+- **Automatic Rotation**: the system automatically scans the log directory on startup and keeps only the **21 most recent** archived log files to manage disk space.
 
 Log directory priority:
 

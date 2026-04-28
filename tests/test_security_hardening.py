@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from services.hf_auth_service import clear_session_hf_token, get_hf_token, save_hf_token
 from services.llm_connection_service import evaluate_profile_scope_policy, load_llm_profiles
-from services.logging_service import _find_writable_log_path
+from services.logging_service import _find_log_directory
 
 
 class LLMTlsPolicyTests(unittest.TestCase):
@@ -89,9 +89,9 @@ class LoggingHardeningTests(unittest.TestCase):
             "services.logging_service.Path.home",
             return_value=Path(temp_dir),
         ), patch.dict(os.environ, {}, clear=True):
-            log_path = _find_writable_log_path()
+            log_dir = _find_log_directory()
 
-        self.assertEqual(log_path, Path(temp_dir) / ".pyscribe" / "logs" / "pyscribe.log")
+        self.assertEqual(log_dir, Path(temp_dir) / ".pyscribe" / "logs")
 
 
 if __name__ == "__main__":

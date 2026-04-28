@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from services import AppConfig, discover_local_networks, load_llm_profiles, scan_lan_for_llm_instances, test_connection
+from services import AppConfig, discover_local_networks, load_llm_profiles, scan_lan_for_llm_instances, run_connection_test
 
 
 class LLMConnectionsDialog(QDialog):
@@ -476,7 +476,7 @@ class LLMConnectionsDialog(QDialog):
         profile = parsed_profiles[0]
         self.setCursor(Qt.WaitCursor)
         try:
-            result = test_connection(profile)
+            result = run_connection_test(profile)
         finally:
             self.unsetCursor()
         lines: list[str] = []

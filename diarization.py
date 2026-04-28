@@ -16,6 +16,22 @@ StatusCallback = Callable[[str], None]
 Segment = dict[str, object]
 _TORCHAUDIO_SOUNDFILE_PATCHED = False
 
+# Robust monkeypatch for legacy torchaudio backend APIs removed in 2.9+
+if not hasattr(torchaudio, "set_audio_backend"):
+    def _noop_set_backend(backend: str | None) -> None:
+        pass
+    torchaudio.set_audio_backend = _noop_set_backend  # type: ignore
+
+if not hasattr(torchaudio, "list_audio_backends"):
+    def _noop_list_backends() -> list[str]:
+        return ["soundfile", "ffmpeg"]
+    torchaudio.list_audio_backends = _noop_list_backends  # type: ignore
+
+if not hasattr(torchaudio, "get_audio_backend"):
+    def _noop_get_backend() -> str:
+        return "soundfile"
+    torchaudio.get_audio_backend = _noop_get_backend  # type: ignore
+
 
 def _torch_cuda_snapshot() -> str:
     """Returns concise torch/CUDA runtime diagnostics for logs."""
@@ -143,11 +159,6 @@ def run_diarization(
     ensure_platform_sys_version_compat()
     backend_override = _prefer_torchaudio_soundfile_backend()
     Pipeline = _lazy_import_pyannote()
-    # Some torchaudio builds dropped set_audio_backend; provide a no-op to avoid pipeline errors.
-    if not hasattr(torchaudio, "set_audio_backend"):
-        def _noop_backend(name: str | None = None) -> None:
-            return None
-        torchaudio.set_audio_backend = _noop_backend  # type: ignore
     # Numpy 2.x removed np.NaN alias; guard for older code paths in dependencies.
     if not hasattr(np, "NaN"):
         np.NaN = np.nan  # type: ignore

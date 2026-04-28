@@ -222,7 +222,7 @@ def scan_lan_for_llm_instances(
     return discovered
 
 
-def test_connection(profile: LLMConnectionProfile) -> ConnectionTestResult:
+def run_connection_test(profile: LLMConnectionProfile) -> ConnectionTestResult:
     """Run staged diagnostics for an LLM profile and return pass/fail detail."""
     LOGGER.info(
         "llm.test.start provider=%s scope=%s base_url=%s timeout=%.1f",

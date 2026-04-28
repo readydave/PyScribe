@@ -16,7 +16,7 @@ from services.llm_connection_service import (
     get_failure_suggestions,
     load_llm_profiles,
     scan_lan_for_llm_instances,
-    test_connection,
+    run_connection_test,
 )
 
 
@@ -56,7 +56,7 @@ class LLMConnectionServiceTests(unittest.TestCase):
                 }
             ]
         )[0]
-        result = test_connection(profile)
+        result = run_connection_test(profile)
         self.assertEqual(result.status, "fail")
         self.assertEqual(result.failure_code, "policy_blocked_non_local")
 
@@ -84,7 +84,7 @@ class LLMConnectionServiceTests(unittest.TestCase):
             raise AssertionError(f"Unexpected URL: {url}")
 
         with patch("services.llm_connection_service.urlrequest.urlopen", side_effect=_mock_urlopen):
-            result = test_connection(profile)
+            result = run_connection_test(profile)
 
         self.assertEqual(result.status, "pass")
         self.assertEqual(result.selected_model, "llama3")
@@ -106,7 +106,7 @@ class LLMConnectionServiceTests(unittest.TestCase):
             raise HTTPError(request.full_url, 401, "Unauthorized", hdrs=None, fp=BytesIO(b"{}"))
 
         with patch("services.llm_connection_service.urlrequest.urlopen", side_effect=_raise_401):
-            result = test_connection(profile)
+            result = run_connection_test(profile)
 
         self.assertEqual(result.status, "fail")
         self.assertEqual(result.failure_code, "auth_failed")
@@ -129,7 +129,7 @@ class LLMConnectionServiceTests(unittest.TestCase):
             raise AssertionError(f"Unexpected URL: {request.full_url}")
 
         with patch("services.llm_connection_service.urlrequest.urlopen", side_effect=_mock_urlopen):
-            result = test_connection(profile)
+            result = run_connection_test(profile)
 
         self.assertEqual(result.status, "fail")
         self.assertEqual(result.failure_code, "no_models_available")
@@ -187,7 +187,7 @@ class LLMConnectionServiceTests(unittest.TestCase):
                 }
             ]
         )[0]
-        result = test_connection(profile)
+        result = run_connection_test(profile)
         self.assertEqual(result.status, "fail")
         self.assertEqual(result.failure_code, "policy_loopback_with_lan")
 

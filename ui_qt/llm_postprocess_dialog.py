@@ -44,7 +44,7 @@ from services import (
     load_prompt_templates,
     prepare_llm_postprocess_payload,
     run_llm_postprocess,
-    test_connection,
+    run_connection_test,
     update_user_prompt_template,
 )
 
@@ -696,7 +696,7 @@ class LLMPostprocessDialog(QDialog):
         QApplication.processEvents()
         self.setCursor(Qt.WaitCursor)
         try:
-            result = test_connection(profile)
+            result = run_connection_test(profile)
         finally:
             self.unsetCursor()
             self.refresh_btn.setText(refresh_label)

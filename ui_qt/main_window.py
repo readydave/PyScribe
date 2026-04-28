@@ -1695,7 +1695,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _default_diar_backends() -> list[str]:
         # Keep startup fast by deferring expensive capability checks until needed.
-        return ["accurate", "fast", "sortformer"]
+        return ["accurate", "fast"]
 
     def _set_window_title_status(self, status: str | None) -> None:
         if status:
@@ -1725,13 +1725,8 @@ class MainWindow(QMainWindow):
         try:
             self.diar_backend_combo.clear()
             for key in unique:
-                label = get_backend_label(key)
+                self.diar_backend_combo.addItem(get_backend_label(key), key)
                 reason = disabled_reasons.get(key)
-                if reason:
-                    label += " (Needs Install)"
-                
-                self.diar_backend_combo.addItem(label, key)
-                
                 if reason:
                     idx = self.diar_backend_combo.count() - 1
                     item = self.diar_backend_combo.model().item(idx)
@@ -1748,13 +1743,6 @@ class MainWindow(QMainWindow):
                 self.diar_backend_combo.setCurrentIndex(idx)
                 return
             
-            # If the user specifically wanted something that is now disabled, inform them.
-            if target and target in unique and target in disabled_reasons:
-                reason = disabled_reasons[target]
-                msg = f"{get_backend_label(target)} is unavailable: {reason}"
-                self.status_label.setText(msg)
-                self._append_terminal_log(msg)
-
             fallback = enabled[0] if enabled else unique[0]
             self.diar_backend_combo.setCurrentIndex(unique.index(fallback))
         finally:
@@ -1808,18 +1796,15 @@ class MainWindow(QMainWindow):
         self._populate_diar_backend_combo(backend_list or ["accurate"], preferred=current, disabled_reasons=disabled_reasons)
         self._diar_backends_resolved = True
         self._set_window_title_status(None)
-        # Avoid clobbering active processing status text or recent 'Needs Install' warnings.
+        # Avoid clobbering active processing status text.
         if self.transcribe_btn.isEnabled():
             if error_text:
                 LOGGER.warning("Speaker backend probe failed; using fallback backend list. reason=%s", error_text)
                 self.status_label.setText("Speaker backend check failed; using fallback backend list.")
-            elif self.status_label.text().startswith("Ready") or "backends" in self.status_label.text().lower():
-                # Only reset if we were in a 'Loading...' or 'Ready' state.
-                # If we just posted a 'Needs Install' warning, keep it visible.
-                if self._diar_probe_status_before.strip():
-                    self.status_label.setText(self._diar_probe_status_before)
-                else:
-                    self.status_label.setText("Ready")
+            elif self._diar_probe_status_before.strip():
+                self.status_label.setText(self._diar_probe_status_before)
+            else:
+                self.status_label.setText("Ready")
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
 
     @Slot()
@@ -2648,8 +2633,6 @@ class MainWindow(QMainWindow):
             diar_backend_for_run = diar_backend
             if self._diar_probe_running():
                 # Don't block transcription while lazy backend discovery is still running.
-                if diar_backend_for_run == "sortformer":
-                    diar_backend_for_run = "accurate"
                 self.status_label.setText(
                     f"Speaker backend detection still running; continuing with {get_backend_label(diar_backend_for_run)}."
                 )

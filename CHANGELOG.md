@@ -8,7 +8,20 @@ The format is inspired by Keep a Changelog.
 
 ### Added
 
-- Qt batch transcription queue for sequential processing of multiple media files or entire folders. Supports drag-and-drop, status tracking, and overall progress visualization.
+- Qt transcription drop zone now supports a full-area mouse click to open the file browser, in addition to the explicit browse button.
+- Application logging now uses timestamped filenames (e.g., `pyscribe_YYYYMMDD_HHMMSS.log`) per session instead of a single growing file.
+- Automatic log rotation that keeps only the 21 most recent log files to manage disk space.
+
+### Changed
+
+- Qt speaker identification mode (backend) selection is now saved immediately to the configuration when changed.
+- Qt "Browse Files" button in the drop zone updated with a modern pill-shaped design, explicit minimum height, and improved text visibility for all themes.
+
+### Fixed
+
+- Fixed a bug where the speaker mode dropdown would stay disabled after the hardware probe finished, requiring a manual toggle of the "Identify Speakers" checkbox to re-enable.
+- Improved Qt drop zone styling to prevent text clipping on high-DPI displays.
+- Standardized logging directory permissions to ensure secure log storage.
 - Qt live transcription **Rename with Title** support. Users can now apply a session title after a recording is complete to automatically rename the session files.
 - Qt live transcription session title support. Users can provide an optional title before starting a session to customize the session folder and finalized filename.
 - Qt live transcription mode with microphone/loopback capture, rolling ASR updates, recoverable session folders, and final post-pass cleanup.

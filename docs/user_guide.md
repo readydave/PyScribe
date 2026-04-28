@@ -45,6 +45,7 @@ If you run `python main.py` with no mode, you get an interactive launcher menu.
 ### File Selection
 
 - **Browse Files** (inside drop zone): open file picker for media.
+- **Clickable Drop Zone**: clicking anywhere within the dashed drop area will also open the file browser.
 - **Drag-and-drop zone**: drop a media file directly.
 - **Open Folder**: open selected file directory (or last-used folder if no file selected).
 
@@ -343,9 +344,12 @@ python main.py serve [options]
 
 ## 7) Logging Features
 
-PyScribe configures rotating logs with safe writable fallbacks.
+PyScribe uses timestamped log files per session with automatic rotation.
 
-Log path priority:
+- **Timestamped Logs**: each application launch creates a new log file named `pyscribe_YYYYMMDD_HHMMSS.log`.
+- **Automatic Rotation**: the system automatically scans the log directory on startup and keeps only the **21 most recent** log files to manage disk space.
+
+Log directory priority:
 
 1. `PYSCRIBE_LOG_DIR/pyscribe.log` (if set)
 2. `~/.pyscribe/logs/pyscribe.log`

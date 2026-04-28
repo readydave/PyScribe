@@ -244,6 +244,11 @@ class DropLabel(QFrame):
             self.file_dropped.emit(path)
         event.acceptProposedAction()
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.browse_requested.emit()
+        super().mousePressEvent(event)
+
 
 def _transcription_process_entry(
     media_path: str,
@@ -922,6 +927,7 @@ class MainWindow(QMainWindow):
         diar_grid.addWidget(QLabel("Mode"), 0, 0)
         self.diar_backend_combo = QComboBox()
         self._populate_diar_backend_combo(self._diar_backends, preferred=self.config.diar_backend)
+        self.diar_backend_combo.currentIndexChanged.connect(self._on_diar_backend_changed)
         diar_grid.addWidget(self.diar_backend_combo, 0, 1)
         diar_grid.addWidget(QLabel("Max Speakers"), 1, 0)
         self.max_speakers_input = QLineEdit()
@@ -1550,7 +1556,23 @@ class MainWindow(QMainWindow):
                 border-color: {accent_hover};
                 background: {card_bg};
             }}
+            #dropBrowseButton {{
+                background: {accent};
+                color: white;
+                padding: 2px 24px;
+                font-weight: 700;
+                font-size: 11pt;
+                min-width: 180px;
+                min-height: 44px;
+                border-radius: 22px;
+                outline: none;
+                border: none;
+            }}
+            #dropBrowseButton:hover {{
+                background: {accent_hover};
+            }}
             #dropTitle {{
+
                 color: {accent};
                 font-weight: 700;
                 background: transparent;
@@ -2996,6 +3018,13 @@ class MainWindow(QMainWindow):
             return
         self.diar_checkbox.setText("Speaker Identification is On" if enabled else "Speaker Identification is Off")
 
+    @Slot(int)
+    def _on_diar_backend_changed(self, index: int) -> None:
+        del index
+        backend = str(self.diar_backend_combo.currentData() or "").strip().lower()
+        if backend:
+            self._save_config(diar_backend=backend)
+
     def _selected_model_name(self) -> str:
         return normalize_model_name(self.model_combo.currentText().strip())
 
@@ -3080,7 +3109,9 @@ class MainWindow(QMainWindow):
             self.visual_interval_input.setEnabled(False)
         else:
             diar_controls_enabled = run_diarization and diarization_supported
-            self.diar_backend_combo.setEnabled(diar_controls_enabled and not self._diar_probe_running() and not self._live_capture_active)
+            # Allow interaction if resolved, even if the probe thread is still technically quitting.
+            probe_active = self._diar_probe_running() and not self._diar_backends_resolved
+            self.diar_backend_combo.setEnabled(diar_controls_enabled and not probe_active and not self._live_capture_active)
             self.max_speakers_input.setEnabled(diar_controls_enabled and not self._live_capture_active)
             self.visual_profile_combo.setEnabled(not live_mode and not self._is_transcription_running())
             self.visual_backend_combo.setEnabled(not live_mode and not self._is_transcription_running())

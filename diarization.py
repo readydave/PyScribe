@@ -43,9 +43,23 @@ if "torchaudio.backend" not in sys.modules:
     _dummy_backend = types.ModuleType("torchaudio.backend")
     # Some older torchaudio-dependent code might look for 'common' or 'utils' inside backend
     _dummy_backend_common = types.ModuleType("torchaudio.backend.common")
-    # Modern torchaudio has AudioMetaData in the root or elsewhere; legacy looked here.
+    
+    # Modern torchaudio (e.g. 2.11+) may have removed AudioMetaData entirely from public API.
+    # Provide the expected dataclass structure as a stub.
+    from dataclasses import dataclass
+    
+    @dataclass(frozen=True)
+    class AudioMetaData:
+        sample_rate: int
+        num_frames: int
+        num_channels: int
+        bits_per_sample: int
+        encoding: str
+
     if hasattr(torchaudio, "AudioMetaData"):
         _dummy_backend_common.AudioMetaData = torchaudio.AudioMetaData  # type: ignore
+    else:
+        _dummy_backend_common.AudioMetaData = AudioMetaData  # type: ignore
     
     _dummy_backend.common = _dummy_backend_common  # type: ignore
     sys.modules["torchaudio.backend"] = _dummy_backend

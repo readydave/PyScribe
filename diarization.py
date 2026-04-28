@@ -42,9 +42,14 @@ if not hasattr(torchaudio, "get_audio_backend"):
 if "torchaudio.backend" not in sys.modules:
     _dummy_backend = types.ModuleType("torchaudio.backend")
     # Some older torchaudio-dependent code might look for 'common' or 'utils' inside backend
-    _dummy_backend.common = types.ModuleType("torchaudio.backend.common")  # type: ignore
+    _dummy_backend_common = types.ModuleType("torchaudio.backend.common")
+    # Modern torchaudio has AudioMetaData in the root or elsewhere; legacy looked here.
+    if hasattr(torchaudio, "AudioMetaData"):
+        _dummy_backend_common.AudioMetaData = torchaudio.AudioMetaData  # type: ignore
+    
+    _dummy_backend.common = _dummy_backend_common  # type: ignore
     sys.modules["torchaudio.backend"] = _dummy_backend
-    sys.modules["torchaudio.backend.common"] = _dummy_backend.common  # type: ignore
+    sys.modules["torchaudio.backend.common"] = _dummy_backend_common
 
 
 def _torch_cuda_snapshot() -> str:

@@ -64,6 +64,8 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 - Isolated pyannote diarization into a separate spawned subprocess so GPU speaker ID can run cleanly after CUDA ASR models.
 - Forced pyannote audio reads to prefer `torchaudio`'s `soundfile` backend to avoid SoX loader crashes on some systems.
+- Added Torchaudio 2.9+ / 2.11 compatibility shims for pyannote audio metadata/loading, including `soundfile` fallbacks when `torchaudio.info` or TorchCodec-backed loading is unavailable.
+- Fixed empty diarization results being formatted as `[S?]`; PyScribe now keeps the plain transcript when speaker segments are unavailable.
 - Improved Qt transcription worker recovery so unexpected child exits surface a real failure instead of leaving the UI stuck.
 - Hardened Qt **Force Stop** to escalate from terminate to kill when needed.
 - Added Qt live transcription mode with rolling ASR, autosaved capture sessions, microphone/loopback selection, and final post-pass cleanup.
@@ -171,7 +173,7 @@ Note: Interactive LAN mode no longer uses a default password. Set
 
 ## Feature Notes
 
-- **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. If diarization still fails, transcription completes without speaker labels.
+- **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. Modern Torchaudio compatibility shims provide `soundfile` fallbacks for metadata/loading APIs removed or changed in Torchaudio 2.9+ / 2.11. If diarization fails or produces no speaker segments, transcription completes without speaker labels instead of emitting `[S?]` lines.
 - **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable `capture.wav` while showing rolling transcript text, supports **Pause / Resume** within the same session, and runs a final file-based cleanup pass when you press **Stop**. Cancel asks for confirmation and preserves the session folder/audio when accepted. Speaker identification, when enabled, runs only in that final pass. Granite remains file-only.
 - **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and OCR backend selection.
 - **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`.

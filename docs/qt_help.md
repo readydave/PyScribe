@@ -43,6 +43,7 @@
   - Choose backend mode and optional max speakers (blank = auto).
   - Pyannote diarization runs in a separate worker process so GPU speaker ID is isolated from CUDA ASR runtime state.
   - If CUDA diarization is unavailable, PyScribe retries diarization on CPU before dropping speaker labels.
+  - If diarization produces no speaker segments, PyScribe keeps the plain transcript instead of writing `[S?]` labels for every line.
   - In live mode, diarization runs only after **Stop** during the final post-pass on the saved capture.
 - **Analyze visuals (slides/chat OCR, beta)**:
   - Optional video-frame OCR to capture on-screen text.
@@ -179,6 +180,7 @@ Before transcription, PyScribe may detect language and prompt:
 - **GPU issues**
   - Pyannote diarization runs in a separate process to avoid CUDA runtime conflicts with `faster-whisper`.
   - If GPU diarization still cannot start, PyScribe retries speaker ID on CPU automatically.
+  - Modern Torchaudio metadata/loading compatibility is handled with `soundfile` fallbacks.
   - Retry with a smaller model or disable diarization if GPU memory is tight.
 - **Visual analysis unavailable**
   - Install OCR runtime (`pytesseract` + OS package `tesseract-ocr`), or configure another backend.

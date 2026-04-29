@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import types
 from typing import Callable
@@ -21,6 +22,24 @@ StatusCallback = Callable[[str], None]
 Segment = dict[str, object]
 
 _TORCHAUDIO_SOUNDFILE_PATCHED = False
+
+# PyTorch 2.6+ changed default of torch.load to weights_only=True.
+# We must allowlist classes used by pyannote/speechbrain pipelines.
+if hasattr(torch.serialization, "add_safe_globals"):
+    try:
+        # Basic torch globals
+        _trusted = [torch.torch_version.TorchVersion]
+        # Add numpy globals if available
+        if hasattr(np, "dtype"):
+            _trusted.append(np.dtype)
+        try:
+            import numpy.core.multiarray
+            _trusted.append(numpy.core.multiarray.scalar)
+        except (ImportError, AttributeError):
+            pass
+        torch.serialization.add_safe_globals(_trusted)
+    except Exception as exc:
+        LOGGER.warning("Failed to update PyTorch safe globals: %s", exc)
 
 # Robust monkeypatch for legacy torchaudio backend APIs removed in 2.9+
 if not hasattr(torchaudio, "set_audio_backend"):
@@ -83,6 +102,47 @@ def _torch_cuda_snapshot() -> str:
     return " | ".join(parts)
 
 
+def _soundfile_info(uri: str | os.PathLike, *args, **kwargs):
+    import soundfile as sf
+
+    info = sf.info(uri)
+    metadata_cls = getattr(torchaudio, "AudioMetaData", None)
+    if metadata_cls is None:
+        metadata_cls = sys.modules["torchaudio.backend.common"].AudioMetaData
+    return metadata_cls(
+        sample_rate=int(info.samplerate),
+        num_frames=int(info.frames),
+        num_channels=int(info.channels),
+        bits_per_sample=0,
+        encoding=str(info.subtype or info.format or "UNKNOWN"),
+    )
+
+
+def _direct_soundfile_load(
+    uri: str | os.PathLike,
+    frame_offset: int = 0,
+    num_frames: int = -1,
+    normalize: bool = True,
+    channels_first: bool = True,
+    format: str | None = None,
+    buffer_size: int = 4096,
+    backend: str | None = None,
+) -> tuple[torch.Tensor, int]:
+    import soundfile as sf
+
+    start = frame_offset if frame_offset > 0 else 0
+    stop = (start + num_frames) if num_frames > 0 else None
+    data, samplerate = sf.read(uri, start=start, stop=stop, dtype="float32")
+    tensor = torch.from_numpy(data)
+
+    if tensor.ndim == 1:
+        tensor = tensor.unsqueeze(0)
+    elif channels_first:
+        tensor = tensor.transpose(0, 1)
+
+    return tensor, int(samplerate)
+
+
 def _prefer_torchaudio_soundfile_backend() -> str | None:
     """
     Prefer torchaudio's soundfile backend for pyannote IO.
@@ -115,8 +175,6 @@ def _prefer_torchaudio_soundfile_backend() -> str | None:
         LOGGER.info("TorchAudio soundfile backend unavailable for diarization. available=%s", available)
         return None
 
-    # Some experimental torchaudio versions (e.g. 2.11.0) might lack 'info' attribute
-    # but still have 'load'.
     original_info = getattr(torchaudio, "info", None)
     original_load = getattr(torchaudio, "load", None)
 
@@ -131,10 +189,21 @@ def _prefer_torchaudio_soundfile_backend() -> str | None:
         setattr(_wrapped, "__pyscribe_soundfile_default__", True)
         return _wrapped
 
-    if original_info and not getattr(original_info, "__pyscribe_soundfile_default__", False):
+    if original_info is None:
+        torchaudio.info = _soundfile_info  # type: ignore[attr-defined]
+    elif not getattr(original_info, "__pyscribe_soundfile_default__", False):
         torchaudio.info = _wrap_with_soundfile_default(original_info)
+
     if original_load and not getattr(original_load, "__pyscribe_soundfile_default__", False):
         torchaudio.load = _wrap_with_soundfile_default(original_load)
+
+    if hasattr(torchaudio, "load_with_torchcodec") and not getattr(
+        torchaudio.load_with_torchcodec,
+        "__pyscribe_soundfile_direct__",
+        False,
+    ):
+        setattr(_direct_soundfile_load, "__pyscribe_soundfile_direct__", True)
+        torchaudio.load_with_torchcodec = _direct_soundfile_load  # type: ignore[attr-defined]
 
     _TORCHAUDIO_SOUNDFILE_PATCHED = True
     LOGGER.info(
@@ -160,22 +229,35 @@ def _load_pyannote_pipeline(Pipeline: object, token: str | None, requested_devic
         bool(token),
         requested_device,
     )
+
+    # PyTorch 2.6+ defaults to weights_only=True, which breaks pyannote's complex pipeline load.
+    # We temporarily monkeypatch torch.load to be permissive strictly during this trusted load.
+    original_load = torch.load
+    def permissive_load(*args, **kwargs):
+        if "weights_only" not in kwargs:
+            kwargs["weights_only"] = False
+        return original_load(*args, **kwargs)
+
+    torch.load = permissive_load
     try:
-        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
-        return pipeline, "3.1"
-    except Exception as e1:
-        LOGGER.warning("Failed to load pyannote pipeline 3.1; trying 3.0. reason=%s", e1, exc_info=True)
         try:
-            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.0", use_auth_token=token)
-            return pipeline, "3.0"
-        except Exception as e2:
-            LOGGER.error(
-                "Failed to load pyannote pipeline versions 3.1 and 3.0 requested_device=%s torch_diag=%s",
-                requested_device,
-                _torch_cuda_snapshot(),
-                exc_info=True,
-            )
-            raise RuntimeError(f"Failed to load pyannote pipeline (3.1 then 3.0): {e2}") from e2
+            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
+            return pipeline, "3.1"
+        except Exception as e1:
+            LOGGER.warning("Failed to load pyannote pipeline 3.1; trying 3.0. reason=%s", e1, exc_info=True)
+            try:
+                pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.0", use_auth_token=token)
+                return pipeline, "3.0"
+            except Exception as e2:
+                LOGGER.error(
+                    "Failed to load pyannote pipeline versions 3.1 and 3.0 requested_device=%s torch_diag=%s",
+                    requested_device,
+                    _torch_cuda_snapshot(),
+                    exc_info=True,
+                )
+                raise RuntimeError(f"Failed to load pyannote pipeline (3.1 then 3.0): {e2}") from e2
+    finally:
+        torch.load = original_load
 
 
 def run_diarization(
@@ -261,11 +343,13 @@ def run_diarization(
             exc_info=True,
         )
         raise
+
     if progress_cb:
         try:
             progress_cb(95)
         except Exception:
             pass
+
     segments: list[Segment] = []
     speaker_map: dict[object, str] = {}
     speaker_idx = 1

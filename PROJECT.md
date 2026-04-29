@@ -71,6 +71,7 @@ and practical support for GPU-heavy speech/OCR workloads.
 | 2026-04-27 | Ignore local Codex marker files and local agent control files. | Local tool artifacts should not pollute `git status` or commits. | `.codex`, `.codex/`, `AGENT.md`, and similar local files remain uncommitted by default. |
 | 2026-04-28 | Implement session-based timestamped logging with auto-rotation. | Avoid single large log file; improve session-level debugging; manage disk space automatically. | Logs are now per-launch (latest 21 kept); standard FileHandler used. |
 | 2026-04-28 | Make Qt drop zone clickable and persist diarization mode. | Improve file browsing ergonomics; prevent re-selection annoyance on launch. | Entire drop area triggers file picker; diarization backend saved to config immediately. |
+| 2026-04-29 | Treat empty diarization output as unavailable speaker labels. | Empty pyannote results do not provide attribution and should not be formatted as `[S?]`. | Transcripts stay plain when no speaker segments are produced; real pyannote failures still flow through retry/fallback handling. |
 
 ## Current Priorities
 
@@ -102,7 +103,7 @@ Private or short-term working items belong in local `TODO.md`.
 - Listener security: `services/listener_security_service.py`, `main.py`, and `scripts/run_listener.sh`.
 - Secret handling: Hugging Face tokens, listener passwords, LLM API keys, environment-variable references, and logs.
 - Long-running worker control: Qt worker cancellation, force-stop, multiprocessing, and subprocess cleanup.
-- CUDA/OCR runtime setup: `services/runtime_env_service.py`, pyannote subprocess isolation, PaddleOCR/Tesseract paths, and Linux loader environment changes.
+- CUDA/OCR runtime setup: `services/runtime_env_service.py`, pyannote subprocess isolation, Torchaudio/`soundfile` compatibility shims, PaddleOCR/Tesseract paths, and Linux loader environment changes.
 - File path handling: uploaded media, temporary files, saved transcripts, live capture folders, and user prompt templates.
 - Config compatibility: `services/config_service.py` should preserve older config files and unknown additive behavior where practical.
 - LLM network policy: local vs LAN profile scope, CIDR restrictions, TLS verification behavior, and concurrent local workload checks.

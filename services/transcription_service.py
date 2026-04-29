@@ -522,19 +522,31 @@ def transcribe_prepared_audio(
                     )
                     raise
 
-            if on_status:
-                on_status("Assigning speakers to transcript...")
-            if on_diar_progress:
-                on_diar_progress(65)
-
-            from diarization import assign_speakers
-
-            final_segments = assign_speakers(all_segments_struct, diar_segments)
-            transcript = _format_speaker_transcript(final_segments)
-
-            if on_diar_progress:
-                on_diar_progress(100)
             diarization_seconds = time.perf_counter() - diarization_started
+            if not diar_segments:
+                LOGGER.warning(
+                    "Diarization completed without speaker segments audio_seconds=%.2f diar_seconds=%.2f backend=%s",
+                    duration,
+                    diarization_seconds,
+                    diar_backend,
+                )
+                if on_status:
+                    on_status("Diarization produced no speaker segments; continuing without speaker labels.")
+                if on_diar_progress:
+                    on_diar_progress(0)
+            else:
+                if on_status:
+                    on_status("Assigning speakers to transcript...")
+                if on_diar_progress:
+                    on_diar_progress(65)
+
+                from diarization import assign_speakers
+
+                final_segments = assign_speakers(all_segments_struct, diar_segments)
+                transcript = _format_speaker_transcript(final_segments)
+
+                if on_diar_progress:
+                    on_diar_progress(100)
         except InterruptedError:
             diarization_seconds = time.perf_counter() - diarization_started
             LOGGER.info(

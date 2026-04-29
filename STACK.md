@@ -261,7 +261,8 @@ gitleaks detect --source . --redact
 - Session-only token preference where applicable.
 - Environment-variable references for persistent secrets.
 - Spawned subprocess isolation for pyannote diarization.
-- Final transcription completion even when optional diarization fails.
+- Final transcription completion even when optional diarization fails or produces no speaker segments.
+- Torchaudio 2.9+ / 2.11 diarization compatibility shims backed by `soundfile`.
 - Existing Qt and listener workflows unless Dave explicitly requests behavior changes.
 
 ### Security-Sensitive Areas

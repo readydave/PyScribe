@@ -9,7 +9,7 @@ PyScribe has two frontends:
 - **Qt Desktop** (`python main.py qt`)
 - **Gradio Listener** (`python main.py serve`)
 
-If you run `python main.py` with no mode, you get an interactive launcher menu.
+If you run `python main.py` with no mode, you get an interactive launcher menu. If you do not choose within 5 seconds, PyScribe starts Desktop (Qt) automatically.
 
 ## 2) Common Concepts
 
@@ -48,6 +48,13 @@ If you run `python main.py` with no mode, you get an interactive launcher menu.
 - **Clickable Drop Zone**: clicking anywhere within the dashed drop area will also open the file browser.
 - **Drag-and-drop zone**: drop a media file directly.
 - **Open Folder**: open selected file directory (or last-used folder if no file selected).
+
+### Batch Queue
+
+- Add individual media files or import a folder to queue multiple files for serialized processing.
+- Files with the same basename can be queued when they come from different folders.
+- Exact duplicate paths are skipped.
+- When duplicate basenames are present, the queue display includes parent-folder context so items remain distinguishable.
 
 ### Input Modes
 
@@ -99,11 +106,11 @@ In live mode:
 - **Device**: pick the matching Qt audio input for the selected source type.
 - **Output Folder**: root folder for live session subfolders.
 - **Keep recorded audio after completion**:
-  - On: keep `capture.wav` after a successful final pass.
-  - Off: remove `capture.wav` after a successful final pass, but keep the session folder, `session.json`, and `final_transcript.txt`.
+  - On: keep the timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` file after a successful final pass.
+  - Off: remove the saved live capture audio after a successful final pass, but keep the session folder, `session.json`, and `final_transcript.txt`.
 - **Timer**: elapsed recorded time for the current session. It freezes while live capture is paused.
 - Each live session folder contains:
-  - `capture.wav`
+  - `YYYY-MM-DD_HHMMSS-live-capture.wav`
   - `session.json`
   - `final_transcript.txt` after a successful stop/finalize cycle
 
@@ -145,7 +152,7 @@ Fallback behavior:
 
 - **Process File**: start run.
 - **Start Live**: begin live microphone or loopback capture.
-- **Pause / Resume** (live mode): temporarily suspend or resume live capture while keeping the same session folder and `capture.wav`.
+- **Pause / Resume** (live mode): temporarily suspend or resume live capture while keeping the same session folder and timestamped live capture file.
 - **Stop** (live mode): stop capture cleanly, finalize the rolling draft, and start the final post-pass on the saved recording.
 - **Cancel**: cooperative cancellation.
   - In live mode, cancel asks for confirmation, then stops capture immediately, skips the final post-pass, and preserves the session folder and recorded audio.

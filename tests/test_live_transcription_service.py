@@ -73,6 +73,14 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             self.assertIn(title, controller.session_dir.name)
             self.assertTrue(controller.session_dir.name.startswith("20"))  # Starts with year
 
+    def test_live_session_capture_path_uses_timestamped_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+            controller = LiveSessionController(self._options(temp_dir))
+            timestamp = controller.session_timestamp
+
+            self.assertEqual(controller.capture_path.name, f"{timestamp}-live-capture.wav")
+            self.assertEqual(controller.metadata.saved_audio_path, str(controller.capture_path))
+
     def test_live_session_update_title_mid_session(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
             controller = LiveSessionController(self._options(temp_dir, session_title="Initial"))
@@ -90,6 +98,7 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
             title = "Final-Title"
             controller = LiveSessionController(self._options(temp_dir, session_title=title))
+            timestamp = controller.session_timestamp
             controller.start()
             controller.append_audio_chunk(np.zeros(LIVE_SAMPLE_RATE, dtype=np.float32), np.zeros(LIVE_SAMPLE_RATE, dtype=np.int16).tobytes())
             controller.close_capture()
@@ -97,10 +106,9 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             self.assertTrue(controller.capture_path.exists())
             controller.finalize_success("transcript text")
             
-            # capture.wav should be gone, replaced by T-Final-Title.wav
+            # The timestamped live capture should be gone, replaced by T-Final-Title.wav.
             self.assertFalse(controller.capture_path.exists())
             
-            timestamp = controller.metadata.session_id.split("_")[0]
             expected_audio = controller.session_dir / f"{timestamp}-{title}.wav"
             expected_txt = controller.session_dir / f"{timestamp}-{title}.txt"
             
@@ -268,6 +276,7 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
 
             self.assertEqual(metadata["status"], "cancelled")
             self.assertTrue(controller.capture_path.exists())
+            self.assertTrue(controller.capture_path.name.endswith("-live-capture.wav"))
             controller.shutdown()
 
 

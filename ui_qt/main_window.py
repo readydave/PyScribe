@@ -135,11 +135,14 @@ class BatchQueueModel(QAbstractListModel):
         return None
 
     def add_item(self, path: str) -> bool:
-        if any(item.path == path for item in self._items):
+        normalized_path = os.path.abspath(path)
+        path_key = os.path.normcase(normalized_path)
+        if any(os.path.normcase(os.path.abspath(item.path)) == path_key for item in self._items):
             return False
         self.beginInsertRows(QModelIndex(), len(self._items), len(self._items))
-        self._items.append(BatchQueueItem(path, os.path.basename(path)))
+        self._items.append(BatchQueueItem(normalized_path, os.path.basename(normalized_path)))
         self.endInsertRows()
+        self._refresh_display_names()
         return True
 
     def remove_item(self, row: int):
@@ -147,6 +150,7 @@ class BatchQueueModel(QAbstractListModel):
             self.beginRemoveRows(QModelIndex(), row, row)
             self._items.pop(row)
             self.endRemoveRows()
+            self._refresh_display_names()
 
     def update_item_status(self, row: int, status: str, progress: float = 0.0, error: str | None = None):
         if 0 <= row < len(self._items):
@@ -160,6 +164,35 @@ class BatchQueueModel(QAbstractListModel):
         self.beginResetModel()
         self._items.clear()
         self.endResetModel()
+
+    def _refresh_display_names(self) -> None:
+        basename_counts: dict[str, int] = {}
+        for item in self._items:
+            basename_key = os.path.normcase(os.path.basename(item.path))
+            basename_counts[basename_key] = basename_counts.get(basename_key, 0) + 1
+
+        changed_rows: list[int] = []
+        seen_display: dict[str, int] = {}
+        for row, item in enumerate(self._items):
+            basename = os.path.basename(item.path)
+            basename_key = os.path.normcase(basename)
+            if basename_counts.get(basename_key, 0) <= 1:
+                display_name = basename
+            else:
+                parent = os.path.basename(os.path.dirname(item.path)) or os.path.dirname(item.path) or "."
+                display_name = f"{parent}/{basename}"
+                display_key = os.path.normcase(display_name)
+                seen_display[display_key] = seen_display.get(display_key, 0) + 1
+                if seen_display[display_key] > 1:
+                    display_name = item.path
+            if item.display_name != display_name:
+                item.display_name = display_name
+                changed_rows.append(row)
+
+        if changed_rows:
+            first = self.index(min(changed_rows), 0)
+            last = self.index(max(changed_rows), 0)
+            self.dataChanged.emit(first, last, [Qt.DisplayRole, Qt.ToolTipRole])
 
     def clear_completed(self):
         # Reverse iterate to safely remove items while maintaining indices

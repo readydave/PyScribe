@@ -13,7 +13,7 @@ class TestBatchQueue(unittest.TestCase):
         self.assertEqual(item.progress, 0.0)
         self.assertIsNone(item.error_message)
 
-    def test_queue_model_add_and_duplicates(self):
+    def test_queue_model_add_and_exact_path_duplicates(self):
         model = BatchQueueModel()
         self.assertEqual(model.rowCount(), 0)
         
@@ -32,6 +32,30 @@ class TestBatchQueue(unittest.TestCase):
         success = model.add_item("/path/to/b.mp3")
         self.assertTrue(success)
         self.assertEqual(model.rowCount(), 2)
+
+    def test_queue_model_allows_same_basename_from_different_folders(self):
+        model = BatchQueueModel()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_dir = os.path.join(tmpdir, "first")
+            second_dir = os.path.join(tmpdir, "second")
+            os.makedirs(first_dir)
+            os.makedirs(second_dir)
+            first = os.path.join(first_dir, "capture.wav")
+            second = os.path.join(second_dir, "capture.wav")
+            with open(first, "w") as f:
+                f.write("")
+            with open(second, "w") as f:
+                f.write("")
+
+            self.assertTrue(model.add_item(first))
+            self.assertTrue(model.add_item(second))
+            self.assertFalse(model.add_item(first))
+
+            self.assertEqual(model.rowCount(), 2)
+            self.assertEqual(model.get_item(0).display_name, "first/capture.wav")
+            self.assertEqual(model.get_item(1).display_name, "second/capture.wav")
+            self.assertEqual(model.get_item(0).path, os.path.abspath(first))
+            self.assertEqual(model.get_item(1).path, os.path.abspath(second))
 
     def test_queue_model_remove_and_clear(self):
         model = BatchQueueModel()

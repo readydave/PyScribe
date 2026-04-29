@@ -184,6 +184,93 @@ class TranscriptionServiceTests(unittest.TestCase):
         self.assertIn("Diarization CUDA runtime unavailable. Retrying diarization on CPU", "\n".join(statuses))
         self.assertTrue(result.transcript.startswith("[S1] hello there"))
 
+    def test_transcribe_prepared_audio_empty_diarization_keeps_plain_transcript(self) -> None:
+        statuses: list[str] = []
+        diar_progress: list[float] = []
+
+        class _FakeSegment:
+            def __init__(self, start: float, end: float, text: str) -> None:
+                self.start = start
+                self.end = end
+                self.text = text
+
+        class _FakeModel:
+            def transcribe(self, *args, **kwargs):
+                return iter(
+                    [
+                        _FakeSegment(0.0, 1.0, "this yes last night"),
+                        _FakeSegment(1.0, 2.0, "yeah"),
+                    ]
+                ), None
+
+        spec = resolve_transcription_model("deepdml/faster-whisper-large-v3-turbo-ct2")
+
+        with patch("services.transcription_service._probe_duration_seconds", return_value=8.0), patch(
+            "services.transcription_service.load_audio_waveform",
+            return_value=[0.1, 0.2],
+        ), patch(
+            "services.transcription_service._run_diarization_backend",
+            return_value=[],
+        ):
+            result = transcribe_prepared_audio(
+                wav_path="prepared.wav",
+                model=_FakeModel(),
+                model_spec=spec,
+                language=None,
+                use_diarization=True,
+                diar_backend="accurate",
+                device="cpu",
+                on_status=statuses.append,
+                on_diar_progress=diar_progress.append,
+            )
+
+        self.assertEqual(result.transcript, "this yes last night yeah")
+        self.assertNotIn("[S?]", result.transcript)
+        self.assertEqual(result.segments[0].get("speaker"), None)
+        self.assertIn("Diarization produced no speaker segments", "\n".join(statuses))
+        self.assertEqual(diar_progress[-1], 0)
+
+    def test_transcribe_prepared_audio_successful_diarization_formats_speaker_labels(self) -> None:
+        class _FakeSegment:
+            def __init__(self, start: float, end: float, text: str) -> None:
+                self.start = start
+                self.end = end
+                self.text = text
+
+        class _FakeModel:
+            def transcribe(self, *args, **kwargs):
+                return iter(
+                    [
+                        _FakeSegment(0.0, 1.0, "hello there"),
+                        _FakeSegment(1.0, 2.0, "general update"),
+                    ]
+                ), None
+
+        spec = resolve_transcription_model("deepdml/faster-whisper-large-v3-turbo-ct2")
+
+        with patch("services.transcription_service._probe_duration_seconds", return_value=8.0), patch(
+            "services.transcription_service.load_audio_waveform",
+            return_value=[0.1, 0.2],
+        ), patch(
+            "services.transcription_service._run_diarization_backend",
+            return_value=[
+                {"start": 0.0, "end": 1.0, "speaker": "S1"},
+                {"start": 1.0, "end": 2.0, "speaker": "S2"},
+            ],
+        ):
+            result = transcribe_prepared_audio(
+                wav_path="prepared.wav",
+                model=_FakeModel(),
+                model_spec=spec,
+                language=None,
+                use_diarization=True,
+                diar_backend="accurate",
+                device="cpu",
+            )
+
+        self.assertEqual(result.transcript, "[S1] hello there\n[S2] general update")
+        self.assertNotIn("[S?]", result.transcript)
+
 
 if __name__ == "__main__":
     unittest.main()

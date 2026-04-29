@@ -16,11 +16,14 @@ The format is inspired by Keep a Changelog.
 
 - Qt speaker identification mode (backend) selection is now saved immediately to the configuration when changed.
 - Qt "Browse Files" button in the drop zone updated with a modern pill-shaped design, explicit minimum height, and improved text visibility for all themes.
+- Diarization compatibility now includes `soundfile`-backed shims for modern Torchaudio metadata/loading APIs, including missing `torchaudio.info` and TorchCodec-backed loading paths.
 
 ### Fixed
 
 - Fixed a bug where the speaker mode dropdown would stay disabled after the hardware probe finished, requiring a manual toggle of the "Identify Speakers" checkbox to re-enable.
 - Fixed a race condition where the diarization backend selection would be reset to default when the background hardware probe completed.
+- Fixed empty diarization results being formatted as `[S?]`; PyScribe now preserves the plain transcript when no speaker segments are produced.
+- Fixed diarization inference failures being swallowed before the existing CUDA-to-CPU retry and graceful fallback paths could run.
 - Improved Qt drop zone styling to prevent text clipping on high-DPI displays.
 - Standardized logging directory permissions to ensure secure log storage.
 - Qt live transcription **Rename with Title** support. Users can now apply a session title after a recording is complete to automatically rename the session files.

@@ -287,8 +287,9 @@ class LiveSessionController:
         
         session_id = dir_name + "_" + uuid.uuid4().hex[:8]
         self.options = options
+        self.session_timestamp = timestamp
         self.session_dir = output_root / session_id
-        self.capture_path = self.session_dir / "capture.wav"
+        self.capture_path = self.session_dir / f"{timestamp}-live-capture.wav"
         self.metadata_path = self.session_dir / "session.json"
         
         # Final transcript path will be calculated during finalization
@@ -463,7 +464,7 @@ class LiveSessionController:
 
     def finalize_success(self, transcript: str) -> None:
         safe_title = normalize_session_title(self.metadata.session_title)
-        timestamp = self.metadata.session_id.split("_")[0]
+        timestamp = self.session_timestamp
         
         final_audio_path = self.capture_path
         final_txt_path = self.final_transcript_path
@@ -488,7 +489,7 @@ class LiveSessionController:
                     self.capture_path.rename(final_audio_path)
                     self.metadata.saved_audio_path = str(final_audio_path)
                 except OSError:
-                    LOGGER.warning("Failed to rename capture.wav to %s", final_audio_path, exc_info=True)
+                    LOGGER.warning("Failed to rename live capture to %s", final_audio_path, exc_info=True)
         
         final_txt_path.write_text(transcript or "", encoding="utf-8")
         self.metadata.status = "completed"

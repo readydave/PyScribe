@@ -61,11 +61,11 @@
 - **Device**: audio input filtered to the selected source type.
 - **Output Folder**: root for timestamped live session folders.
 - **Keep recorded audio after completion**:
-  - when enabled, `capture.wav` remains after a successful final pass
+  - when enabled, the timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` file remains after a successful final pass
   - when disabled, successful runs keep metadata and final transcript but remove the raw capture
 - **Timer**: elapsed recorded time for the active session. It freezes while capture is paused.
 - Live mode writes a recoverable session folder containing:
-  - `capture.wav`
+  - `YYYY-MM-DD_HHMMSS-live-capture.wav`
   - `session.json`
   - `final_transcript.txt` after a successful stop/finalize cycle
 - Granite is unavailable in live mode because live capture requires timestamp-capable Whisper models.
@@ -77,6 +77,13 @@ Run mode is inferred automatically:
 - transcription only -> `transcribe_only`
 - visuals only -> `visual_only`
 - both off -> run is blocked (you must enable at least one)
+
+## Batch Queue
+
+- Add files or import a folder to queue multiple media files.
+- Same-named files from different folders can be queued together.
+- Exact duplicate paths are skipped.
+- Duplicate basenames show parent-folder context in the queue list.
 
 ## Tools Menu
 

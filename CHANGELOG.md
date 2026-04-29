@@ -17,6 +17,9 @@ The format is inspired by Keep a Changelog.
 - Qt speaker identification mode (backend) selection is now saved immediately to the configuration when changed.
 - Qt "Browse Files" button in the drop zone updated with a modern pill-shaped design, explicit minimum height, and improved text visibility for all themes.
 - Diarization compatibility now includes `soundfile`-backed shims for modern Torchaudio metadata/loading APIs, including missing `torchaudio.info` and TorchCodec-backed loading paths.
+- Qt live capture audio now uses timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` filenames by default instead of plain `capture.wav`.
+- Qt batch queue display now disambiguates same-named media files from different folders with parent-folder context.
+- Interactive launcher now auto-starts Desktop (Qt) after 5 seconds without a selection.
 
 ### Fixed
 
@@ -24,6 +27,7 @@ The format is inspired by Keep a Changelog.
 - Fixed a race condition where the diarization backend selection would be reset to default when the background hardware probe completed.
 - Fixed empty diarization results being formatted as `[S?]`; PyScribe now preserves the plain transcript when no speaker segments are produced.
 - Fixed diarization inference failures being swallowed before the existing CUDA-to-CPU retry and graceful fallback paths could run.
+- Fixed Qt batch queue handling so same-named files from different folders can be queued together while exact duplicate paths are still skipped.
 - Improved Qt drop zone styling to prevent text clipping on high-DPI displays.
 - Standardized logging directory permissions to ensure secure log storage.
 - Qt live transcription **Rename with Title** support. Users can now apply a session title after a recording is complete to automatically rename the session files.

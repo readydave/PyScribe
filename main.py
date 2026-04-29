@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import sys
+import time
 import warnings
 from services.listener_security_service import (
     clean_env_value,
@@ -65,6 +66,8 @@ warnings.filterwarnings(
 )
 
 INTERACTIVE_LAN_AUTH_USER = os.environ.get("PYSCRIBE_LAN_AUTH_USER", "pyscribe")
+LAUNCHER_DEFAULT_CHOICE = "1"
+LAUNCHER_DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
 def _redact_sensitive_argv(argv: list[str]) -> list[str]:
@@ -195,6 +198,46 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _input_with_timeout(prompt: str, timeout_seconds: float) -> str | None:
+    """Reads a line from stdin, returning None when a TTY prompt times out."""
+    if timeout_seconds <= 0 or not sys.stdin or not sys.stdin.isatty():
+        return input(prompt)
+
+    print(prompt, end="", flush=True)
+    if os.name == "nt":
+        import msvcrt
+
+        deadline = time.monotonic() + timeout_seconds
+        chars: list[str] = []
+        while time.monotonic() < deadline:
+            if not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
+            char = msvcrt.getwch()
+            if char in {"\r", "\n"}:
+                print()
+                return "".join(chars)
+            if char == "\003":
+                raise KeyboardInterrupt
+            if char in {"\b", "\x7f"}:
+                if chars:
+                    chars.pop()
+                    print("\b \b", end="", flush=True)
+                continue
+            chars.append(char)
+            print(char, end="", flush=True)
+        print()
+        return None
+
+    import select
+
+    ready, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
+    if ready:
+        return sys.stdin.readline()
+    print()
+    return None
+
+
 def prompt_launch_mode() -> str:
     """Interactive launcher menu shown when no CLI mode is provided."""
     LOGGER.info("Starting interactive launcher menu")
@@ -202,7 +245,15 @@ def prompt_launch_mode() -> str:
     print("  1) Desktop (Qt)")
     print("  2) Listener (Gradio web, localhost only)")
     while True:
-        choice = input("Choose mode [1/2] (default 1): ").strip() or "1"
+        raw_choice = _input_with_timeout(
+            f"Choose mode [1/2] (default 1, auto-start Desktop in {int(LAUNCHER_DEFAULT_TIMEOUT_SECONDS)}s): ",
+            LAUNCHER_DEFAULT_TIMEOUT_SECONDS,
+        )
+        if raw_choice is None:
+            LOGGER.info("Interactive launcher timed out; selecting Desktop (Qt)")
+            print("No selection received; starting Desktop (Qt).")
+            return LAUNCHER_DEFAULT_CHOICE
+        choice = raw_choice.strip() or LAUNCHER_DEFAULT_CHOICE
         if choice in {"1", "2"}:
             return choice
         print("Please enter 1 or 2.")

@@ -18,7 +18,7 @@ from ui_qt.main_window import MainWindow
 class _FakeLiveSession:
     def __init__(self) -> None:
         self.session_dir = Path("/tmp/pyscribe-live/session-1")
-        self.capture_path = self.session_dir / "capture.wav"
+        self.capture_path = self.session_dir / "2026-04-29_120000-live-capture.wav"
         self.options = SimpleNamespace(
             model_name="deepdml/faster-whisper-large-v3-turbo-ct2",
             use_diarization=False,

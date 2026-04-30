@@ -53,7 +53,9 @@ from services import (
     LiveAudioDevice,
     LiveSessionController,
     LiveSessionOptions,
+    LiveVramPreflight,
     audio_format_to_dict,
+    assess_live_vram_preflight,
     build_live_capture_format,
     TranscriptionResult,
     RuntimeInfo,
@@ -2224,6 +2226,7 @@ class MainWindow(QMainWindow):
         self.live_device_combo.setEnabled(live_controls_enabled and self.live_device_combo.count() > 0)
         self.live_output_dir_input.setEnabled(live_controls_enabled)
         self.live_output_dir_btn.setEnabled(live_controls_enabled)
+        self.live_title_input.setEnabled(live_controls_enabled)
         self.live_keep_audio_checkbox.setEnabled(live_controls_enabled)
 
     def _attach_live_audio_source(self, qt_device: object) -> QAudioFormat:
@@ -2390,6 +2393,8 @@ class MainWindow(QMainWindow):
                 "Live mode requires a timestamp-capable Whisper backend. Granite remains file-only.",
             )
             return
+        if not self._confirm_live_vram_preflight(model_name):
+            return
         if not self._confirm_model_download(model_name):
             return
         live_device = self._selected_live_device()
@@ -2485,6 +2490,51 @@ class MainWindow(QMainWindow):
         self._live_elapsed_timer.start(500)
         self._update_live_elapsed_label()
         self._update_live_mode_ui()
+
+    def _confirm_live_vram_preflight(self, model_name: str) -> bool:
+        result = assess_live_vram_preflight(
+            model_name,
+            device=self.runtime.device,
+            compute_type=self.runtime.compute_type,
+        )
+        if result.status == "unavailable":
+            LOGGER.info("Live VRAM preflight unavailable: %s", result.message)
+            self._append_terminal_log(result.message)
+            return True
+        if not result.should_warn:
+            return True
+
+        LOGGER.warning("Live VRAM preflight warning: %s", result.message)
+        answer = QMessageBox.question(
+            self,
+            "Low GPU memory for live transcription",
+            self._live_vram_warning_text(result),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer == QMessageBox.Yes:
+            self._append_terminal_log("User continued live transcription despite low VRAM warning.")
+            return True
+        self.status_label.setText("Live transcription canceled: not enough free GPU memory.")
+        self._append_terminal_log("Live transcription canceled after low VRAM warning.")
+        return False
+
+    @staticmethod
+    def _live_vram_warning_text(result: LiveVramPreflight) -> str:
+        free = result.free_gb if result.free_gb is not None else 0.0
+        total = result.total_gb if result.total_gb is not None else 0.0
+        used = result.used_gb if result.used_gb is not None else 0.0
+        return (
+            "GPU memory is low for the selected live transcription model.\n\n"
+            f"Model: {result.model_name}\n"
+            f"Estimated need: {result.estimated_required_gb:.1f} GB "
+            f"({result.model_estimate_gb:.1f} GB model + {result.safety_buffer_gb:.1f} GB live buffer)\n"
+            f"Currently free: {free:.1f} GB of {total:.1f} GB total ({used:.1f} GB used)\n\n"
+            "This can happen when LM Studio or another local GPU workload has a large model loaded. "
+            "Unload the LM Studio model, reduce its GPU layers, choose a smaller Whisper model, "
+            "or switch transcription to CPU/int8 before starting live capture.\n\n"
+            "Continue anyway?"
+        )
 
     @Slot()
     def stop_live_capture(self) -> None:
@@ -2943,6 +2993,7 @@ class MainWindow(QMainWindow):
             done = "Live transcription complete." if not cancelled else "Live transcription cancelled."
             self.status_label.setText(done)
             self._append_terminal_log(done)
+            self._update_live_mode_ui()
 
         # Batch handling
         if self._batch_active and self._current_batch_index != -1:

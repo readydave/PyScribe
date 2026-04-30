@@ -11,6 +11,7 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from services import AppConfig
+from services.live_vram_service import LiveVramPreflight
 from services.model_service import RuntimeInfo
 from ui_qt.main_window import MainWindow
 
@@ -299,6 +300,116 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertTrue(win.transcribe_btn.isEnabled())
         self.assertTrue(win.input_mode_combo.isEnabled())
         self.assertEqual(win.status_label.text(), "Live transcription complete.")
+        self.assertTrue(win.live_card.isVisible())
+        self.assertTrue(win.stop_live_btn.isVisible())
+        self.assertFalse(win.stop_live_btn.isEnabled())
+        self.assertTrue(win.live_title_input.isEnabled())
+
+        next_session = _FakeLiveSession()
+        next_session.session_dir = Path("/tmp/pyscribe-live/session-2")
+        win._live_session = next_session
+        win._live_capture_active = True
+        win._live_finalizing = False
+        win.transcribe_btn.setEnabled(False)
+        win.cancel_btn.setEnabled(True)
+        win.force_stop_btn.setEnabled(True)
+        win._update_live_mode_ui()
+
+        try:
+            self.assertTrue(win.live_card.isVisible())
+            self.assertTrue(win.stop_live_btn.isVisible())
+            self.assertTrue(win.stop_live_btn.isEnabled())
+            self.assertTrue(win.pause_live_btn.isVisible())
+            self.assertTrue(win.pause_live_btn.isEnabled())
+            self.assertFalse(win.live_title_input.isEnabled())
+            self.assertTrue(win.cancel_btn.isEnabled())
+            self.assertEqual(win.transcribe_btn.text(), "Start Live")
+        finally:
+            win._live_capture_active = False
+            win._live_session = None
+            win._update_live_mode_ui()
+
+    def test_live_vram_preflight_decline_cancels_start(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.runtime = RuntimeInfo(
+            device="cuda",
+            compute_type="float16",
+            gpu_name="Test GPU",
+            vram_gb=12.0,
+            cpu_count=8,
+        )
+        result = LiveVramPreflight(
+            status="low",
+            model_name="large-v3",
+            estimated_required_gb=7.5,
+            model_estimate_gb=6.5,
+            safety_buffer_gb=1.0,
+            free_gb=2.0,
+            total_gb=12.0,
+            used_gb=10.0,
+            message="low vram",
+        )
+
+        with (
+            patch("ui_qt.main_window.assess_live_vram_preflight", return_value=result),
+            patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.No) as question,
+        ):
+            self.assertFalse(win._confirm_live_vram_preflight("large-v3"))
+
+        question.assert_called_once()
+        self.assertEqual(win.status_label.text(), "Live transcription canceled: not enough free GPU memory.")
+        self.assertIn("low VRAM warning", win.terminal_log.toPlainText())
+
+    def test_live_vram_preflight_continue_allows_start(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        result = LiveVramPreflight(
+            status="low",
+            model_name="large-v3",
+            estimated_required_gb=7.5,
+            model_estimate_gb=6.5,
+            safety_buffer_gb=1.0,
+            free_gb=2.0,
+            total_gb=12.0,
+            used_gb=10.0,
+            message="low vram",
+        )
+
+        with (
+            patch("ui_qt.main_window.assess_live_vram_preflight", return_value=result),
+            patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.Yes) as question,
+        ):
+            self.assertTrue(win._confirm_live_vram_preflight("large-v3"))
+
+        question.assert_called_once()
+        self.assertIn("continued live transcription", win.terminal_log.toPlainText())
+
+    def test_live_vram_preflight_unavailable_does_not_prompt(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        result = LiveVramPreflight(
+            status="unavailable",
+            model_name="large-v3",
+            estimated_required_gb=7.5,
+            model_estimate_gb=6.5,
+            safety_buffer_gb=1.0,
+            free_gb=None,
+            total_gb=None,
+            used_gb=None,
+            message="Current GPU memory could not be read.",
+        )
+
+        with (
+            patch("ui_qt.main_window.assess_live_vram_preflight", return_value=result),
+            patch("ui_qt.main_window.QMessageBox.question") as question,
+        ):
+            self.assertTrue(win._confirm_live_vram_preflight("large-v3"))
+
+        question.assert_not_called()
 
 
 if __name__ == "__main__":

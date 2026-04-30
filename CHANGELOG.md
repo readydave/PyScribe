@@ -11,6 +11,7 @@ The format is inspired by Keep a Changelog.
 - Qt transcription drop zone now supports a full-area mouse click to open the file browser, in addition to the explicit browse button.
 - Application logging now consolidates all output for the current session into a single `pyscribe.log` file, with automatic timestamped archiving of previous logs on startup.
 - Automatic log rotation that keeps only the 21 most recent log files to manage disk space.
+- Qt live transcription now performs a GPU VRAM preflight before capture and warns when free memory is likely too low, including guidance for LM Studio/local GPU workload contention.
 
 ### Changed
 
@@ -24,6 +25,7 @@ The format is inspired by Keep a Changelog.
 ### Fixed
 
 - Fixed a bug where the speaker mode dropdown would stay disabled after the hardware probe finished, requiring a manual toggle of the "Identify Speakers" checkbox to re-enable.
+- Fixed Qt live mode after a completed final post-pass so starting another live session keeps the Live Capture controls visible, restores the **Start Live** idle state, and shows **Stop** during the next active capture.
 - Fixed a race condition where the diarization backend selection would be reset to default when the background hardware probe completed.
 - Fixed empty diarization results being formatted as `[S?]`; PyScribe now preserves the plain transcript when no speaker segments are produced.
 - Fixed diarization inference failures being swallowed before the existing CUDA-to-CPU retry and graceful fallback paths could run.

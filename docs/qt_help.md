@@ -60,10 +60,12 @@
   - `Loopback`
 - **Device**: audio input filtered to the selected source type.
 - **Output Folder**: root for timestamped live session folders.
+- **Session Title**: optional title used for live session file naming; editable before capture and after completion, locked while capture/finalization is active.
 - **Keep recorded audio after completion**:
   - when enabled, the timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` file remains after a successful final pass
   - when disabled, successful runs keep metadata and final transcript but remove the raw capture
 - **Timer**: elapsed recorded time for the active session. It freezes while capture is paused.
+- CUDA live capture checks free GPU memory first and warns if another local workload, such as LM Studio, appears to leave too little VRAM for the selected model.
 - Live mode writes a recoverable session folder containing:
   - `YYYY-MM-DD_HHMMSS-live-capture.wav`
   - `session.json`
@@ -141,6 +143,7 @@ Before transcription, PyScribe may detect language and prompt:
 - **Start Live**: begins live capture.
 - **Pause / Resume**: temporarily suspend or resume live capture without creating a new session folder.
 - **Stop**: stops live capture and starts the final post-pass on the saved recording.
+  - After a completed final post-pass, live mode returns to a ready state for the next live session.
 - **Cancel**: cooperative stop (safe).
   - In live mode, cancel asks for confirmation, then stops capture immediately and keeps the saved session folder without running the final post-pass.
 - **Force Stop**: immediate stop if cancel is stuck; escalates to a hard kill if the worker does not exit cleanly.

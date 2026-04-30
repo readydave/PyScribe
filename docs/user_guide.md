@@ -105,10 +105,12 @@ In live mode:
 - **Source**: choose microphone or loopback capture.
 - **Device**: pick the matching Qt audio input for the selected source type.
 - **Output Folder**: root folder for live session subfolders.
+- **Session Title**: optional title used for live session file naming; it is editable before capture starts and after completion for rename/apply-title workflows, but locked while capture/finalization is active.
 - **Keep recorded audio after completion**:
   - On: keep the timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` file after a successful final pass.
   - Off: remove the saved live capture audio after a successful final pass, but keep the session folder, `session.json`, and `final_transcript.txt`.
 - **Timer**: elapsed recorded time for the current session. It freezes while live capture is paused.
+- On CUDA systems, PyScribe checks currently free GPU memory before live capture. If free VRAM appears too low for the selected model, it warns before starting and suggests unloading LM Studio, reducing GPU layers, choosing a smaller Whisper model, or switching to CPU/int8.
 - Each live session folder contains:
   - `YYYY-MM-DD_HHMMSS-live-capture.wav`
   - `session.json`
@@ -154,6 +156,7 @@ Fallback behavior:
 - **Start Live**: begin live microphone or loopback capture.
 - **Pause / Resume** (live mode): temporarily suspend or resume live capture while keeping the same session folder and timestamped live capture file.
 - **Stop** (live mode): stop capture cleanly, finalize the rolling draft, and start the final post-pass on the saved recording.
+  - After a successful final post-pass, live mode remains ready for another live session and restores the Live Capture controls.
 - **Cancel**: cooperative cancellation.
   - In live mode, cancel asks for confirmation, then stops capture immediately, skips the final post-pass, and preserves the session folder and recorded audio.
 - **Force Stop**: immediate process termination if cancellation stalls; Qt escalates from terminate to kill when needed.

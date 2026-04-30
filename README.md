@@ -71,7 +71,9 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Hardened Qt **Force Stop** to escalate from terminate to kill when needed.
 - Added Qt live transcription mode with rolling ASR, autosaved capture sessions, microphone/loopback selection, and final post-pass cleanup.
 - Added Qt live **Pause / Resume** for microphone/loopback capture while keeping the same session folder and saved audio file.
+- Added Qt live GPU memory preflight warnings to catch likely CUDA out-of-memory conditions before capture, especially when LM Studio or another local GPU workload has a large model loaded.
 - Live capture audio now uses timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` filenames by default.
+- Fixed Qt live second-session state after a completed final post-pass so Live Capture controls and **Stop** are restored correctly.
 - Qt batch queue now allows same-named media files from different folders and shows parent-folder context for duplicate basenames.
 - Added confirmation before canceling an active Qt live transcription session.
 - Shared listener security/auth logic between `main.py` and `app.py` via `services/listener_security_service.py`.

@@ -48,7 +48,7 @@
 - **Analyze visuals (slides/chat OCR, beta)**:
   - Optional video-frame OCR to capture on-screen text.
   - Choose visual mode: `fast`, `balanced`, `accurate`.
-  - Choose OCR backend: `paddleocr`, `surya`, `pytesseract`, or `auto`.
+  - Choose OCR backend: `rapidocr`, `paddleocr`, `surya`, `pytesseract`, or `auto`.
   - Set sample interval in seconds (`0.5` to `10.0`; lower = more coverage, slower runtime).
   - Backend/model downloads may be prompted on first use.
   - Live mode disables visual analysis.

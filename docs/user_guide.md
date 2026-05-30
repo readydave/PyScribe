@@ -137,6 +137,7 @@ In live mode:
   - `balanced` (default)
   - `accurate` (most OCR coverage)
 - **OCR Backend**:
+  - `rapidocr`
   - `paddleocr`
   - `surya`
   - `pytesseract`

@@ -1,6 +1,6 @@
 # PyScribe
 
-PyScribe is a local transcription app for Windows and Linux built on `faster-whisper`.
+PyScribe is a local transcription app for Windows and Linux built primarily on `faster-whisper`, with experimental Granite Speech support for file-based transcription.
 It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker diarization and optional visual OCR analysis for video files.
 
 ## Documentation
@@ -14,6 +14,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 ## Highlights
 
 - Local transcription using `faster-whisper`
+- Experimental Granite Speech file transcription
 - Hardware-aware model recommendations
 - Qt desktop mode and Gradio listener mode
 - Qt unified dashboard layout with left navigation and stacked workspaces
@@ -63,29 +64,16 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 ## Recent Updates (Unreleased)
 
-- Isolated pyannote diarization into a separate spawned subprocess so GPU speaker ID can run cleanly after CUDA ASR models.
-- Forced pyannote audio reads to prefer `torchaudio`'s `soundfile` backend to avoid SoX loader crashes on some systems.
-- Added Torchaudio 2.9+ / 2.11 compatibility shims for pyannote audio metadata/loading, including `soundfile` fallbacks when `torchaudio.info` or TorchCodec-backed loading is unavailable.
-- Fixed empty diarization results being formatted as `[S?]`; PyScribe now keeps the plain transcript when speaker segments are unavailable.
-- Improved Qt transcription worker recovery so unexpected child exits surface a real failure instead of leaving the UI stuck.
-- Hardened Qt **Force Stop** to escalate from terminate to kill when needed.
-- Added Qt live transcription mode with rolling ASR, autosaved capture sessions, microphone/loopback selection, and final post-pass cleanup.
-- Added Qt live **Pause / Resume** for microphone/loopback capture while keeping the same session folder and saved audio file.
-- Added Qt live GPU memory preflight warnings to catch likely CUDA out-of-memory conditions before capture, especially when LM Studio or another local GPU workload has a large model loaded.
-- Live capture audio now uses timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` filenames by default.
-- Fixed Qt live second-session state after a completed final post-pass so Live Capture controls and **Stop** are restored correctly.
-- Qt batch queue now allows same-named media files from different folders and shows parent-folder context for duplicate basenames.
-- Added confirmation before canceling an active Qt live transcription session.
-- Shared listener security/auth logic between `main.py` and `app.py` via `services/listener_security_service.py`.
-- Hardened listener credential handling: `--auth-pass` is rejected to avoid secret leakage in process lists/history.
-- Throttled live transcript text updates in the transcription pipeline for smoother UI updates during long runs.
-- Added regression tests for listener security helpers and diarization backend compatibility.
-- Refreshed Qt main window with a sidebar + stacked dashboard layout and modernized light/dark QSS styling.
-- Added responsive transcription layout behavior, including startup sizing to available screen and adaptive card columns.
-- Added hide/show toggles for left navigation and right status rail in the transcription workspace.
-- Added a terminal-style live pipeline log panel in Qt transcription view.
-- Refactored Qt LLM post-process dialog into a splitter-based workspace with grouped configuration and output panes.
-- Added confirmed-cancel handling for active LLM generation, including close-window cancellation behavior.
+See `CHANGELOG.md` for the full unreleased change list. Notable current updates include:
+
+- Qt live transcription with microphone/loopback capture, rolling ASR, autosaved session folders, final post-pass cleanup, **Pause / Resume**, confirmed cancel, VRAM preflight warnings, and session-title-based naming/rename support.
+- Qt batch queue support for sequential processing of files or folders, including same-named files from different folders.
+- Safer pyannote diarization through spawned subprocess isolation, `soundfile` audio-loading fallbacks, CUDA-to-CPU retry, and plain transcript fallback when no speaker segments are produced.
+- Shared listener security/auth validation, restricted non-local/public listener exposure, and rejection of legacy `--auth-pass` CLI secrets.
+- Consolidated `pyscribe.log` logging with timestamped archive rotation.
+- Qt dashboard/sidebar refresh, responsive transcription cards, hide/show side panels, clickable drop zone, and terminal-style live pipeline logs.
+- Qt and Listener LLM post-processing with prompt templates, user template management, payload preview, optional image attachments, OCR fallback, and safe cancellation.
+- LLM connection profile diagnostics with local/LAN scope policy, subnet detection, LAN scan, LM Studio support, profile rename, and secure `env:VAR_NAME` API key references.
 
 ## Requirements
 
@@ -93,9 +81,12 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - FFmpeg available in PATH
   - Windows: `winget install Gyan.FFmpeg`
   - Ubuntu/Debian: `sudo apt install ffmpeg`
+- NVIDIA GPU with CUDA 12+ is highly recommended. The provided `requirements.txt` pins CUDA 12.1 PyTorch wheels; CPU-only or different-CUDA installs may need a custom Torch install before the rest of the requirements.
 - Optional OCR runtime:
+  - RapidOCR (`rapidocr-onnxruntime`, included in core requirements)
   - `pytesseract` + OS `tesseract` executable
-  - or PaddleOCR runtime dependencies
+  - PaddleOCR runtime dependencies
+  - Surya OCR runtime dependencies, if installed separately
 - Optional Diarization backends:
   - `pyannote.audio` (default, included in core)
 
@@ -180,8 +171,8 @@ Note: Interactive LAN mode no longer uses a default password. Set
 ## Feature Notes
 
 - **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. Modern Torchaudio compatibility shims provide `soundfile` fallbacks for metadata/loading APIs removed or changed in Torchaudio 2.9+ / 2.11. If diarization fails or produces no speaker segments, transcription completes without speaker labels instead of emitting `[S?]` lines.
-- **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` while showing rolling transcript text, supports **Pause / Resume** within the same session, and runs a final file-based cleanup pass when you press **Stop**. Cancel asks for confirmation and preserves the session folder/audio when accepted. Speaker identification, when enabled, runs only in that final pass. Granite remains file-only.
-- **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and OCR backend selection.
+- **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` while showing rolling transcript text, supports **Pause / Resume** within the same session, and runs a final file-based cleanup pass when you press **Stop**. Optional Session Title values can name live session outputs, and **Rename with Title** can apply a title after recording. Cancel asks for confirmation and preserves the session folder/audio when accepted. Speaker identification, when enabled, runs only in that final pass. Granite remains file-only.
+- **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and `auto`, `rapidocr`, `paddleocr`, `surya`, or `pytesseract` OCR backend selection.
 - **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`.
 - **Benchmarking:** Qt Tools menu includes benchmark runner for bundled sample media.
 - **LLM post-processing:** Qt Tools menu includes connection management plus post-process actions.
@@ -189,6 +180,7 @@ Note: Interactive LAN mode no longer uses a default password. Set
 ## Testing
 
 ```bash
+python -m pytest -q tests/smoke_cli.py
 python -m unittest tests.test_listener_and_diar_backends
 ```
 
@@ -199,6 +191,7 @@ pip install .
 pyscribe --help
 ```
 
+- The console script is intended for use from a source checkout. Bundled docs, prompt templates, screenshots, benchmark audio, and helper scripts are not declared as packaged data in `pyproject.toml`.
 - Listener helper script: `scripts/run_listener.sh`
 - systemd example unit: `deploy/systemd/pyscribe-listener.service.example`
 

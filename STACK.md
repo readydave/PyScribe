@@ -64,8 +64,10 @@ sudo apt install ffmpeg
 
 Optional OCR runtime:
 
+- RapidOCR via `rapidocr-onnxruntime` (included in core requirements)
 - `pytesseract` plus the OS `tesseract` executable
-- or PaddleOCR runtime dependencies
+- PaddleOCR runtime dependencies
+- Surya OCR runtime dependencies, if installed separately
 
 Optional model/auth integrations:
 

@@ -9,7 +9,9 @@ import unittest
 from unittest.mock import patch
 
 from services.multimodal_service import (
+    analyze_video_stream,
     _format_visual_report,
+    _is_ui_noise_line,
     _is_low_value_chat_line,
     _is_low_value_slide_line,
     _prepare_verified_paddle_ocr_model_dirs,
@@ -28,6 +30,28 @@ class MultimodalServiceTests(unittest.TestCase):
             ),
             12.4,
         )
+
+    def test_long_video_uses_lower_frame_budget_by_default(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_extract(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("services.multimodal_service._has_video_stream", return_value=True), patch(
+            "services.multimodal_service._get_video_duration_seconds",
+            return_value=8 * 60 * 60,
+        ), patch(
+            "services.multimodal_service._build_ocr_fn",
+            return_value=(lambda image, mode="slide": "", "rapidocr", None, None),
+        ), patch(
+            "services.multimodal_service._extract_sampled_frames",
+            side_effect=_fake_extract,
+        ):
+            analyze_video_stream("webinar.mp4", visual_profile="accurate", visual_scope="slides_only")
+
+        self.assertEqual(captured["max_frames"], 180)
+        self.assertEqual(captured["sample_seconds"], 160.0)
         self.assertEqual(
             _resolve_effective_sample_seconds(
                 requested_sample_seconds=4.0,
@@ -44,6 +68,14 @@ class MultimodalServiceTests(unittest.TestCase):
         self.assertTrue(_is_low_value_chat_line("Billy l.Stuecken"))
         self.assertFalse(_is_low_value_slide_line("Visits per DVM Day [0.07, 0.43]"))
         self.assertFalse(_is_low_value_chat_line("Ralph: I thought Kir was a troubleshooter."))
+
+    def test_meeting_ui_chrome_is_filtered_as_noise(self) -> None:
+        self.assertTrue(_is_ui_noise_line("app.zoom.us/wc/86754168572/join?ref_from=launch"))
+        self.assertTrue(_is_ui_noise_line("Who can see your messages? Recording On"))
+        self.assertTrue(_is_ui_noise_line("You are viewing Raghuveer Nishtala's screen"))
+        self.assertTrue(_is_ui_noise_line("SearXNG LMI M G A FB H GMaps Y! EN EN Routes IkonGPS"))
+        self.assertTrue(_is_ui_noise_line("0 of 7 answered Submit"))
+        self.assertFalse(_is_ui_noise_line("Day 1: Foundations of AI and Prompt Engineering"))
 
     def test_visual_report_prefers_meaningful_slide_and_chat_lines(self) -> None:
         canonical_lines = {
@@ -90,6 +122,7 @@ class MultimodalServiceTests(unittest.TestCase):
         )
 
         self.assertIn("Visits per DVM Day [0.07, 0.43]", report)
+        self.assertIn("- Visual scope: slides_only", report)
         self.assertIn("Ralph: I thought Kir was a troubleshooter.", report)
         self.assertNotIn("Allison M. Owens", report)
         self.assertNotIn("1359", report)

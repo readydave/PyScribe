@@ -26,8 +26,8 @@
   - CPU/RAM and GPU/VRAM telemetry when available
 - **Progress + timing**:
   - Transcription progress bar and elapsed time
-  - Diarization progress bar and elapsed time (when enabled)
-  - Visual analysis elapsed time (when enabled)
+  - Diarization progress bar with staged determinate progress and elapsed time (when enabled)
+  - Visual analysis progress bar and elapsed time (when enabled)
 - **Live pipeline log**:
   - Terminal-style read-only event feed for real-time stage updates.
 - **Responsive cards**:
@@ -49,7 +49,9 @@
   - Optional video-frame OCR to capture on-screen text.
   - Choose visual mode: `fast`, `balanced`, `accurate`.
   - Choose OCR backend: `rapidocr`, `paddleocr`, `surya`, `pytesseract`, or `auto`.
+  - Choose scope: `Slides only` (default) or `Slides + chat`.
   - Set sample interval in seconds (`0.5` to `10.0`; lower = more coverage, slower runtime).
+  - Long videos use lower frame caps and faster auto OCR backend preference.
   - Backend/model downloads may be prompted on first use.
   - Live mode disables visual analysis.
 
@@ -152,6 +154,7 @@ Before transcription, PyScribe may detect language and prompt:
   - **Save All (Transcript + OCR)**
   - **Save Transcript Only**
   - **Save OCR Only**
+  - Multi-part runs also auto-save separate `<stem>_transcript.txt`, `<stem>_diarized.txt`, and/or `<stem>_ocr.txt` files beside the source media.
 - **Copy**: copy transcript to clipboard.
 - **Open Folder**: open selected media folder (or last-open folder when no file selected).
   - In live mode, this opens the active live session folder or configured live output root.

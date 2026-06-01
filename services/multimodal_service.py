@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections import Counter
 import ctypes
 from difflib import SequenceMatcher
+import html as html_lib
 import importlib.util
+import inspect
 import os
 import re
 import shutil
@@ -28,6 +30,15 @@ OcrFunction = Callable[..., str]
 OcrBuildResult = tuple[OcrFunction | None, str, str | None, str | None]
 OcrBackendBuildResult = tuple[OcrFunction | None, str | None]
 _UI_NOISE_TERMS = (
+    "app.zoom.us/",
+    "zoom workplace",
+    "recording on",
+    "who can see your messages",
+    "who can see your responses",
+    "you are viewing",
+    "write a message",
+    "shared a file in the meeting",
+    "navigation icons",
     "chat people raise react",
     "camera mic share leave",
     "take control",
@@ -55,6 +66,7 @@ _VISUAL_PROFILE_SETTINGS: dict[str, dict[str, float | int]] = {
         "chat_change_threshold": 0.028,
         "chat_stride": 3,
         "max_frames": 180,
+        "long_max_frames": 90,
     },
     # Good default quality/speed balance.
     "balanced": {
@@ -62,6 +74,7 @@ _VISUAL_PROFILE_SETTINGS: dict[str, dict[str, float | int]] = {
         "chat_change_threshold": 0.020,
         "chat_stride": 2,
         "max_frames": 240,
+        "long_max_frames": 120,
     },
     # Most complete capture (slowest).
     "accurate": {
@@ -69,8 +82,10 @@ _VISUAL_PROFILE_SETTINGS: dict[str, dict[str, float | int]] = {
         "chat_change_threshold": 0.014,
         "chat_stride": 1,
         "max_frames": 360,
+        "long_max_frames": 180,
     },
 }
+_LONG_VIDEO_SECONDS = 2 * 60 * 60
 
 
 @dataclass
@@ -168,6 +183,7 @@ def analyze_video_stream(
     *,
     ocr_backend: str = "auto",
     visual_profile: str = "balanced",
+    visual_scope: str = "slides_only",
     sample_seconds: float = 1.0,
     max_frames: int | None = None,
     cancel_event: Event | None = None,
@@ -181,10 +197,14 @@ def analyze_video_stream(
     visual_profile = _normalize_visual_profile(visual_profile)
     profile_cfg = _VISUAL_PROFILE_SETTINGS[visual_profile]
     sample_seconds = max(0.5, float(sample_seconds or 1.0))
-    if max_frames is None:
-        max_frames = int(profile_cfg["max_frames"])
-    max_frames = max(1, int(max_frames))
+    visual_scope = _normalize_visual_scope(visual_scope)
+    include_chat = visual_scope == "slides_chat"
     media_duration_seconds = _get_video_duration_seconds(media_path)
+    long_video = bool(media_duration_seconds and media_duration_seconds >= _LONG_VIDEO_SECONDS)
+    if max_frames is None:
+        frame_key = "long_max_frames" if long_video else "max_frames"
+        max_frames = int(profile_cfg[frame_key])
+    max_frames = max(1, int(max_frames))
     effective_sample_seconds = _resolve_effective_sample_seconds(
         requested_sample_seconds=sample_seconds,
         max_frames=max_frames,
@@ -202,7 +222,7 @@ def analyze_video_stream(
         )
 
     requested_backend = (ocr_backend or "auto").strip().lower()
-    ocr_fn, ocr_name, ocr_reason, backend_note = _build_ocr_fn(ocr_backend, on_status=on_status)
+    ocr_fn, ocr_name, ocr_reason, backend_note = _build_ocr_fn(ocr_backend, on_status=on_status, long_video=long_video)
     if ocr_fn is None:
         if on_status:
             on_status(f"Visual analysis unavailable: {ocr_reason}")
@@ -217,7 +237,7 @@ def analyze_video_stream(
 
     if on_status:
         on_status(
-            f"Analyzing video frames for on-screen text ({ocr_name}, profile={visual_profile})..."
+            f"Analyzing video frames for on-screen text ({ocr_name}, profile={visual_profile}, scope={visual_scope})..."
         )
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -267,6 +287,7 @@ def analyze_video_stream(
                         sample_seconds=effective_sample_seconds,
                         frames_scanned=idx - 1,
                         visual_profile=visual_profile,
+                        visual_scope=visual_scope,
                         requested_backend=requested_backend,
                         ocr_name=ocr_name,
                         backend_note=backend_note,
@@ -288,7 +309,7 @@ def analyze_video_stream(
                 )
 
             with Image.open(frame_path) as frame_img:
-                rois = _extract_rois(frame_img)
+                rois = _extract_rois(frame_img, include_chat=include_chat)
                 frame_lines: list[tuple[str, str]] = []
                 current_keys: set[str] = set()
                 newly_visible: list[tuple[str, str]] = []
@@ -389,6 +410,7 @@ def analyze_video_stream(
             sample_seconds=effective_sample_seconds,
             frames_scanned=len(frames),
             visual_profile=visual_profile,
+            visual_scope=visual_scope,
             requested_backend=requested_backend,
             ocr_name=ocr_name,
             backend_note=backend_note,
@@ -500,7 +522,7 @@ def _extract_sampled_frames(
     return frames
 
 
-def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None) -> OcrBuildResult:
+def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long_video: bool = False) -> OcrBuildResult:
     requested = (backend or "auto").strip().lower()
     attempts: list[str] = []
     attempt_reason_by_backend: dict[str, str] = {}
@@ -512,7 +534,7 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None) -> O
         "pytesseract": lambda **_: _build_tesseract_ocr_fn(),
     }
     if requested == "auto":
-        order = ["paddleocr", "rapidocr", "surya", "pytesseract"]
+        order = ["rapidocr", "paddleocr", "pytesseract", "surya"] if long_video else ["paddleocr", "rapidocr", "surya", "pytesseract"]
     elif requested == "rapidocr":
         order = ["rapidocr", "paddleocr", "pytesseract"]
     elif requested == "surya":
@@ -535,9 +557,13 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None) -> O
                     f"Requested backend '{requested}' unavailable: {fallback_reason}. "
                     f"Using '{name}' fallback."
                 )
-            elif on_status and requested == "auto" and name != "paddleocr":
+            elif on_status and requested == "auto" and (name != "paddleocr" or long_video):
                 on_status(f"Using '{name}' OCR backend.")
-                fallback_note = f"Auto mode selected '{name}' (higher-priority backends unavailable)."
+                fallback_note = (
+                    f"Auto mode selected '{name}' for long-video OCR runtime."
+                    if long_video
+                    else f"Auto mode selected '{name}' (higher-priority backends unavailable)."
+                )
             return fn, name, None, fallback_note
         attempt_reason_by_backend[name] = reason or "backend unavailable"
         attempts.append(f"{name}: {reason}")
@@ -844,35 +870,70 @@ def _build_surya_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBacken
         if _SURYA_DET_PREDICTOR is None or _SURYA_REC_PREDICTOR is None:
             if on_status:
                 on_status("Initializing Surya OCR (first run may download OCR model files)...")
-            _SURYA_DET_PREDICTOR = DetectionPredictor()
             _SURYA_REC_PREDICTOR = RecognitionPredictor()
+            if not _surya_supports_full_page_ocr(_SURYA_REC_PREDICTOR):
+                _SURYA_DET_PREDICTOR = DetectionPredictor()
 
         def _ocr(image: "Image.Image", mode: str = "slide") -> str:
-            predictions = _SURYA_REC_PREDICTOR([image], [["en"]], _SURYA_DET_PREDICTOR)
-            lines: list[str] = []
-            for pred in predictions or []:
-                text_lines = getattr(pred, "text_lines", None) or getattr(pred, "lines", None) or []
-                for line in text_lines:
-                    text = getattr(line, "text", None)
-                    if text is None and isinstance(line, dict):
-                        text = line.get("text")
-                    conf = getattr(line, "confidence", None)
-                    if conf is None and isinstance(line, dict):
-                        conf = line.get("confidence")
-                    try:
-                        conf_val = float(conf) if conf is not None else 1.0
-                    except Exception:
-                        conf_val = 1.0
-                    min_conf = 0.45 if mode == "slide" else 0.35
-                    if text and conf_val >= min_conf:
-                        lines.append(str(text).strip())
-                if not text_lines and getattr(pred, "text", None):
-                    lines.append(str(pred.text).strip())
-            return "\n".join([line for line in lines if line])
+            global _SURYA_DET_PREDICTOR
+            if _surya_supports_full_page_ocr(_SURYA_REC_PREDICTOR):
+                predictions = _SURYA_REC_PREDICTOR([image], full_page=True)
+            else:
+                if _SURYA_DET_PREDICTOR is None:
+                    _SURYA_DET_PREDICTOR = DetectionPredictor()
+                predictions = _SURYA_REC_PREDICTOR([image], [["en"]], _SURYA_DET_PREDICTOR)
+            return _extract_surya_prediction_text(predictions, mode=mode)
 
         return _ocr, None
     except Exception as exc:
         return None, f"Surya init/runtime error: {exc}"
+
+
+def _surya_supports_full_page_ocr(predictor: object) -> bool:
+    try:
+        return "full_page" in inspect.signature(predictor.__call__).parameters
+    except Exception:
+        return False
+
+
+def _extract_surya_prediction_text(predictions: object, *, mode: str) -> str:
+    lines: list[str] = []
+    min_conf = 0.45 if mode == "slide" else 0.35
+    for pred in predictions or []:
+        text_lines = getattr(pred, "text_lines", None) or getattr(pred, "lines", None) or []
+        for line in text_lines:
+            text = _object_value(line, "text")
+            conf = _object_value(line, "confidence")
+            try:
+                conf_val = float(conf) if conf is not None else 1.0
+            except Exception:
+                conf_val = 1.0
+            if text and conf_val >= min_conf:
+                lines.append(str(text).strip())
+        blocks = getattr(pred, "blocks", None) or []
+        for block in blocks:
+            if bool(_object_value(block, "skipped")) or bool(_object_value(block, "error")):
+                continue
+            block_html = _object_value(block, "html")
+            if block_html:
+                lines.extend(_html_fragment_to_lines(str(block_html)))
+        if not text_lines and not blocks and getattr(pred, "text", None):
+            lines.append(str(pred.text).strip())
+    return "\n".join(dict.fromkeys(line for line in lines if line))
+
+
+def _object_value(value: object, key: str) -> object | None:
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _html_fragment_to_lines(fragment: str) -> list[str]:
+    text = re.sub(r"<\s*br\s*/?\s*>", "\n", fragment, flags=re.IGNORECASE)
+    text = re.sub(r"</\s*(p|div|li|tr|h[1-6])\s*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    return _extract_ocr_lines(text)
 
 
 def _normalize_visual_profile(profile: str) -> str:
@@ -880,6 +941,13 @@ def _normalize_visual_profile(profile: str) -> str:
     if normalized in _VISUAL_PROFILE_SETTINGS:
         return normalized
     return "balanced"
+
+
+def _normalize_visual_scope(scope: str) -> str:
+    normalized = str(scope or "").strip().lower().replace("-", "_")
+    if normalized in {"slides_only", "slides_chat"}:
+        return normalized
+    return "slides_only"
 
 
 def _roi_signature(image: "Image.Image") -> "np.ndarray":
@@ -937,7 +1005,7 @@ def _extract_rapidocr_lines(result: object, *, min_conf: float) -> list[str]:
     return lines
 
 
-def _extract_rois(image: "Image.Image") -> dict[str, "Image.Image"]:
+def _extract_rois(image: "Image.Image", *, include_chat: bool = True) -> dict[str, "Image.Image"]:
     w, h = image.size
     top = int(h * 0.05)
     bottom = int(h * 0.96)
@@ -948,7 +1016,7 @@ def _extract_rois(image: "Image.Image") -> dict[str, "Image.Image"]:
         "slide": image.crop((left, top, slide_right, bottom)),
     }
     chat_left = int(w * 0.84)
-    if w - chat_left >= 180:
+    if include_chat and w - chat_left >= 180:
         rois["chat"] = image.crop((chat_left, top, int(w * 0.995), int(h * 0.95)))
     return rois
 
@@ -1032,9 +1100,18 @@ def _prefer_chat_source(line: str) -> bool:
 
 def _is_ui_noise_line(line: str) -> bool:
     lower = line.lower()
+    compact = re.sub(r"\s+", " ", lower).strip()
     if lower in {"chat", "people", "raise", "react", "camera", "mic", "share", "leave", "view", "notes"}:
         return True
     if any(term in lower for term in _UI_NOISE_TERMS):
+        return True
+    if re.search(r"https?://|www\.|zoom\.us|app\.zoom", lower):
+        return True
+    if re.search(r"\b(rec|recording)\b", lower) and re.search(r"\b(zoom|workplace|on)\b", lower):
+        return True
+    if re.search(r"\b(search|gmaps|routes|youtube|yt|fb)\b", lower) and len(compact.split()) >= 6:
+        return True
+    if re.search(r"\b(submit|answered|single choice|choice \*)\b", lower) and len(compact) <= 120:
         return True
     if re.search(r"\banimat\w*", lower):
         return True
@@ -1117,6 +1194,7 @@ def _format_visual_report(
     frames_scanned: int,
     visual_profile: str,
     requested_backend: str,
+    visual_scope: str = "slides_only",
     ocr_name: str,
     backend_note: str | None,
     ocr_calls_slide: int,
@@ -1134,6 +1212,7 @@ def _format_visual_report(
     lines = [
         title,
         f"- Visual mode: {visual_profile}",
+        f"- Visual scope: {visual_scope}",
         f"- OCR backend requested: {requested_backend}",
         f"- OCR engine used: {ocr_name}",
         f"- Frames sampled: {frames_scanned} (every {sample_seconds:.1f}s)",

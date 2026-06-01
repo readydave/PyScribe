@@ -437,6 +437,7 @@ def transcribe_prepared_audio(
         on_text(streamed_text)
 
     transcript = streamed_text
+    plain_transcript = streamed_text
     final_segments = all_segments_struct
     transcription_seconds = time.perf_counter() - transcription_started
 
@@ -462,16 +463,25 @@ def transcribe_prepared_audio(
     if use_diarization:
         diarization_started = time.perf_counter()
         try:
+            if on_diar_progress:
+                on_diar_progress(5)
+            if on_status:
+                on_status(f"Initializing diarization backend ({diar_backend})...")
+            if on_diar_progress:
+                on_diar_progress(15)
+            if on_status:
+                on_status(f"Loading diarization model on {device.upper()}...")
+            if on_diar_progress:
+                on_diar_progress(30)
             if on_status:
                 on_status(f"Running diarization ({diar_backend}) on {device.upper()} (detecting speakers)...")
-            if on_diar_progress:
-                on_diar_progress(25)
 
             def _diar_progress(value: float) -> None:
                 if cancel_event and cancel_event.is_set():
                     raise InterruptedError("Cancelled during diarization.")
                 if on_diar_progress:
-                    on_diar_progress(value)
+                    scaled = 35.0 + (max(0.0, min(100.0, float(value))) * 0.55)
+                    on_diar_progress(min(90.0, scaled))
 
             try:
                 diar_segments = _run_diarization_backend(
@@ -497,6 +507,8 @@ def transcribe_prepared_audio(
                     on_status(
                         "Diarization CUDA runtime unavailable. Retrying diarization on CPU (slower, keeps speakers)..."
                     )
+                if on_diar_progress:
+                    on_diar_progress(35)
                 try:
                     diar_segments = _run_diarization_backend(
                         audio_path=wav_path,
@@ -533,12 +545,12 @@ def transcribe_prepared_audio(
                 if on_status:
                     on_status("Diarization produced no speaker segments; continuing without speaker labels.")
                 if on_diar_progress:
-                    on_diar_progress(0)
+                    on_diar_progress(100)
             else:
                 if on_status:
                     on_status("Assigning speakers to transcript...")
                 if on_diar_progress:
-                    on_diar_progress(65)
+                    on_diar_progress(92)
 
                 from diarization import assign_speakers
 
@@ -592,7 +604,7 @@ def transcribe_prepared_audio(
     )
     return TranscriptionResult(
         transcript=transcript,
-        transcript_only=transcript,
+        transcript_only=plain_transcript,
         visual_report="",
         segments=final_segments,
         cancelled=False,
@@ -618,6 +630,7 @@ def transcribe_media_file(
     use_visual_analysis: bool = False,
     visual_profile: str = "balanced",
     visual_ocr_backend: str = "auto",
+    visual_scope: str = "slides_only",
     visual_sample_seconds: float = 1.0,
     on_status: StatusCallback | None = None,
     on_text: TextCallback | None = None,
@@ -657,6 +670,7 @@ def transcribe_media_file(
             media_path,
             ocr_backend=visual_ocr_backend,
             visual_profile=visual_profile,
+            visual_scope=visual_scope,
             sample_seconds=visual_sample_seconds,
             cancel_event=cancel_event,
             on_status=on_status,
@@ -671,7 +685,7 @@ def transcribe_media_file(
             visual.elapsed_seconds,
         )
         return TranscriptionResult(
-            transcript=text,
+            transcript="",
             transcript_only="",
             visual_report=visual.report,
             segments=[],
@@ -743,6 +757,7 @@ def transcribe_media_file(
             media_path,
             ocr_backend=visual_ocr_backend,
             visual_profile=visual_profile,
+            visual_scope=visual_scope,
             sample_seconds=visual_sample_seconds,
             cancel_event=cancel_event,
             on_status=on_status,
@@ -764,7 +779,7 @@ def transcribe_media_file(
 
         return TranscriptionResult(
             transcript=transcript_with_visual,
-            transcript_only=result.transcript,
+            transcript_only=result.transcript_only,
             visual_report=visual.report,
             segments=result.segments,
             cancelled=result.cancelled or visual.cancelled,

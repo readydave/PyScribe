@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,10 +119,12 @@ class QtLiveModeTests(unittest.TestCase):
             cpu_count=8,
         )
 
-    def _build_window(self, devices: list[object]) -> MainWindow:
+    def _build_window(self, devices: list[object], config: AppConfig | None = None) -> MainWindow:
+        if config is None:
+            config = AppConfig()
         patches = [
             patch("ui_qt.main_window.detect_runtime", return_value=self._runtime()),
-            patch("ui_qt.main_window.load_config", return_value=AppConfig()),
+            patch("ui_qt.main_window.load_config", return_value=config),
             patch("ui_qt.main_window.save_config", return_value=None),
             patch("ui_qt.main_window.list_live_audio_inputs", return_value=devices),
         ]
@@ -152,6 +155,90 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertTrue(win.pause_live_btn.isVisible())
         self.assertFalse(win.pause_live_btn.isEnabled())
         self.assertEqual(win.transcribe_btn.text(), "Start Live")
+
+    def test_speaker_checkbox_can_enable_transcription_from_visual_only_mode(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)],
+            config=AppConfig(run_mode="visual_only", use_visual_analysis=True, use_diarization=False),
+        )
+
+        self.assertFalse(win.transcribe_checkbox.isChecked())
+        self.assertTrue(win.diar_checkbox.isEnabled())
+        self.assertIn("enable audio transcription", win.diar_checkbox.toolTip())
+
+        win.diar_checkbox.setChecked(True)
+        QApplication.processEvents()
+
+        self.assertTrue(win.transcribe_checkbox.isChecked())
+        self.assertTrue(win.diar_checkbox.isChecked())
+        self.assertEqual(win._effective_service_flags()[:3], ("full", True, True))
+
+    def test_visual_only_save_all_does_not_duplicate_ocr_report(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)],
+            config=AppConfig(run_mode="visual_only", use_visual_analysis=True),
+        )
+        report = "=== Visual Analysis (Beta) ===\n- OCR text"
+        win.transcript_text = report
+        win.transcript_only_text = ""
+        win.visual_report_text = report
+
+        payload = win._save_payload_for_mode("all")
+
+        self.assertEqual(payload, (report, "all"))
+
+    def test_visual_scope_defaults_to_slides_only(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+
+        self.assertEqual(win.visual_scope_combo.currentData(), "slides_only")
+
+    def test_auto_save_writes_separate_outputs_for_all_parts(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            media_path = Path(temp_dir) / "lesson.mp4"
+            media_path.write_bytes(b"placeholder")
+            win.media_path = str(media_path)
+            win._current_run_mode = "full"
+            win._current_use_diarization = True
+            win._current_use_visual_analysis = True
+
+            visual = "=== Visual Analysis (Beta) ===\n- OCR text"
+            win._on_worker_finished(
+                False,
+                f"[S1] hello\n\n{visual}",
+                "hello",
+                visual,
+                1.0,
+                2.0,
+                3.0,
+            )
+
+            self.assertEqual((Path(temp_dir) / "lesson_transcript.txt").read_text(encoding="utf-8"), "hello")
+            self.assertEqual((Path(temp_dir) / "lesson_diarized.txt").read_text(encoding="utf-8"), "[S1] hello")
+            self.assertEqual((Path(temp_dir) / "lesson_ocr.txt").read_text(encoding="utf-8"), visual)
+
+    def test_auto_save_uses_numbered_suffix_for_existing_files(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            media_path = Path(temp_dir) / "lesson.mp4"
+            media_path.write_bytes(b"placeholder")
+            (Path(temp_dir) / "lesson_transcript.txt").write_text("existing", encoding="utf-8")
+            win.media_path = str(media_path)
+            win._current_run_mode = "full"
+            win._current_use_diarization = False
+            win._current_use_visual_analysis = True
+
+            visual = "=== Visual Analysis (Beta) ===\n- OCR text"
+            win._on_worker_finished(False, f"hello\n\n{visual}", "hello", visual, 1.0, 0.0, 3.0)
+
+            self.assertEqual((Path(temp_dir) / "lesson_transcript_1.txt").read_text(encoding="utf-8"), "hello")
+            self.assertEqual((Path(temp_dir) / "lesson_ocr.txt").read_text(encoding="utf-8"), visual)
 
     def test_loopback_mode_disables_start_without_loopback_device(self) -> None:
         win = self._build_window(
@@ -328,6 +415,30 @@ class QtLiveModeTests(unittest.TestCase):
             win._live_capture_active = False
             win._live_session = None
             win._update_live_mode_ui()
+
+    def test_live_finalizing_locks_setup_controls_and_keeps_status_visible(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+        win._live_session = _FakeLiveSession()
+        win._live_capture_active = False
+        win._live_finalizing = True
+
+        win._update_live_mode_ui()
+
+        self.assertFalse(win.transcribe_btn.isEnabled())
+        self.assertFalse(win.stop_live_btn.isEnabled())
+        self.assertFalse(win.pause_live_btn.isEnabled())
+        self.assertFalse(win.live_source_combo.isEnabled())
+        self.assertFalse(win.live_device_combo.isEnabled())
+        self.assertFalse(win.live_output_dir_input.isEnabled())
+        self.assertFalse(win.live_title_input.isEnabled())
+        self.assertIn("Finalizing", win.live_guidance_label.text())
+
+        win._live_finalizing = False
+        win._live_session = None
+        win._update_live_mode_ui()
 
     def test_live_vram_preflight_decline_cancels_start(self) -> None:
         win = self._build_window(

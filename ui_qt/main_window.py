@@ -298,6 +298,7 @@ def _transcription_process_entry(
     use_visual_analysis: bool,
     visual_profile: str,
     visual_ocr_backend: str,
+    visual_scope: str,
     visual_sample_seconds: float,
     event_queue: object,
     cancel_event: object,
@@ -323,16 +324,13 @@ def _transcription_process_entry(
                 use_visual_analysis=use_visual_analysis,
                 visual_profile=visual_profile,
                 visual_ocr_backend=visual_ocr_backend,
+                visual_scope=visual_scope,
                 visual_sample_seconds=visual_sample_seconds,
                 on_status=lambda msg: _emit("status", msg),
                 on_text=lambda text: _emit("transcript", text),
                 on_progress=lambda p: _emit("progress", max(0, min(100, int(p)))),
                 on_diar_progress=lambda p: _emit("diar_progress", max(0, min(100, int(p)))),
-                on_visual_progress=(
-                    (lambda p: _emit("progress", max(0, min(100, int(p)))))
-                    if run_mode == "visual_only"
-                    else None
-                ),
+                on_visual_progress=lambda p: _emit("visual_progress", max(0, min(100, int(p)))),
                 on_model_download_progress=lambda p: _emit("model_download_progress", max(0, min(100, int(p)))),
             )
 
@@ -365,6 +363,7 @@ class TranscriptionWorker(QObject):
     status: Signal = Signal(str)
     transcript: Signal = Signal(str)
     progress: Signal = Signal(int)
+    visual_progress: Signal = Signal(int)
     model_download_progress: Signal = Signal(int)
     diar_progress: Signal = Signal(int)
     finished: Signal = Signal(bool, str, str, str, float, float, float)
@@ -381,6 +380,7 @@ class TranscriptionWorker(QObject):
         use_visual_analysis: bool,
         visual_profile: str,
         visual_ocr_backend: str,
+        visual_scope: str,
         visual_sample_seconds: float,
         language: str | None,
     ) -> None:
@@ -394,6 +394,7 @@ class TranscriptionWorker(QObject):
         self.use_visual_analysis: bool = use_visual_analysis
         self.visual_profile: str = visual_profile
         self.visual_ocr_backend: str = visual_ocr_backend
+        self.visual_scope: str = visual_scope
         self.visual_sample_seconds: float = visual_sample_seconds
         self.language: str | None = language
         self.runtime: RuntimeInfo = detect_runtime()
@@ -488,6 +489,7 @@ class TranscriptionWorker(QObject):
                 self.use_visual_analysis,
                 self.visual_profile,
                 self.visual_ocr_backend,
+                self.visual_scope,
                 self.visual_sample_seconds,
                 event_queue,
                 cancel_event,
@@ -533,6 +535,8 @@ class TranscriptionWorker(QObject):
                         self.progress.emit(int(value))
                     elif etype == "diar_progress":
                         self.diar_progress.emit(int(value))
+                    elif etype == "visual_progress":
+                        self.visual_progress.emit(int(value))
                     elif etype == "model_download_progress":
                         self.model_download_progress.emit(int(value))
                     elif etype == "finished":
@@ -575,6 +579,8 @@ class TranscriptionWorker(QObject):
                     self.progress.emit(int(value))
                 elif etype == "diar_progress":
                     self.diar_progress.emit(int(value))
+                elif etype == "visual_progress":
+                    self.visual_progress.emit(int(value))
                 elif etype == "model_download_progress":
                     self.model_download_progress.emit(int(value))
                 elif etype == "finished" and not terminal_emitted:
@@ -706,6 +712,7 @@ class MainWindow(QMainWindow):
         self._apply_theme()
         self._set_bar_color(self.progress_bar, "#dc2626")
         self._set_bar_color(self.diar_progress_bar, "#dc2626")
+        self._set_bar_color(self.visual_progress_bar, "#dc2626")
         self.hw_metrics.connect(self.hw_metrics_label.setText)
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
         self._update_visual_ui_state(self.visual_checkbox.isChecked())
@@ -1003,10 +1010,17 @@ class MainWindow(QMainWindow):
             ocr_idx = 0
         self.visual_backend_combo.setCurrentIndex(ocr_idx)
         visual_grid.addWidget(self.visual_backend_combo, 1, 1)
-        visual_grid.addWidget(QLabel("Sample every (sec)"), 2, 0)
+        visual_grid.addWidget(QLabel("Scope"), 2, 0)
+        self.visual_scope_combo = QComboBox()
+        self.visual_scope_combo.addItem("Slides only", "slides_only")
+        self.visual_scope_combo.addItem("Slides + chat", "slides_chat")
+        scope_idx = self.visual_scope_combo.findData(str(getattr(self.config, "visual_scope", "slides_only") or "slides_only").lower())
+        self.visual_scope_combo.setCurrentIndex(max(scope_idx, 0))
+        visual_grid.addWidget(self.visual_scope_combo, 2, 1)
+        visual_grid.addWidget(QLabel("Sample every (sec)"), 3, 0)
         self.visual_interval_input = QLineEdit()
         self.visual_interval_input.setText(f"{float(self.config.visual_sample_seconds or 1.0):.1f}")
-        visual_grid.addWidget(self.visual_interval_input, 2, 1)
+        visual_grid.addWidget(self.visual_interval_input, 3, 1)
         advanced_layout.addWidget(self.visual_options_widget)
         advanced_layout.addStretch(1)
 
@@ -1085,6 +1099,11 @@ class MainWindow(QMainWindow):
         self.diar_progress_bar.setValue(0)
         self.diar_progress_bar.setFormat("Diarization %p%")
         progress_layout.addWidget(self.diar_progress_bar)
+        self.visual_progress_bar = QProgressBar()
+        self.visual_progress_bar.setRange(0, 100)
+        self.visual_progress_bar.setValue(0)
+        self.visual_progress_bar.setFormat("Visual analysis %p%")
+        progress_layout.addWidget(self.visual_progress_bar)
 
         self.terminal_log = QPlainTextEdit()
         self.terminal_log.setObjectName("TerminalLog")
@@ -2650,6 +2669,7 @@ class MainWindow(QMainWindow):
             use_visual_analysis=False,
             visual_profile="balanced",
             visual_ocr_backend="auto",
+            visual_scope="slides_only",
             visual_sample_seconds=1.0,
             language=session.options.language,
         )
@@ -2692,6 +2712,7 @@ class MainWindow(QMainWindow):
         self._current_run_mode = run_mode
         self.progress_bar.setValue(0)
         self.diar_progress_bar.setValue(0)
+        self.visual_progress_bar.setValue(0)
         self.transcription_time_label.setText("Transcription time: --")
         self.diar_time_label.setText("Diarization time: --")
         self.visual_time_label.setText("Visual analysis time: --")
@@ -2780,6 +2801,7 @@ class MainWindow(QMainWindow):
             self.stop_hw_monitor()
             return
         visual_sample_seconds = self._parse_visual_sample_seconds()
+        visual_scope = str(self.visual_scope_combo.currentData() or "slides_only").strip().lower() or "slides_only"
         config_updates: dict[str, object] = {
             "run_mode": run_mode,
             "use_diarization": use_diarization,
@@ -2788,6 +2810,7 @@ class MainWindow(QMainWindow):
             "use_visual_analysis": use_visual_analysis,
             "visual_profile": visual_profile,
             "visual_ocr_backend": visual_ocr_backend,
+            "visual_scope": visual_scope,
             "visual_sample_seconds": visual_sample_seconds,
         }
         if model_name:
@@ -2803,6 +2826,7 @@ class MainWindow(QMainWindow):
             use_visual_analysis=use_visual_analysis,
             visual_profile=visual_profile,
             visual_ocr_backend=visual_ocr_backend,
+            visual_scope=visual_scope,
             visual_sample_seconds=visual_sample_seconds,
             language=forced_language,
         )
@@ -2819,6 +2843,7 @@ class MainWindow(QMainWindow):
         use_visual_analysis: bool,
         visual_profile: str,
         visual_ocr_backend: str,
+        visual_scope: str,
         visual_sample_seconds: float,
         language: str | None,
     ) -> None:
@@ -2833,6 +2858,7 @@ class MainWindow(QMainWindow):
             use_visual_analysis=use_visual_analysis,
             visual_profile=visual_profile,
             visual_ocr_backend=visual_ocr_backend,
+            visual_scope=visual_scope,
             visual_sample_seconds=visual_sample_seconds,
             language=language,
         )
@@ -2844,6 +2870,7 @@ class MainWindow(QMainWindow):
         self.worker.progress.connect(self._on_transcription_progress)
         self.worker.model_download_progress.connect(self._on_model_download_progress)
         self.worker.diar_progress.connect(self._on_diar_progress)
+        self.worker.visual_progress.connect(self._on_visual_progress)
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.failed.connect(self._on_worker_failed)
         self.worker.finished.connect(self.worker_thread.quit)
@@ -2906,13 +2933,10 @@ class MainWindow(QMainWindow):
         self._append_terminal_log(text)
         if text.startswith("Diarization unavailable"):
             self.diarization_warning = text
-        # Pyannote diarization can be a long blocking stage; show busy indicator instead of a stuck 25%.
-        if "Running diarization" in text and self.diar_progress_bar.maximum() != 0:
-            self.diar_progress_bar.setRange(0, 0)
-        elif "Assigning speakers" in text and self.diar_progress_bar.maximum() == 0:
-            self.diar_progress_bar.setRange(0, 100)
-            self.diar_progress_bar.setValue(65)
-            self._set_bar_color(self.diar_progress_bar, self._progress_color(65))
+        if "Running diarization" in text and self.diar_progress_bar.value() < 30:
+            self._on_diar_progress(30)
+        elif "Assigning speakers" in text and self.diar_progress_bar.value() < 92:
+            self._on_diar_progress(92)
 
     @Slot(bool, str, str, str, float, float, float)
     def _on_worker_finished(
@@ -2932,10 +2956,11 @@ class MainWindow(QMainWindow):
             transcription_seconds,
             diarization_seconds,
         )
-        self.transcript_text = transcript
         self.transcript_only_text = transcript_only
         self.visual_report_text = visual_report
-        self.text_area.setPlainText(transcript)
+        display_text = visual_report if self._current_run_mode == "visual_only" and visual_report else transcript
+        self.transcript_text = display_text
+        self.text_area.setPlainText(display_text)
         self.transcribe_btn.setEnabled(True)
         self.stop_live_btn.setEnabled(False)
         self.pause_live_btn.setEnabled(False)
@@ -2944,9 +2969,14 @@ class MainWindow(QMainWindow):
         self.stop_hw_monitor()
         self.progress_bar.setRange(0, 100)
         self.diar_progress_bar.setRange(0, 100)
+        self.visual_progress_bar.setRange(0, 100)
         if not cancelled:
-            self.progress_bar.setValue(100)
-            self._set_bar_color(self.progress_bar, self._progress_color(100))
+            if self._current_run_mode in {"full", "transcribe_only"}:
+                self.progress_bar.setValue(100)
+                self._set_bar_color(self.progress_bar, self._progress_color(100))
+            if self._current_use_visual_analysis:
+                self.visual_progress_bar.setValue(100)
+                self._set_bar_color(self.visual_progress_bar, self._progress_color(100))
         done = "Cancelled."
         if not cancelled:
             if self._current_run_mode == "visual_only":
@@ -3010,6 +3040,9 @@ class MainWindow(QMainWindow):
                 self._update_queue_summary()
                 return
 
+        if not cancelled:
+            self._auto_save_completed_parts(transcript=transcript, transcript_only=transcript_only, visual_report=visual_report)
+
         if transcript or visual_report:
             self.save_btn.setEnabled(True)
             self.copy_btn.setEnabled(True)
@@ -3034,6 +3067,8 @@ class MainWindow(QMainWindow):
         self.stop_hw_monitor()
         self.progress_bar.setRange(0, 100)
         self.diar_progress_bar.setRange(0, 100)
+        self.visual_progress_bar.setRange(0, 100)
+        self.visual_progress_bar.setValue(0)
         self.status_label.setText("Error")
         self._append_terminal_log(f"Error: {error_msg}")
         self.transcription_time_label.setText("Transcription time: --")
@@ -3065,6 +3100,13 @@ class MainWindow(QMainWindow):
         self._set_bar_color(self.progress_bar, self._progress_color(value))
 
     @Slot(int)
+    def _on_visual_progress(self, value: int) -> None:
+        if self.visual_progress_bar.maximum() == 0:
+            self.visual_progress_bar.setRange(0, 100)
+        self.visual_progress_bar.setValue(value)
+        self._set_bar_color(self.visual_progress_bar, self._progress_color(value))
+
+    @Slot(int)
     def _on_diar_progress(self, value: int) -> None:
         if self.diar_progress_bar.maximum() == 0 and value < 100:
             # Keep busy state if backend does not emit granular values.
@@ -3076,7 +3118,8 @@ class MainWindow(QMainWindow):
 
     @Slot(bool)
     def _update_diar_ui_state(self, enabled: bool) -> None:
-        del enabled
+        if enabled and not self._is_live_mode() and not self.transcribe_checkbox.isChecked():
+            self.transcribe_checkbox.setChecked(True)
         _, allow_transcription, _, _ = self._effective_service_flags()
         diarization_supported = self._selected_model_supports_diarization()
         diar_controls_enabled = bool(allow_transcription and diarization_supported)
@@ -3104,7 +3147,9 @@ class MainWindow(QMainWindow):
         visual_controls_enabled = not self._is_live_mode()
         self.visual_profile_combo.setEnabled(visual_controls_enabled)
         self.visual_backend_combo.setEnabled(visual_controls_enabled)
+        self.visual_scope_combo.setEnabled(visual_controls_enabled)
         self.visual_interval_input.setEnabled(visual_controls_enabled)
+        self.visual_progress_bar.setEnabled(bool(self.visual_checkbox.isChecked() and visual_controls_enabled))
         self._update_service_visibility()
 
     @Slot(bool)
@@ -3178,10 +3223,11 @@ class MainWindow(QMainWindow):
         diarization_supported = self._selected_model_supports_diarization()
         if not diarization_supported and self.diar_checkbox.isChecked():
             self.diar_checkbox.setChecked(False)
-        self.progress_bar.setVisible(show_main_progress)
+        self.progress_bar.setVisible(allow_transcription)
         self.transcription_time_label.setVisible(allow_transcription)
         self.diar_progress_bar.setVisible(run_diarization)
         self.diar_time_label.setVisible(run_diarization)
+        self.visual_progress_bar.setVisible(run_visual)
         self.visual_time_label.setVisible(run_visual)
 
         controls_idle = not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing
@@ -3189,11 +3235,15 @@ class MainWindow(QMainWindow):
         self.input_mode_combo.setEnabled(not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing)
         self.transcribe_checkbox.setEnabled(not live_mode and controls_idle)
         self.transcribe_checkbox.setChecked(True if live_mode else self.transcribe_checkbox.isChecked())
-        self.diar_checkbox.setEnabled(allow_transcription and diarization_supported and not self._live_capture_active)
+        self.diar_checkbox.setEnabled(diarization_supported and controls_idle and not self._live_capture_active)
         self.diar_checkbox.setToolTip(
             ""
-            if diarization_supported
-            else "Granite Speech is transcript-only in PyScribe and does not provide timestamps for speaker attribution."
+            if diarization_supported and allow_transcription
+            else (
+                "Checking speaker identification will also enable audio transcription."
+                if diarization_supported
+                else "Granite Speech is transcript-only in PyScribe and does not provide timestamps for speaker attribution."
+            )
         )
         self.visual_checkbox.setVisible(not live_mode)
         self.visual_options_widget.setVisible(not live_mode)
@@ -3203,6 +3253,7 @@ class MainWindow(QMainWindow):
             self.diar_progress_bar.setEnabled(False)
             self.visual_profile_combo.setEnabled(False)
             self.visual_backend_combo.setEnabled(False)
+            self.visual_scope_combo.setEnabled(False)
             self.visual_interval_input.setEnabled(False)
         else:
             diar_controls_enabled = run_diarization and diarization_supported
@@ -3212,10 +3263,11 @@ class MainWindow(QMainWindow):
             self.max_speakers_input.setEnabled(diar_controls_enabled and not self._live_capture_active)
             self.visual_profile_combo.setEnabled(not live_mode and not self._is_transcription_running())
             self.visual_backend_combo.setEnabled(not live_mode and not self._is_transcription_running())
+            self.visual_scope_combo.setEnabled(not live_mode and not self._is_transcription_running())
             self.visual_interval_input.setEnabled(not live_mode and not self._is_transcription_running())
 
         if mode == "visual_only":
-            self.progress_bar.setFormat("Visual analysis %p%")
+            self.visual_progress_bar.setFormat("Visual analysis %p%")
         elif live_mode and self._live_capture_active:
             self.progress_bar.setFormat("Live transcription")
         else:
@@ -3644,8 +3696,12 @@ class MainWindow(QMainWindow):
                 pass
 
     def _save_payload_for_mode(self, mode: str) -> tuple[str, str] | None:
-        transcript_part = (self.transcript_only_text or self.transcript_text or "").strip()
         ocr_part = (self.visual_report_text or "").strip()
+        transcript_part = (self.transcript_only_text or "").strip()
+        if not transcript_part:
+            fallback_transcript = (self.transcript_text or "").strip()
+            if fallback_transcript and fallback_transcript != ocr_part:
+                transcript_part = fallback_transcript
 
         if mode == "transcript":
             if not transcript_part:
@@ -3672,6 +3728,81 @@ class MainWindow(QMainWindow):
         if transcript_part:
             return transcript_part, "all"
         return ocr_part, "all"
+
+    def _auto_save_completed_parts(self, *, transcript: str, transcript_only: str, visual_report: str) -> None:
+        if self._is_live_mode() or not self.media_path:
+            return
+        selected_count = int(self._current_run_mode in {"full", "transcribe_only"}) + int(self._current_use_diarization) + int(self._current_use_visual_analysis)
+        if selected_count < 2:
+            return
+
+        output_dir = self._default_output_dir()
+        if output_dir is None:
+            return
+
+        stem = os.path.splitext(os.path.basename(self.media_path))[0] or "transcript"
+        plain_transcript = (transcript_only or "").strip()
+        diarized_transcript = self._strip_visual_report(transcript, visual_report).strip()
+        ocr_text = (visual_report or "").strip()
+        outputs: list[tuple[str, str]] = []
+        if self._current_run_mode in {"full", "transcribe_only"} and plain_transcript:
+            outputs.append(("transcript", plain_transcript))
+        if self._current_use_diarization and diarized_transcript:
+            outputs.append(("diarized", diarized_transcript))
+        if self._current_use_visual_analysis and ocr_text:
+            outputs.append(("ocr", ocr_text))
+        if len(outputs) < 2:
+            return
+
+        saved: list[str] = []
+        for suffix, content in outputs:
+            path = self._next_available_output_path(output_dir, f"{stem}_{suffix}.txt")
+            try:
+                path.write_text(content, encoding="utf-8")
+            except OSError as exc:
+                LOGGER.warning("Auto-save failed for %s: %s", path, exc, exc_info=True)
+                self._append_terminal_log(f"Auto-save failed for {path.name}: {exc}")
+                continue
+            saved.append(path.name)
+        if saved:
+            self.last_save_dir = str(output_dir)
+            self._save_config()
+            message = f"Auto-saved outputs: {', '.join(saved)}"
+            self.status_label.setText(message)
+            self._append_terminal_log(message)
+
+    def _default_output_dir(self) -> Path | None:
+        if self.media_path:
+            media_dir = Path(self.media_path).resolve().parent
+            if media_dir.is_dir():
+                return media_dir
+        if self.last_save_dir:
+            save_dir = Path(self.last_save_dir).expanduser()
+            if save_dir.is_dir():
+                return save_dir
+        return None
+
+    @staticmethod
+    def _strip_visual_report(transcript: str, visual_report: str) -> str:
+        text = (transcript or "").strip()
+        report = (visual_report or "").strip()
+        if report and text.endswith(report):
+            return text[: -len(report)].strip()
+        return text
+
+    @staticmethod
+    def _next_available_output_path(directory: Path, filename: str) -> Path:
+        candidate = directory / filename
+        if not candidate.exists():
+            return candidate
+        stem = candidate.stem
+        suffix = candidate.suffix
+        for idx in range(1, 1000):
+            numbered = directory / f"{stem}_{idx}{suffix}"
+            if not numbered.exists():
+                return numbered
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        return directory / f"{stem}_{timestamp}{suffix}"
 
     def save_output(self, mode: str = "all") -> None:
         payload = self._save_payload_for_mode(mode)
@@ -3803,6 +3934,7 @@ class MainWindow(QMainWindow):
         use_visual_analysis: bool | object = _UNSET,
         visual_profile: str | object = _UNSET,
         visual_ocr_backend: str | object = _UNSET,
+        visual_scope: str | object = _UNSET,
         visual_sample_seconds: float | object = _UNSET,
         live_source_mode: str | object = _UNSET,
         live_input_device_id: str | None | object = _UNSET,
@@ -3828,6 +3960,8 @@ class MainWindow(QMainWindow):
                 self.config.visual_profile = str(visual_profile)
             if visual_ocr_backend is not _UNSET:
                 self.config.visual_ocr_backend = str(visual_ocr_backend)
+            if visual_scope is not _UNSET:
+                self.config.visual_scope = str(visual_scope)
             if visual_sample_seconds is not _UNSET:
                 self.config.visual_sample_seconds = float(visual_sample_seconds)
             if live_source_mode is not _UNSET:

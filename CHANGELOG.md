@@ -8,6 +8,9 @@ The format is inspired by Keep a Changelog.
 
 ### Added
 
+- Qt now shows visual/OCR progress in a dedicated progress bar separate from audio transcription progress.
+- Qt multi-part processing runs now auto-save separate transcript, diarized transcript, and/or OCR output files beside the source media.
+- Qt visual analysis now includes a scope selector for slides-only OCR versus slides-plus-chat OCR.
 - Qt transcription drop zone now supports a full-area mouse click to open the file browser, in addition to the explicit browse button.
 - Application logging now consolidates all output for the current session into a single `pyscribe.log` file, with automatic timestamped archiving of previous logs on startup.
 - Automatic log rotation that keeps only the 21 most recent log files to manage disk space.
@@ -15,6 +18,9 @@ The format is inspired by Keep a Changelog.
 
 ### Changed
 
+- Transcription progress now remains dedicated to audio transcription when OCR is also enabled.
+- Visual analysis defaults to slides-only OCR, applies lower frame caps for long videos, and prefers faster OCR backends in auto mode for long-video runs.
+- Speaker identification progress now uses determinate staged progress updates instead of an indeterminate scrolling progress bar.
 - Qt speaker identification mode (backend) selection is now saved immediately to the configuration when changed.
 - Qt "Browse Files" button in the drop zone updated with a modern pill-shaped design, explicit minimum height, and improved text visibility for all themes.
 - Diarization compatibility now includes `soundfile`-backed shims for modern Torchaudio metadata/loading APIs, including missing `torchaudio.info` and TorchCodec-backed loading paths.
@@ -24,6 +30,8 @@ The format is inspired by Keep a Changelog.
 
 ### Fixed
 
+- Fixed visual-only `Save All` output duplicating the visual-analysis report.
+- Visual OCR output now filters more persistent Zoom/browser UI chrome from webinar recordings.
 - Fixed a bug where the speaker mode dropdown would stay disabled after the hardware probe finished, requiring a manual toggle of the "Identify Speakers" checkbox to re-enable.
 - Fixed Qt live mode after a completed final post-pass so starting another live session keeps the Live Capture controls visible, restores the **Start Live** idle state, and shows **Stop** during the next active capture.
 - Fixed a race condition where the diarization backend selection would be reset to default when the background hardware probe completed.

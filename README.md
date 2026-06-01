@@ -172,8 +172,8 @@ Note: Interactive LAN mode no longer uses a default password. Set
 
 - **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. Modern Torchaudio compatibility shims provide `soundfile` fallbacks for metadata/loading APIs removed or changed in Torchaudio 2.9+ / 2.11. If diarization fails or produces no speaker segments, transcription completes without speaker labels instead of emitting `[S?]` lines.
 - **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` while showing rolling transcript text, supports **Pause / Resume** within the same session, and runs a final file-based cleanup pass when you press **Stop**. Optional Session Title values can name live session outputs, and **Rename with Title** can apply a title after recording. Cancel asks for confirmation and preserves the session folder/audio when accepted. Speaker identification, when enabled, runs only in that final pass. Granite remains file-only.
-- **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles and `auto`, `rapidocr`, `paddleocr`, `surya`, or `pytesseract` OCR backend selection.
-- **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`.
+- **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles, slides-only or slides+chat scope, and `auto`, `rapidocr`, `paddleocr`, `surya`, or `pytesseract` OCR backend selection. Long videos use lower frame caps and faster auto backend preference to keep webinar OCR practical.
+- **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`. When multiple processing parts are enabled, Qt also auto-saves separate `<stem>_transcript.txt`, `<stem>_diarized.txt`, and/or `<stem>_ocr.txt` files beside the source media.
 - **Benchmarking:** Qt Tools menu includes benchmark runner for bundled sample media.
 - **LLM post-processing:** Qt Tools menu includes connection management plus post-process actions.
 

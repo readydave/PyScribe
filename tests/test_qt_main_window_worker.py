@@ -10,7 +10,8 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QApplication
 
 from services.model_service import RuntimeInfo
-from ui_qt.main_window import TranscriptionWorker
+from services.transcription_service import TranscriptionResult
+from ui_qt.main_window import TranscriptionWorker, _transcription_process_entry
 
 
 class _FakeQueue:
@@ -33,6 +34,14 @@ class _FakeEvent:
 
     def set(self) -> None:
         self._set = True
+
+
+class _CollectingQueue:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def put(self, event: dict[str, object]) -> None:
+        self.events.append(event)
 
 
 class _FakeProcess:
@@ -115,6 +124,7 @@ class QtMainWindowWorkerTests(unittest.TestCase):
                 use_visual_analysis=False,
                 visual_profile="balanced",
                 visual_ocr_backend="auto",
+                visual_scope="slides_only",
                 visual_sample_seconds=1.0,
                 language=None,
             )
@@ -144,6 +154,49 @@ class QtMainWindowWorkerTests(unittest.TestCase):
 
         self.assertEqual(finished, [])
         self.assertEqual(errors, ["Worker process exited unexpectedly (exit code 1)."])
+
+    def test_process_entry_routes_visual_progress_separately(self) -> None:
+        queue_obj = _CollectingQueue()
+
+        def _fake_transcribe_media_file(**kwargs):
+            kwargs["on_progress"](12)
+            kwargs["on_visual_progress"](34)
+            return TranscriptionResult(
+                transcript="combined",
+                transcript_only="plain",
+                visual_report="ocr",
+                segments=[],
+                cancelled=False,
+                duration_seconds=1.0,
+                transcription_seconds=1.0,
+                diarization_seconds=0.0,
+                visual_analysis_seconds=2.0,
+            )
+
+        with patch("ui_qt.main_window.transcribe_media_file", side_effect=_fake_transcribe_media_file):
+            _transcription_process_entry(
+                "/tmp/example.mp4",
+                "base",
+                "full",
+                "cpu",
+                "int8",
+                None,
+                False,
+                "off",
+                None,
+                True,
+                "balanced",
+                "auto",
+                "slides_only",
+                1.0,
+                queue_obj,
+                _FakeEvent(),
+            )
+
+        event_types = [event["type"] for event in queue_obj.events]
+        self.assertIn("progress", event_types)
+        self.assertIn("visual_progress", event_types)
+        self.assertEqual([event["value"] for event in queue_obj.events if event["type"] == "visual_progress"], [34])
 
 
 if __name__ == "__main__":

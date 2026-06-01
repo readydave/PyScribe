@@ -138,6 +138,32 @@ class TranscriptionServiceTests(unittest.TestCase):
         self.assertEqual(load_model_mock.call_args.kwargs["model_spec"], spec)
         self.assertFalse(transcribe_mock.call_args.kwargs["use_diarization"])
 
+    def test_transcribe_media_file_visual_only_keeps_report_out_of_transcript_field(self) -> None:
+        fake_multimodal = SimpleNamespace(
+            analyze_video_stream=lambda *args, **kwargs: _FakeVisualResult(
+                report="=== Visual Analysis (Beta) ===\n- OCR text",
+                available=True,
+                cancelled=False,
+                elapsed_seconds=1.25,
+            )
+        )
+
+        with patch.dict(sys.modules, {"services.multimodal_service": fake_multimodal}):
+            result = transcribe_media_file(
+                media_path="clip.mp4",
+                model_name="base",
+                run_mode="visual_only",
+                device="cpu",
+                compute_type="int8",
+                cancel_event=threading.Event(),
+                use_visual_analysis=True,
+                visual_scope="slides_only",
+            )
+
+        self.assertEqual(result.transcript, "")
+        self.assertEqual(result.transcript_only, "")
+        self.assertIn("OCR text", result.visual_report)
+
     def test_transcribe_prepared_audio_retries_diarization_on_cpu_after_cuda_runtime_error(self) -> None:
         statuses: list[str] = []
 
@@ -228,7 +254,8 @@ class TranscriptionServiceTests(unittest.TestCase):
         self.assertNotIn("[S?]", result.transcript)
         self.assertEqual(result.segments[0].get("speaker"), None)
         self.assertIn("Diarization produced no speaker segments", "\n".join(statuses))
-        self.assertEqual(diar_progress[-1], 0)
+        self.assertEqual(diar_progress[-1], 100)
+        self.assertIn(30, diar_progress)
 
     def test_transcribe_prepared_audio_successful_diarization_formats_speaker_labels(self) -> None:
         class _FakeSegment:

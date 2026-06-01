@@ -128,7 +128,7 @@ In live mode:
 - If diarization fails or produces no speaker segments, PyScribe keeps the plain transcript instead of filling the output with `[S?]` speaker labels.
 - Diarization progress bar:
   - Disabled when transcription is off.
-  - Shows indeterminate state during long diarization operations.
+  - Uses staged determinate progress for backend initialization, model loading, inference, speaker assignment, and completion.
 
 ### Visual Analysis Controls
 
@@ -142,9 +142,13 @@ In live mode:
   - `surya`
   - `pytesseract`
   - `auto` (best available fallback)
+- **Scope**:
+  - `Slides only` (default; avoids noisy chat/meeting side panels)
+  - `Slides + chat` (captures the right-side chat/panel crop when useful)
 - **Sample every (sec)**:
   - Lower values = more frame coverage, slower runtime.
   - Clamped to `0.5` to `10.0`.
+- Long videos use lower frame caps and prefer faster auto OCR backends to reduce webinar OCR runtime.
 
 Fallback behavior:
 
@@ -175,6 +179,11 @@ Fallback behavior:
   - **Save OCR Only**
 - Save dialog defaults to source media folder when available.
 - Last open/save directories are remembered.
+- When two or more processing parts are enabled, PyScribe automatically saves separate part files beside the source media where possible:
+  - `<stem>_transcript.txt`
+  - `<stem>_diarized.txt`
+  - `<stem>_ocr.txt`
+  - Existing files are preserved with numbered suffixes.
 
 ### Status + Timing
 
@@ -185,6 +194,7 @@ Fallback behavior:
 - Progress bars:
   - transcription progress
   - diarization progress
+  - visual analysis progress
 - Timing labels:
   - transcription time
   - diarization time

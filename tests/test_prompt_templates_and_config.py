@@ -165,6 +165,7 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
         self.assertFalse(cfg.llm_allow_remote_lan)
         self.assertEqual(cfg.llm_profiles, [])
         self.assertEqual(cfg.visual_ocr_backend, "auto")
+        self.assertEqual(cfg.visual_scope, "slides_only")
         self.assertEqual(cfg.live_source_mode, "microphone")
         self.assertIsNone(cfg.live_input_device_id)
         self.assertIsNone(cfg.live_output_dir)
@@ -180,6 +181,7 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
             llm_ocr_fallback_for_images_default=True,
             llm_payload_preview_required=False,
             llm_allow_remote_lan=True,
+            visual_scope="slides_chat",
             live_source_mode="loopback",
             live_input_device_id="monitor-1",
             live_output_dir="/tmp/pyscribe-live",
@@ -198,6 +200,7 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
         self.assertTrue(reloaded.llm_ocr_fallback_for_images_default)
         self.assertFalse(reloaded.llm_payload_preview_required)
         self.assertTrue(reloaded.llm_allow_remote_lan)
+        self.assertEqual(reloaded.visual_scope, "slides_chat")
         self.assertEqual(reloaded.live_source_mode, "loopback")
         self.assertEqual(reloaded.live_input_device_id, "monitor-1")
         self.assertEqual(reloaded.live_output_dir, "/tmp/pyscribe-live")

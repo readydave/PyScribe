@@ -335,30 +335,39 @@ python processes (check Task Manager / `ps`).
 ## Phase 4 — Packaging, install paths & listener hardening (as motivation allows)
 
 ### P4.1 `[ ]` Declare dependencies in `pyproject.toml` (F3) [XOS]
+**Decision (D2 resolved):** NVIDIA GPU is the only supported product target.
+No CPU-only install path, no `requirements-cpu.txt`. CPU execution remains a
+*fallback/retry path at runtime* (existing CUDA→CPU retries stay) and a *CI
+test vehicle* (Tier B installs CPU torch to run tests) — but it is not a
+documented install target, and README should say "NVIDIA GPU with CUDA 12+
+required" plainly rather than "highly recommended".
 - `[project] dependencies`: the true core (faster-whisper, ffmpeg-python,
   numpy, PySide6, gradio, requests, PyYAML, Pillow, psutil, huggingface-hub,
-  ctranslate2, tqdm) — *unpinned or loosely pinned* (`>=` floors).
+  ctranslate2, tqdm) — *unpinned or loosely pinned* (`>=` floors). Torch stays
+  out of core: it is installed via the documented two-step cu121 index install
+  (extras can't carry `--index-url`).
 - `[project.optional-dependencies]`:
-  - `gpu`: torch/torchvision/torchaudio (documented as "install from the cu121
-    index"; extras can't carry `--index-url`, so README shows the two-step)
   - `diarization`: `pyannote.audio`
   - `ocr`: `pytesseract`, `paddleocr`, `paddlepaddle`
   - `granite`: `transformers`, `peft`
   - `dev`: `pytest`, `ruff`
 - Keep `requirements.txt` as the pinned GPU-dev lockfile (add a header comment
-  saying exactly that). Add `requirements-cpu.txt` (same pins minus `+cu121`
-  wheels, using the CPU index).
+  saying exactly that).
 - Gate optional imports: transcribing with Granite when `transformers` isn't
   installed must produce a clear "install pyscribe[granite]" error, not an
   ImportError traceback. Same for diarization backends (diar availability
   probing already exists — reuse its reasons).
-**Verify:** fresh venv per OS: `pip install .` → `pyscribe --help` works;
-`pip install .[dev]` → Tier A tests pass; CPU-only venv transcribes the
-bundled benchmark MP3 with model `tiny`.
+**Verify:** fresh venv per OS: torch two-step + `pip install .` →
+`pyscribe --help` works and transcribes the bundled benchmark MP3 with model
+`tiny`; `pip install .[dev]` → Tier A tests pass.
 
 ### P4.2 `[ ]` Listener per-session cancel state (F5)
-- Decision gate (see Open Decisions D1). Default plan: keep
-  `default_concurrency_limit=1`, but key cancellation to the running job:
+**Decision (D1 resolved):** multi-user LAN was a loose future idea with no
+confirmed use case. Plan accordingly: do the cheap correctness work now (this
+task) so the door stays open, but build nothing multi-user-specific beyond it
+(no per-user prefs, no user-scoped job queues) unless a real use case shows
+up. Plan: keep `default_concurrency_limit=1`, but key cancellation to the
+running job:
   generate a job id per `transcribe()` call, store the active job id +
   `threading.Event` in a small module-level registry, and have the Cancel
   handler receive the session's job id via `gr.State` so it only cancels its
@@ -380,9 +389,9 @@ bundled benchmark MP3 with model `tiny`.
   `fcntl.flock` behind one helper, or adopt `filelock` (pure-python, tiny) as
   a dependency. Don't build this before measuring that it's still a problem.
 
-**Phase 4 exit criteria:** `pip install .` works on both OSes; CPU-only path
-documented and smoke-tested; two browser sessions on a LAN listener can't
-cancel each other's jobs.
+**Phase 4 exit criteria:** `pip install .` works on both OSes (after the
+documented torch two-step); README states the NVIDIA GPU requirement plainly;
+two browser sessions on a LAN listener can't cancel each other's jobs.
 
 ---
 
@@ -418,11 +427,14 @@ cancel each other's jobs.
 
 ## Open decisions (defaults an agent may assume if unanswered)
 
-- **D1 — LAN listener concurrency:** Is multi-user LAN use real?
-  *Default if unanswered:* single-operator assumption is fine, but still do
-  P4.2's job-id cancel keying (cheap, removes a footgun).
-- **D2 — CPU-only support tier:** Supported target or best-effort?
-  *Default:* best-effort but installable (P4.1 as written).
+- **D1 — LAN listener concurrency: RESOLVED (2026-07-17).** Multi-user LAN
+  was "eventually planned" but has no confirmed use case. Do P4.2's job-id
+  cancel keying (cheap correctness + keeps the door open); build nothing
+  further for multi-user unless a concrete use case emerges.
+- **D2 — CPU-only support tier: RESOLVED (2026-07-17).** Not a target.
+  NVIDIA GPU is the supported configuration; CPU remains only a runtime
+  fallback path and a CI test vehicle. P4.1 updated accordingly
+  (no `requirements-cpu.txt`).
 - **D3 — `pyscribe` console script:** keep and fix (P4.1) or remove?
   *Default:* keep and fix.
 - **D4 — Windows live capture:** invest or label Linux-only?

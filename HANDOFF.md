@@ -124,7 +124,16 @@ recommendation: `services/catalog_service.py`), `utils.py`
 **Verify:** Qt and listener model dropdowns show the same list as before
 (manually compare); new drift test passes.
 
-### P0.4 `[ ]` Minimal real-test CI job (F1)
+### P0.4 `[~]` Minimal real-test CI job (F1)
+*(implemented 2026-07-18: 8 modules / 52 tests green locally in a minimal
+venv (`pytest pyyaml requests huggingface-hub==0.36.0`); awaiting first CI
+run on both runners to confirm. Deferred to P1.2 (heavy transitive imports):
+`test_listener_llm_postprocess_helpers` (gradio),
+`test_llm_postprocess_service` (ffmpeg/multimodal),
+`test_model_download_service`, `test_model_service`,
+`test_live_vram_service`, `test_transcription_service`, `test_diarization`,
+and all Qt/numpy modules. Latent note: `hf_auth_service` uses `HfFolder`,
+removed in huggingface-hub 1.x — pin matters until that's modernized.)*
 **Files:** `.github/workflows/ci.yml`
 - Add a `unit-tests` job (ubuntu + windows matrix) that installs only
   `pytest pyyaml requests` and runs the test modules that already work without

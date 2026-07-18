@@ -634,7 +634,7 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
     if not base_url:
         LOGGER.warning("Skipping profile '%s' with empty base_url", name)
         return None
-    base_url = _normalize_base_url_for_profile(provider, base_url)
+    base_url = _normalize_base_url(provider, base_url)
     timeout_seconds = _as_float(raw.get("timeout_seconds"), default=8.0, min_value=1.0, max_value=120.0)
     return LLMConnectionProfile(
         name=name,
@@ -668,31 +668,6 @@ def evaluate_profile_scope_policy(profile: LLMConnectionProfile) -> tuple[bool, 
     if tls_policy_error is not None:
         return False, tls_policy_error, _failure_detail(tls_policy_error)
     return True, None, None
-
-
-def _normalize_base_url_for_profile(provider: str, base_url: str) -> str:
-    """
-    Defensive wrapper around URL normalization used during profile parsing.
-
-    Some stale/hot-reload runtimes can surface NameError for helper symbols.
-    Keep parsing resilient so the UI can continue and report validation errors
-    instead of crashing.
-    """
-    normalizer = globals().get("_normalize_base_url")
-    if callable(normalizer):
-        return normalizer(provider, base_url)
-
-    LOGGER.warning("LLM base URL normalizer helper missing at runtime; using fallback parser.")
-    text = str(base_url or "").strip()
-    try:
-        parsed = urlparse.urlparse(text)
-    except Exception:
-        return text
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return text
-    if provider in {"openai_compatible", "lm_studio"} and parsed.path.rstrip("/") == "/v1":
-        return urlparse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
-    return text
 
 
 def _check_scope_policy(*, profile: LLMConnectionProfile, parsed_url: urlparse.ParseResult) -> str | None:

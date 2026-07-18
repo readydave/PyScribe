@@ -169,7 +169,8 @@ shows no logic changes (spot-check the worker/live-mode files carefully).
 buttons still work in browser on another machine (LAN test if possible); old
 files pruned; `grep -rn pyperclip` only in CHANGELOG.
 
-### P0.7 `[ ]` Inline `_normalize_base_url` (review misc)
+### P0.7 `[x]` Inline `_normalize_base_url` (review misc)
+*(done 2026-07-18; `tests/test_llm_connection_service.py` green)*
 **Files:** `services/llm_connection_service.py`
 - Remove the `globals().get("_normalize_base_url")` indirection and its
   fallback branch in `_normalize_base_url_for_profile`; call the helper

@@ -8,6 +8,15 @@ The format is inspired by Keep a Changelog.
 
 ### Added
 
+- Config file saves are now atomic, and an unreadable/corrupt config file is
+  quarantined to `.pyscribe_config.json.bad-<timestamp>` instead of being
+  silently replaced, preserving LLM profiles and preferences for recovery.
+- `small.en` is now selectable in model dropdowns (it previously had tier
+  metadata but was missing from the choice lists).
+- Locally cached model detection now honors `HF_HOME` /
+  `HUGGINGFACE_HUB_CACHE` instead of assuming the default cache location.
+
+
 - Qt now shows visual/OCR progress in a dedicated progress bar separate from audio transcription progress.
 - Qt multi-part processing runs now auto-save separate transcript, diarized transcript, and/or OCR output files beside the source media.
 - Qt visual analysis now includes a scope selector for slides-only OCR versus slides-plus-chat OCR.
@@ -18,6 +27,8 @@ The format is inspired by Keep a Changelog.
 
 ### Changed
 
+- Listener transcript and LLM-output saves now go to `~/.pyscribe/exports/` (created private on POSIX) instead of the shared system temp directory, and exports older than 7 days are cleaned up at listener startup.
+- Removed the listener's server-side "Copy to Clipboard" buttons: they copied to the host machine's clipboard, not the browser's. Use the text boxes' built-in copy controls instead. The `pyperclip` dependency is no longer required.
 - Transcription progress now remains dedicated to audio transcription when OCR is also enabled.
 - Visual analysis defaults to slides-only OCR, applies lower frame caps for long videos, and prefers faster OCR backends in auto mode for long-video runs.
 - Speaker identification progress now uses determinate staged progress updates instead of an indeterminate scrolling progress bar.

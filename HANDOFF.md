@@ -152,7 +152,9 @@ locally to confirm the job actually fails.
 **Verify:** `ruff check .` clean; CI green; `git diff` of the format commit
 shows no logic changes (spot-check the worker/live-mode files carefully).
 
-### P0.6 `[ ]` Listener export directory + clipboard fix (F9) [XOS]
+### P0.6 `[~]` Listener export directory + clipboard fix (F9) [XOS]
+*(implemented 2026-07-18; helpers verified (dir/0700/cleanup/save) with real
+gradio import; needs a live browser download check + Windows verify)*
 **Files:** `app.py`, `docs/user_guide.md`, `CHANGELOG.md`
 - Replace `tempfile.gettempdir()` in `save_transcript` /
   `save_postprocess_output` with `~/.pyscribe/exports/` (create with

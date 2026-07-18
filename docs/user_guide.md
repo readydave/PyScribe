@@ -308,8 +308,10 @@ Visibility of controls adapts to run mode and toggles.
 
 - **Transcribe**: starts run.
 - **Cancel** (shown during active run): sets cancellation flag.
-- **Copy to Clipboard**
-- **Save Transcript**: prepares downloadable text file.
+- **Save Transcript**: prepares downloadable text file. Saved exports are
+  written under `~/.pyscribe/exports/` on the host machine and cleaned up
+  automatically after 7 days. Use the text box's built-in copy control to
+  copy transcript text in the browser.
 - **LLM Post-Processing (Beta)**:
   - Pick configured LLM profile + prompt template.
   - Test connection and fetch model list.
@@ -317,7 +319,8 @@ Visibility of controls adapts to run mode and toggles.
   - Optionally upload OCR/context text, add extra notes, include pasted context, and attach images.
   - Enable/disable image include and OCR fallback behavior for text-only models.
   - Preview final request payload before sending to the configured model.
-  - Run post-processing and save/copy generated output.
+  - Run post-processing and save generated output (exports follow the same
+    `~/.pyscribe/exports/` location and cleanup as transcript saves).
 
 ### Listener Outputs
 

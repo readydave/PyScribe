@@ -8,12 +8,10 @@ import logging
 import os
 import socket
 import sys
-import tempfile
 import threading
 from typing import Any, Callable
 
 import gradio as gr
-import pyperclip
 from services.listener_security_service import (
     reject_legacy_auth_pass_flag,
     resolve_listener_auth,
@@ -621,6 +619,37 @@ def transcribe(
     final_done = "Visual analysis complete!" if run_mode == "visual_only" else "Transcription complete!"
     yield f"Status: {final_badge} {final_done}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), final_done
 
+EXPORTS_MAX_AGE_DAYS = 7
+
+
+def _exports_dir() -> str:
+    """Returns the per-user listener exports directory, creating it if needed."""
+    exports = os.path.join(os.path.expanduser("~"), ".pyscribe", "exports")
+    os.makedirs(exports, exist_ok=True)
+    try:
+        os.chmod(exports, 0o700)
+    except OSError:
+        # Windows and some filesystems do not support POSIX modes.
+        pass
+    return exports
+
+
+def _cleanup_old_exports(max_age_days: int = EXPORTS_MAX_AGE_DAYS) -> None:
+    """Best-effort removal of export files older than max_age_days."""
+    cutoff = datetime.datetime.now().timestamp() - max_age_days * 86400
+    try:
+        entries = os.scandir(_exports_dir())
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            try:
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    os.unlink(entry.path)
+            except OSError:
+                continue
+
+
 def save_transcript(transcript: str, audio_path: Any, model_name: str) -> str | None:
     if not transcript:
         gr.Info("Nothing to save.")
@@ -628,7 +657,7 @@ def save_transcript(transcript: str, audio_path: Any, model_name: str) -> str | 
 
     try:
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        
+
         if audio_path is not None:
             source_path = audio_path.name if hasattr(audio_path, "name") else str(audio_path)
             base_name = os.path.splitext(os.path.basename(source_path))[0]
@@ -636,15 +665,13 @@ def save_transcript(transcript: str, audio_path: Any, model_name: str) -> str | 
             base_name = "transcript"
 
         safe_model_name = model_name.replace("/", "-")
-        
-        # Create a temporary file to save the transcript
-        temp_dir = tempfile.gettempdir()
-        save_path = os.path.join(temp_dir, f"{ts}_{base_name}_{safe_model_name}.txt")
+
+        save_path = os.path.join(_exports_dir(), f"{ts}_{base_name}_{safe_model_name}.txt")
 
         with open(save_path, "w", encoding="utf-8") as transcript_file:
             transcript_file.write(transcript)
-        
-        gr.Info(f"Transcript ready for download.")
+
+        gr.Info("Transcript ready for download.")
         return save_path
 
     except (OSError, AttributeError) as e:
@@ -658,18 +685,13 @@ def save_postprocess_output(postprocess_output: str, template_id: str) -> str | 
     try:
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         safe_template = str(template_id or "postprocess").strip().replace("/", "-")
-        temp_dir = tempfile.gettempdir()
-        save_path = os.path.join(temp_dir, f"postprocess_{safe_template}_{ts}.md")
+        save_path = os.path.join(_exports_dir(), f"postprocess_{safe_template}_{ts}.md")
         with open(save_path, "w", encoding="utf-8") as output_file:
             output_file.write(postprocess_output)
         gr.Info("Post-processed output ready for download.")
         return save_path
     except OSError as exc:
         raise gr.Error(f"Could not save file: {exc}")
-
-def copy_to_clipboard(text: str) -> None:
-    pyperclip.copy(text)
-    gr.Info("Copied to clipboard!")
 
 def set_cancel_flag() -> None:
     _cancel_event.set()
@@ -839,7 +861,6 @@ def create_interface() -> gr.Blocks:
                     max_lines=15,
                 )
                 with gr.Row():
-                    copy_btn = gr.Button("Copy to Clipboard")
                     save_btn = gr.Button("Save Transcript")
                 download_file = gr.File(label="Download Transcript", interactive=False)
                 final_status_output = gr.Textbox(label="", interactive=False)
@@ -918,7 +939,6 @@ def create_interface() -> gr.Blocks:
                     llm_payload_preview_output = gr.Textbox(label="LLM payload preview", interactive=True, lines=10, max_lines=16)
                     llm_output = gr.Textbox(label="LLM output", interactive=True, lines=12, max_lines=18)
                     with gr.Row():
-                        llm_copy_btn = gr.Button("Copy LLM Output")
                         llm_save_btn = gr.Button("Save LLM Output")
                     llm_download_file = gr.File(label="Download LLM Output", interactive=False)
 
@@ -975,11 +995,6 @@ def create_interface() -> gr.Blocks:
             inputs=[transcript_output, audio_input, model_dropdown],
             outputs=[download_file]
         )
-        copy_btn.click(
-            fn=copy_to_clipboard,
-            inputs=[transcript_output],
-            outputs=[]
-        )
         llm_source_mode.change(
             fn=_update_postprocess_source_fields,
             inputs=[llm_source_mode],
@@ -1031,11 +1046,6 @@ def create_interface() -> gr.Blocks:
             ],
             outputs=[llm_status_output, llm_output],
         )
-        llm_copy_btn.click(
-            fn=copy_to_clipboard,
-            inputs=[llm_output],
-            outputs=[],
-        )
         llm_save_btn.click(
             fn=save_postprocess_output,
             inputs=[llm_output, llm_template_dropdown],
@@ -1056,6 +1066,7 @@ def launch_listener(
     on_start: Callable[[int], None] | None = None,
 ) -> int:
     _ensure_listener_runtime()
+    _cleanup_old_exports()
     iface = create_interface()
     # Serialize jobs so only one transcription runs at a time on the host.
     iface.queue(default_concurrency_limit=1, max_size=queue_size)

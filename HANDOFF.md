@@ -51,7 +51,18 @@ session; each task is scoped to be completed and verified independently.
   cross-OS verify on Windows for any task marked **[XOS]**. If you only have
   one OS available, mark the task `[~]` with a note ("needs Windows verify")
   instead of `[x]`.
+- **Stop rule:** if any Verify step fails, stop — do not merge the phase
+  branch and do not start the next task. Either fix it within the task's
+  commit or mark the task `[!]` with a written note of the failure (an issue
+  or a note in this file) before moving on. A failed Verify that gets merged
+  anyway is the one way this plan goes bad.
 - Update the checkboxes in this file as part of the commits.
+- **Docs DoD:** every phase merge includes a CHANGELOG entry; user-visible
+  changes also update README / `docs/user_guide.md` / `docs/qt_help.md` per
+  ground rule 4. Treat this as part of each phase's exit criteria.
+- Time estimates are deliberately optimistic pacing guides, not commitments —
+  cross-OS verification is the usual source of slip. Slipping is fine;
+  skipping Verify to hold the estimate is not.
 
 ---
 
@@ -113,8 +124,12 @@ recommendation: `services/catalog_service.py`), `utils.py`
   heavy deps. Determine the exact list by trial: expected candidates are
   `test_prompt_templates_and_config.py`, `test_security_hardening.py`,
   `test_listener_llm_postprocess_helpers.py`, `test_llm_connection_service.py`,
-  `test_launcher.py`. If a candidate pulls in numpy/Qt transitively, skip it
-  here and note it as Phase 1 work.
+  `test_launcher.py`.
+- **Fallback rule (do not let this block Phase 0):** any candidate that pulls
+  in numpy/Qt transitively is dropped from this job on the spot, listed in a
+  short "deferred to P1.2" note in this file, and handled by the Phase 1
+  import-untangling work. P0.4 is done when *at least three* modules run
+  green on both OS runners — more is a bonus, not the bar.
 - Keep the existing smoke job unchanged.
 **Verify:** CI green on both OS runners; deliberately break a config test
 locally to confirm the job actually fails.
@@ -195,10 +210,12 @@ imports numpy at module level), `tests/*`
   runtime needs them even offscreen). Run `pytest -m "qt or pipeline"`.
 - Accept that this job is slow (~5–10 min). Run it on `pull_request` only, not
   every push, if it becomes annoying.
-- **Windows Tier B is stretch goal:** add `windows-latest` to the matrix only
-  after the Linux job is stable; PySide6 offscreen works on Windows runners
-  but torch download time may be prohibitive — timebox it, and if it's painful
-  keep Windows at Tier A + `py_compile` of all files.
+- **Windows Tier B is a stretch goal with kill criteria:** attempt
+  `windows-latest` only after the Linux job is stable, and give it at most
+  two working attempts. If either attempt exceeds ~15 minutes wall time or
+  fails on torch install/download, stop: keep Windows at Tier A +
+  `compileall` permanently (that is D5's default, not a failure), record the
+  outcome here, and move on.
 
 ### P1.4 `[ ]` Compile-all replaces the hand-maintained file lists
 **Files:** `.github/workflows/ci.yml`, `tests/smoke_cli.py`
@@ -266,11 +283,14 @@ Windows [XOS].
 
 ### P2.6 `[ ]` Extract `ui_qt/hw_monitor.py`
 - Move `start_hw_monitor` / `stop_hw_monitor` / `_hw_monitor_worker` into a
-  `HardwareMonitor(QObject)` with a `sample` signal. It currently runs a raw
-  `threading.Thread` touching labels — ensure the extraction routes updates
-  through signals (thread→GUI safety), which is likely already the pattern;
-  if it mutates widgets directly from the thread, FIX that here (latent
-  cross-thread bug).
+  `HardwareMonitor(QObject)` with a `sample` signal.
+- **Prescribed pattern:** `HardwareMonitor` lives on a `QThread` (worker-object
+  pattern, same as `TranscriptionWorker`), emits a `sample(dict)` signal, and
+  never touches widgets; MainWindow connects the signal to a slot that updates
+  labels on the GUI thread. If the current code mutates widgets directly from
+  its raw `threading.Thread`, that is a latent cross-thread bug — fixing it is
+  in scope for this task, using exactly this pattern (do not invent a third
+  threading style).
 
 **Phase 2 exit criteria:** `main_window.py` ≤ ~1,200 lines; all extracted
 modules importable without instantiating MainWindow; Tier B CI green; manual
@@ -359,7 +379,9 @@ required" plainly rather than "highly recommended".
   probing already exists — reuse its reasons).
 **Verify:** fresh venv per OS: torch two-step + `pip install .` →
 `pyscribe --help` works and transcribes the bundled benchmark MP3 with model
-`tiny`; `pip install .[dev]` → Tier A tests pass.
+`tiny`; `pip install .[dev]` → Tier A tests pass; and
+`pip install .[diarization,ocr,granite,dev]` resolves and installs cleanly
+(the combined-extras case is where dependency conflicts hide).
 
 ### P4.2 `[ ]` Listener per-session cancel state (F5)
 **Decision (D1 resolved):** multi-user LAN was a loose future idea with no
@@ -397,15 +419,25 @@ two browser sessions on a LAN listener can't cancel each other's jobs.
 
 ## Phase 5 — Deferred / opportunistic
 
-- `[ ]` Windows live-capture support decision (Open Decision D4): either
-  implement WASAPI loopback verification or explicitly label live mode
+Ordered roughly by value; pick from the top when there's spare time.
+
+- **P5.1** `[ ]` Focused review of `services/multimodal_service.py` (1,278
+  lines) and `diar_backends.py` — the two modules the July 2026 review
+  explicitly did NOT deep-read (low-confidence areas). Do this after the
+  Phase 3 process-worker refactor: check for dead code, cross-OS path/subprocess
+  issues, and whether either should adopt `SpawnedJob`. Output: findings note
+  appended to `docs/architecture_review_2026-07.md` or a follow-up doc.
+- **P5.2** `[ ]` Windows live-capture support decision (Open Decision D4):
+  either implement WASAPI loopback verification or explicitly label live mode
   "Linux only" in the UI instead of "Linux-first".
-- `[ ]` `mypy` on `services/` only (the layer with the best typing already).
-- `[ ]` Ratchet ruff rules (add `B`, `UP`, `SIM` families module-by-module).
-- `[ ]` Logging: per-process log filenames for concurrent app launches
-  (review misc; rare scenario).
-- `[ ]` Listener UI parity for output save modes via `output_service` seam
-  from P2.5.
+- **P5.3** `[ ]` Listener UI parity for output save modes via the
+  `output_service` seam from P2.5.
+- **P5.4** `[ ]` `mypy` on `services/` only (the layer with the best typing
+  already).
+- **P5.5** `[ ]` Ratchet ruff rules (add `B`, `UP`, `SIM` families
+  module-by-module).
+- **P5.6** `[ ]` Logging: per-process log filenames for concurrent app
+  launches (review misc; rare scenario).
 
 ---
 

@@ -18,8 +18,6 @@ from difflib import SequenceMatcher
 from threading import Event
 from typing import Callable, Iterable
 
-import ffmpeg
-
 from services.model_download_service import ensure_hf_repo_local_dir_verified
 from services.runtime_env_service import configure_runtime_environment
 from utils import get_ffmpeg_cmd
@@ -440,6 +438,8 @@ def analyze_video_stream(
 
 
 def _has_video_stream(media_path: str) -> bool:
+    import ffmpeg
+
     try:
         probe = ffmpeg.probe(media_path)
         streams = probe.get("streams", [])
@@ -449,6 +449,8 @@ def _has_video_stream(media_path: str) -> bool:
 
 
 def _get_video_duration_seconds(media_path: str) -> float | None:
+    import ffmpeg
+
     try:
         probe = ffmpeg.probe(media_path)
     except Exception:

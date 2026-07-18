@@ -6,8 +6,6 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import torch
-
 from .granite_speech_service import load_granite_model
 from .model_download_service import normalize_model_name, resolve_repo_id
 
@@ -44,6 +42,10 @@ _MODEL_CACHE: dict[tuple[str, str, str], Any] = {}
 
 def detect_runtime() -> RuntimeInfo:
     """Detects hardware/runtime info used for model defaults."""
+    # Heavy import stays function-local so importing this module for model
+    # metadata does not require torch.
+    import torch
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     gpu_name = "N/A"
     vram_gb = 0.0

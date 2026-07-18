@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("PySide6")
+
+pytestmark = pytest.mark.qt
+
 import os
 import threading
 import unittest

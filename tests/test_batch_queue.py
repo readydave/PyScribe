@@ -1,3 +1,9 @@
+
+import pytest
+
+pytest.importorskip("PySide6")
+
+pytestmark = pytest.mark.qt
 import os
 import tempfile
 import unittest

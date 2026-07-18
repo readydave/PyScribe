@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("numpy")
+pytest.importorskip("PySide6")
+
+pytestmark = pytest.mark.qt
+
 import json
 import queue
 import tempfile

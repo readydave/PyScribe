@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("gradio")
+
+pytestmark = pytest.mark.pipeline
+
 import unittest
 from unittest.mock import patch
 

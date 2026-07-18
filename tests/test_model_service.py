@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 import unittest
 
 from services.model_service import model_supports_diarization, resolve_transcription_model

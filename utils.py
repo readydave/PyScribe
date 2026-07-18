@@ -1,11 +1,15 @@
 # utils.py
 # Helper functions for PyScribe application.
 
+from __future__ import annotations
+
 import os
 import shutil
 import sys
+from typing import TYPE_CHECKING
 
-import numpy as np
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def get_ffmpeg_cmd(tool: str = "ffmpeg") -> str | None:
@@ -50,6 +54,7 @@ def load_audio_waveform(file_path: str) -> np.ndarray:
     which is the format expected by Whisper models.
     """
     import ffmpeg
+    import numpy as np
 
     try:
         out, _ = (

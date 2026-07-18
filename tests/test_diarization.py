@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("numpy")
+pytest.importorskip("soundfile")
+pytest.importorskip("torch")
+
+pytestmark = pytest.mark.pipeline
+
 import tempfile
 import unittest
 from unittest.mock import patch

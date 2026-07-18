@@ -382,22 +382,3 @@ def run_diarization(
     return segments
 
 
-def assign_speakers(asr_segments: list[Segment], spk_segments: list[Segment]) -> list[Segment]:
-    """
-    Assigns a speaker label to each ASR segment based on maximum overlap.
-    Returns updated ASR segments with 'speaker' key.
-    """
-
-    def overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
-        return max(0.0, min(a_end, b_end) - max(a_start, b_start))
-
-    for seg in asr_segments:
-        best_spk = None
-        best_ov = 0.0
-        for spk in spk_segments:
-            ov = overlap(seg["start"], seg["end"], spk["start"], spk["end"])
-            if ov > best_ov:
-                best_ov = ov
-                best_spk = spk["speaker"]
-        seg["speaker"] = best_spk or "S?"
-    return asr_segments

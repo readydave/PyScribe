@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip("PySide6")
+pytest.importorskip("numpy")
+
+pytestmark = pytest.mark.qt
+
 import os
 import tempfile
 import unittest

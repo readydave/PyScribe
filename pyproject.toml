@@ -37,9 +37,18 @@ select = ["E", "F", "W", "I"]
 # would churn files Phase 2 is about to restructure.
 ignore = ["E501"]
 
+[tool.pytest.ini_options]
+markers = [
+  "unit: dependency-light tests (stdlib + pyyaml/requests/huggingface-hub only)",
+  "qt: tests requiring PySide6 (run offscreen in CI)",
+  "pipeline: tests requiring heavy ML deps (torch, gradio, soundfile)",
+]
+
 [tool.ruff.lint.per-file-ignores]
 # Package __init__ modules may re-export names for the public API.
 "__init__.py" = ["F401"]
+# pytest.importorskip guards must run before the guarded imports.
+"tests/*" = ["E402"]
 # String annotations reference lazily-imported heavy modules (PIL, numpy)
 # that are intentionally not imported at module level.
 "services/multimodal_service.py" = ["F821"]

@@ -310,6 +310,27 @@ def _probe_duration_seconds(wav_path: str) -> float:
         return 0.0
 
 
+def assign_speakers(asr_segments: list[dict], spk_segments: list[dict]) -> list[dict]:
+    """
+    Assigns a speaker label to each ASR segment based on maximum overlap.
+    Returns updated ASR segments with 'speaker' key.
+    """
+
+    def overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+        return max(0.0, min(a_end, b_end) - max(a_start, b_start))
+
+    for seg in asr_segments:
+        best_spk = None
+        best_ov = 0.0
+        for spk in spk_segments:
+            ov = overlap(seg["start"], seg["end"], spk["start"], spk["end"])
+            if ov > best_ov:
+                best_ov = ov
+                best_spk = spk["speaker"]
+        seg["speaker"] = best_spk or "S?"
+    return asr_segments
+
+
 def _format_speaker_transcript(segments: list[dict]) -> str:
     lines = []
     for seg in segments:
@@ -547,8 +568,6 @@ def transcribe_prepared_audio(
                     on_status("Assigning speakers to transcript...")
                 if on_diar_progress:
                     on_diar_progress(92)
-
-                from diarization import assign_speakers
 
                 final_segments = assign_speakers(all_segments_struct, diar_segments)
                 transcript = _format_speaker_transcript(final_segments)

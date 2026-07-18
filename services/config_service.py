@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,10 +46,26 @@ DEFAULT_CONFIG_PATH = Path.home() / ".pyscribe_config.json"
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
-    """Loads config from disk with safe defaults."""
+    """Loads config from disk with safe defaults.
+
+    A missing file returns defaults silently. An unreadable/unparseable file is
+    quarantined (renamed to ``<name>.bad-<timestamp>``) before defaults are
+    returned, so a later save cannot silently destroy a recoverable config.
+    """
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+        raw_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return AppConfig()
+    except OSError as exc:
+        LOGGER.warning("Config unreadable at %s: %s", path, exc)
+        return AppConfig()
+
+    try:
+        data = json.loads(raw_text)
+        if not isinstance(data, dict):
+            raise ValueError(f"expected a JSON object, got {type(data).__name__}")
+    except Exception as exc:
+        _quarantine_bad_config(path, reason=str(exc))
         return AppConfig()
 
     return AppConfig(
@@ -81,11 +102,13 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
 
 
 def save_config(config: AppConfig, path: Path = DEFAULT_CONFIG_PATH) -> None:
-    """Saves config to disk."""
+    """Saves config to disk atomically (write temp file, then replace)."""
     payload = asdict(config)
     # Preserve path preferences if caller did not explicitly set them.
     try:
         existing = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(existing, dict):
+            existing = {}
     except Exception:
         existing = {}
     if not payload.get("last_open_dir"):
@@ -93,7 +116,50 @@ def save_config(config: AppConfig, path: Path = DEFAULT_CONFIG_PATH) -> None:
     if not payload.get("last_save_dir"):
         payload["last_save_dir"] = existing.get("last_save_dir")
     payload["llm_profiles"] = _sanitize_llm_profiles_for_storage(payload.get("llm_profiles"))
-    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload))
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_config_file(tmp_path, path)
+    except OSError as exc:
+        LOGGER.warning("Config save failed at %s: %s", path, exc)
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _replace_config_file(tmp_path: Path, path: Path) -> None:
+    """Atomically replaces the config file, retrying once on Windows locks."""
+    try:
+        os.replace(tmp_path, path)
+    except PermissionError:
+        # Windows: another process may briefly hold the file open.
+        time.sleep(0.1)
+        os.replace(tmp_path, path)
+
+
+def _quarantine_bad_config(path: Path, *, reason: str) -> None:
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    bad_path = path.with_name(f"{path.name}.bad-{timestamp}")
+    try:
+        os.replace(path, bad_path)
+        LOGGER.warning(
+            "Config at %s could not be parsed (%s); moved to %s and using defaults.",
+            path,
+            reason,
+            bad_path,
+        )
+    except OSError as exc:
+        LOGGER.warning(
+            "Config at %s could not be parsed (%s) and quarantine rename failed (%s); using defaults.",
+            path,
+            reason,
+            exc,
+        )
 
 
 def _as_optional_int(value: object) -> int | None:

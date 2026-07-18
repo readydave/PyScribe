@@ -72,7 +72,9 @@ Goal: protect user data, remove landmines, and get *something* meaningful into
 CI before structural refactoring starts. No behavior changes visible to a
 happy-path user.
 
-### P0.1 `[ ]` Atomic config writes + corruption quarantine (F4) [XOS]
+### P0.1 `[~]` Atomic config writes + corruption quarantine (F4) [XOS]
+*(implemented + Linux tests green 2026-07-18; needs Windows verify — the
+PermissionError retry path in `_replace_config_file` in particular)*
 **Files:** `services/config_service.py`, `tests/` (new Tier A test)
 - `save_config`: serialize to `path.with_name(path.name + ".tmp")`, `flush` +
   `os.fsync`, then `os.replace(tmp, path)`. Wrap in try/except; on failure log

@@ -411,9 +411,41 @@ running job:
   `fcntl.flock` behind one helper, or adopt `filelock` (pure-python, tiny) as
   a dependency. Don't build this before measuring that it's still a problem.
 
+### P4.5 `[ ]` Full documentation audit (closeout)
+The per-task docs rule keeps docs in sync with *changes made by this plan*;
+this task catches everything else — pre-existing drift and cross-document
+inconsistency accumulated over Phases 0–4. Do it last in Phase 4 (or first
+thing in Phase 5 if Phase 4 drags).
+- Sweep every committed doc against actual shipped behavior:
+  `README.md`, `docs/user_guide.md`, `docs/qt_help.md`, `PROJECT.md`
+  (architecture overview + fragile-areas list — module names change in
+  Phase 2), `STACK.md`, `CONTRIBUTING.md` (test commands change in Phase 1),
+  `SECURITY.md` cross-references (policy text itself stays untouched per
+  ground rule 5), `assets/prompts/README.md`, and the systemd example unit.
+- Specific known checks:
+  - README "Testing" section must show the tiered pytest commands from
+    Phase 1, not the old two-command example.
+  - README "CLI / Packaging" section must match P4.1 reality (extras,
+    torch two-step, the note about undeclared packaged data).
+  - PROJECT.md architecture overview must list the new `ui_qt/` and
+    `services/` modules from Phases 2–3.
+  - Screenshots: retake any that no longer match the UI; otherwise note
+    their date.
+  - `docs/qt_help.md` (in-app help) reflects any renamed controls.
+- Method: open each doc side-by-side with the app/code and mark every claim
+  as verified/fixed/removed. Commit per document or per small group.
+- Update `docs/architecture_review_2026-07.md` with a short "status as of
+  completion" postscript listing which findings were resolved (F1–F10) so the
+  review doc doesn't read as a list of open problems forever.
+- Finally, archive this file's role: mark remaining unstarted items as moved
+  to PROJECT.md's roadmap (or explicitly dropped), so HANDOFF.md ends as a
+  record, not a stale to-do list.
+
 **Phase 4 exit criteria:** `pip install .` works on both OSes (after the
 documented torch two-step); README states the NVIDIA GPU requirement plainly;
-two browser sessions on a LAN listener can't cancel each other's jobs.
+two browser sessions on a LAN listener can't cancel each other's jobs;
+P4.5 documentation audit complete (every committed doc verified against
+shipped behavior).
 
 ---
 

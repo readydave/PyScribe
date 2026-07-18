@@ -263,6 +263,15 @@ imports numpy at module level), `tests/*`
 `pytest -m "qt or pipeline"` green on ubuntu CI; zero test modules that run in
 no CI job (document any deliberate exceptions here).
 
+**Phase 1 status (2026-07-18): COMPLETE (pending first CI run of the new
+job).** Unit tier: 14 modules / 101 tests (up from 8/52) after lazy-import
+fixes (torch out of model_service top level, ffmpeg out of multimodal probes,
+numpy out of utils, assign_speakers moved to transcription_service). Qt +
+pipeline tier: 8 modules / 58 tests, verified locally offscreen (libpulse0
+needed for QtMultimedia — added to the CI job's apt installs). Every test
+module now runs in exactly one CI tier; none are orphaned. Windows Tier B
+not attempted (D5 default stands).
+
 ---
 
 ## Phase 2 — Decompose `ui_qt/main_window.py` (est. several weekends, incremental)

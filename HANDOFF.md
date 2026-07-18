@@ -150,7 +150,11 @@ removed in huggingface-hub 1.x — pin matters until that's modernized.)*
 **Verify:** CI green on both OS runners; deliberately break a config test
 locally to confirm the job actually fails.
 
-### P0.5 `[ ]` Add ruff + CI lint step (F10)
+### P0.5 `[x]` Add ruff + CI lint step (F10)
+*(done 2026-07-18: config in pyproject (E,F,W,I; E501 deferred to P5.5),
+mechanical fix+format commit verified with 52 tests + import checks, lint
+job in CI. Bonus real fixes surfaced by lint: missing QMouseEvent import,
+three dead locals.)*
 **Files:** `pyproject.toml` (`[tool.ruff]`), `.github/workflows/ci.yml`
 - Start permissive: line-length 120, rule set `E,F,W,I` (errors, pyflakes,
   warnings, import sort). Run `ruff check --fix` + `ruff format` once across

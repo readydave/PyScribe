@@ -26,3 +26,22 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 include = ["services*", "ui_qt*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+# E501 (line length) deferred to the Phase 5 ruff ratchet; enforcing it now
+# would churn files Phase 2 is about to restructure.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Package __init__ modules may re-export names for the public API.
+"__init__.py" = ["F401"]
+# String annotations reference lazily-imported heavy modules (PIL, numpy)
+# that are intentionally not imported at module level.
+"services/multimodal_service.py" = ["F821"]
+# sys.path setup must precede repo imports in the test bootstrap.
+"tests/test_launcher.py" = ["E402"]

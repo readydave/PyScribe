@@ -676,7 +676,6 @@ def transcribe_media_file(
             on_status=on_status,
             on_progress=on_visual_progress,
         )
-        text = visual.report if visual.report else ""
         LOGGER.info(
             "Job[%s] visual-only completed cancelled=%s visual_available=%s visual_seconds=%.2f",
             job_id,

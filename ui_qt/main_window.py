@@ -14,7 +14,18 @@ from _thread import LockType
 from pathlib import Path
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QObject, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QFont, QKeySequence, QPalette
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDropEvent,
+    QFont,
+    QKeySequence,
+    QMouseEvent,
+    QPalette,
+)
 from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
 from PySide6.QtWidgets import (
     QSizePolicy,
@@ -2034,9 +2045,7 @@ class MainWindow(QMainWindow):
         
         self._update_queue_summary()
         
-        # Re-use existing transcription logic
-        # We need to temporarily set self.media_path so start_transcription uses it
-        original_media_path = self.media_path
+        # Re-use existing transcription logic via self.media_path.
         self.media_path = item.path
         
         try:
@@ -3219,7 +3228,6 @@ class MainWindow(QMainWindow):
     def _update_service_visibility(self) -> None:
         mode, allow_transcription, run_diarization, run_visual = self._effective_service_flags()
         live_mode = self._is_live_mode()
-        show_main_progress = allow_transcription or run_visual
         diarization_supported = self._selected_model_supports_diarization()
         if not diarization_supported and self.diar_checkbox.isChecked():
             self.diar_checkbox.setChecked(False)

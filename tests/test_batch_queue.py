@@ -134,9 +134,12 @@ class TestBatchQueueMainWindowLogic(unittest.TestCase):
             subfolder = os.path.join(tmpdir, "subfolder")
             
             os.makedirs(subfolder)
-            with open(a_mp3, "w") as f: f.write("")
-            with open(b_txt, "w") as f: f.write("")
-            with open(c_mp4, "w") as f: f.write("")
+            with open(a_mp3, "w") as f:
+                f.write("")
+            with open(b_txt, "w") as f:
+                f.write("")
+            with open(c_mp4, "w") as f:
+                f.write("")
             
             results = self.win._scan_folder_for_media(tmpdir)
             self.assertEqual(len(results), 2)
@@ -150,8 +153,10 @@ class TestBatchQueueMainWindowLogic(unittest.TestCase):
             inner_wav = os.path.join(folder, "inner.wav")
             
             os.makedirs(folder)
-            with open(direct_mp3, "w") as f: f.write("")
-            with open(inner_wav, "w") as f: f.write("")
+            with open(direct_mp3, "w") as f:
+                f.write("")
+            with open(inner_wav, "w") as f:
+                f.write("")
             
             paths = [direct_mp3, folder]
             

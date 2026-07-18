@@ -7,32 +7,6 @@ import shutil
 
 import numpy as np
 
-def get_available_hf_models() -> list[str]:
-    """Gets a list of curated HF models and any locally cached ones."""
-    popular_models = [
-        "Systran/faster-whisper-tiny.en",
-        "Systran/faster-whisper-base.en",
-        "Systran/faster-whisper-small.en",
-        "Systran/faster-whisper-medium.en",
-        "Systran/faster-whisper-large-v3",
-        "ibm-granite/granite-4.0-1b-speech",
-        "deepdml/faster-whisper-large-v3-turbo-ct2",
-        "distil-whisper/distil-large-v3",
-        "guillaumekln/whisper-large-v2-ct2",
-        "guillaumekln/whisper-large-v3-ct2",
-    ]
-    
-    local_models: list[str] = []
-    cache_dir = os.path.expanduser("~/.cache/huggingface/hub/")
-    if os.path.isdir(cache_dir):
-        for item in os.listdir(cache_dir):
-            if item.startswith("models--Systran--faster-whisper"):
-                model_id = item.replace("models--", "").replace("--", "/")
-                local_models.append(model_id)
-    
-    all_models = sorted(list(set(popular_models + local_models)))
-    return all_models
-
 def get_ffmpeg_cmd(tool: str = "ffmpeg") -> str | None:
     """
     Finds the path to an ffmpeg tool (ffmpeg, ffprobe, or ffplay).

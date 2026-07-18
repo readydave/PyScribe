@@ -6,8 +6,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Callable
 
-from diarization import run_diarization as run_pyannote
-
 ProgressCB = Optional[Callable[[float], None]]
 StatusCB = Optional[Callable[[str], None]]
 
@@ -21,6 +19,26 @@ class BackendAvailability:
 def _bump(cb: ProgressCB, value: float) -> None:
     if cb:
         cb(min(max(value, 0), 100))
+
+
+def run_pyannote(
+    audio_path: str,
+    device: str,
+    max_speakers: Optional[int],
+    progress_cb: ProgressCB = None,
+    status_cb: StatusCB = None,
+) -> List[Dict]:
+    # Heavy import (torch/torchaudio) stays function-local so that importing
+    # this module for catalog/availability checks needs no ML dependencies.
+    from diarization import run_diarization
+
+    return run_diarization(
+        audio_path,
+        device=device,
+        max_speakers=max_speakers,
+        progress_cb=progress_cb,
+        status_cb=status_cb,
+    )
 
 
 def run_pyannote_fast(

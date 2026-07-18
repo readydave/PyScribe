@@ -105,7 +105,10 @@ Windows verify is a formality — pure deletion)*
 returns nothing outside docs; `python -c "import utils"` works in a venv
 without Tk; smoke tests pass.
 
-### P0.3 `[ ]` Consolidate the model catalog (F8)
+### P0.3 `[x]` Consolidate the model catalog (F8)
+*(done 2026-07-18; choice set verified identical to old union except the
+intended `+small.en` drift fix; also made `diar_backends`→`diarization`
+import lazy so catalog/availability checks need no torch)*
 **Files:** `models.py` or `services/catalog_service.py` (pick ONE owner —
 recommendation: `services/catalog_service.py`), `utils.py`
 - Move `utils.get_available_hf_models`'s curated `popular_models` list and the

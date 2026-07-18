@@ -73,8 +73,11 @@ CI before structural refactoring starts. No behavior changes visible to a
 happy-path user.
 
 ### P0.1 `[~]` Atomic config writes + corruption quarantine (F4) [XOS]
-*(implemented + Linux tests green 2026-07-18; needs Windows verify — the
-PermissionError retry path in `_replace_config_file` in particular)*
+*(implemented 2026-07-18; tests green on Linux AND on windows-latest via the
+P0.4 CI job, which covers the os.replace atomic path and quarantine rename on
+real Windows. Remaining before `[x]`: the locked-file PermissionError retry
+(not unit-testable cheaply) and one manual Qt-launch check on a Windows
+machine)*
 **Files:** `services/config_service.py`, `tests/` (new Tier A test)
 - `save_config`: serialize to `path.with_name(path.name + ".tmp")`, `flush` +
   `os.fsync`, then `os.replace(tmp, path)`. Wrap in try/except; on failure log
@@ -124,10 +127,11 @@ recommendation: `services/catalog_service.py`), `utils.py`
 **Verify:** Qt and listener model dropdowns show the same list as before
 (manually compare); new drift test passes.
 
-### P0.4 `[~]` Minimal real-test CI job (F1)
-*(implemented 2026-07-18: 8 modules / 52 tests green locally in a minimal
-venv (`pytest pyyaml requests huggingface-hub==0.36.0`); awaiting first CI
-run on both runners to confirm. Deferred to P1.2 (heavy transitive imports):
+### P0.4 `[x]` Minimal real-test CI job (F1)
+*(done 2026-07-18: 8 modules / 52 tests green in CI on BOTH ubuntu-latest
+and windows-latest (run 29622754795) with only
+`pytest pyyaml requests huggingface-hub==0.36.0`. Notably this exercises the
+P0.1 atomic-save/quarantine tests on real Windows. Deferred to P1.2 (heavy transitive imports):
 `test_listener_llm_postprocess_helpers` (gradio),
 `test_llm_postprocess_service` (ffmpeg/multimodal),
 `test_model_download_service`, `test_model_service`,
@@ -196,6 +200,15 @@ env) or at minimum CI Tier A if that module is covered there.
 **Phase 0 exit criteria:** all seven tasks `[x]` (or `[~]` pending Windows
 verify with notes); CI has ≥5 real test modules running on ubuntu + windows;
 CHANGELOG updated once for the phase.
+
+**Phase 0 status (2026-07-18): COMPLETE.** P0.3/P0.4/P0.5/P0.7 `[x]`;
+P0.1/P0.2/P0.6 `[~]` pending only manual Windows app-launch checks (their
+automated tests already pass on windows-latest in CI). CI run 29622754795:
+lint ✅, unit-tests ubuntu ✅, unit-tests windows ✅, smoke ✅.
+CHANGELOG updated. Note for the Phase 0 verifier on Windows: launch Qt once,
+hand-corrupt `~/.pyscribe_config.json` and confirm a `.bad-*` quarantine
+file appears (P0.1); confirm listener saves land in `~/.pyscribe/exports`
+and download in a browser (P0.6).
 
 ---
 

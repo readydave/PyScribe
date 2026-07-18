@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from huggingface_hub.utils import RepositoryNotFoundError
@@ -110,12 +110,17 @@ class ModelDownloadServiceTests(unittest.TestCase):
                 captured["kwargs"] = dict(kwargs)
                 return str(snapshot_dir)
 
-            with patch("services.model_download_service._find_cached_snapshot_path", return_value=None), patch(
-                "services.model_download_service.get_hf_token",
-                return_value=None,
-            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
-                "services.model_download_service.snapshot_download",
-                side_effect=_mock_snapshot_download,
+            with (
+                patch("services.model_download_service._find_cached_snapshot_path", return_value=None),
+                patch(
+                    "services.model_download_service.get_hf_token",
+                    return_value=None,
+                ),
+                patch("services.model_download_service.HfApi") as mock_api_cls,
+                patch(
+                    "services.model_download_service.snapshot_download",
+                    side_effect=_mock_snapshot_download,
+                ),
             ):
                 mock_api_cls.return_value.model_info.return_value = info
                 result = ensure_model_cached(
@@ -143,12 +148,17 @@ class ModelDownloadServiceTests(unittest.TestCase):
             snapshot_dir.mkdir()
             (snapshot_dir / "model.bin").write_bytes(b"unexpected")
 
-            with patch("services.model_download_service._find_cached_snapshot_path", return_value=None), patch(
-                "services.model_download_service.get_hf_token",
-                return_value=None,
-            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
-                "services.model_download_service.snapshot_download",
-                return_value=str(snapshot_dir),
+            with (
+                patch("services.model_download_service._find_cached_snapshot_path", return_value=None),
+                patch(
+                    "services.model_download_service.get_hf_token",
+                    return_value=None,
+                ),
+                patch("services.model_download_service.HfApi") as mock_api_cls,
+                patch(
+                    "services.model_download_service.snapshot_download",
+                    return_value=str(snapshot_dir),
+                ),
             ):
                 mock_api_cls.return_value.model_info.return_value = info
                 with self.assertRaises(ModelVerificationError):
@@ -177,15 +187,20 @@ class ModelDownloadServiceTests(unittest.TestCase):
                 repaired_contents["value"] = model_path.read_bytes()
                 return str(snapshot_dir)
 
-            with patch(
-                "services.model_download_service._find_cached_snapshot_path",
-                return_value=str(snapshot_dir),
-            ), patch(
-                "services.model_download_service.get_hf_token",
-                return_value=None,
-            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
-                "services.model_download_service.snapshot_download",
-                side_effect=_mock_snapshot_download,
+            with (
+                patch(
+                    "services.model_download_service._find_cached_snapshot_path",
+                    return_value=str(snapshot_dir),
+                ),
+                patch(
+                    "services.model_download_service.get_hf_token",
+                    return_value=None,
+                ),
+                patch("services.model_download_service.HfApi") as mock_api_cls,
+                patch(
+                    "services.model_download_service.snapshot_download",
+                    side_effect=_mock_snapshot_download,
+                ),
             ):
                 mock_api_cls.return_value.model_info.return_value = info
                 result = ensure_model_cached("tiny")
@@ -219,12 +234,16 @@ class ModelDownloadServiceTests(unittest.TestCase):
                 )
                 return str(model_dir)
 
-            with patch(
-                "services.model_download_service.get_hf_token",
-                return_value=None,
-            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
-                "services.model_download_service.snapshot_download",
-                side_effect=_mock_snapshot_download,
+            with (
+                patch(
+                    "services.model_download_service.get_hf_token",
+                    return_value=None,
+                ),
+                patch("services.model_download_service.HfApi") as mock_api_cls,
+                patch(
+                    "services.model_download_service.snapshot_download",
+                    side_effect=_mock_snapshot_download,
+                ),
             ):
                 mock_api_cls.return_value.model_info.return_value = info
                 result = ensure_hf_repo_local_dir_verified(
@@ -265,12 +284,16 @@ class ModelDownloadServiceTests(unittest.TestCase):
                 (model_dir / "inference.pdiparams").write_bytes(good_data)
                 return str(model_dir)
 
-            with patch(
-                "services.model_download_service.get_hf_token",
-                return_value=None,
-            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
-                "services.model_download_service.snapshot_download",
-                side_effect=_mock_snapshot_download,
+            with (
+                patch(
+                    "services.model_download_service.get_hf_token",
+                    return_value=None,
+                ),
+                patch("services.model_download_service.HfApi") as mock_api_cls,
+                patch(
+                    "services.model_download_service.snapshot_download",
+                    side_effect=_mock_snapshot_download,
+                ),
             ):
                 mock_api_cls.return_value.model_info.return_value = info
                 result = ensure_hf_repo_local_dir_verified(
@@ -306,12 +329,16 @@ class ModelDownloadServiceTests(unittest.TestCase):
                 (model_dir / "inference.pdiparams").write_bytes(data)
                 return str(model_dir)
 
-            with patch(
-                "services.model_download_service.get_hf_token",
-                return_value=None,
-            ), patch("services.model_download_service.HfApi") as mock_api_cls, patch(
-                "services.model_download_service.snapshot_download",
-                side_effect=_mock_snapshot_download,
+            with (
+                patch(
+                    "services.model_download_service.get_hf_token",
+                    return_value=None,
+                ),
+                patch("services.model_download_service.HfApi") as mock_api_cls,
+                patch(
+                    "services.model_download_service.snapshot_download",
+                    side_effect=_mock_snapshot_download,
+                ),
             ):
                 mock_api_cls.return_value.model_info.return_value = info
                 result = ensure_hf_repo_local_dir_verified(
@@ -325,9 +352,12 @@ class ModelDownloadServiceTests(unittest.TestCase):
     def test_repository_not_found_still_falls_back_to_model_name(self) -> None:
         statuses: list[str] = []
 
-        with patch("services.model_download_service._find_cached_snapshot_path", return_value=None), patch(
-            "services.model_download_service._fetch_verification_manifest",
-            side_effect=RepositoryNotFoundError("missing"),
+        with (
+            patch("services.model_download_service._find_cached_snapshot_path", return_value=None),
+            patch(
+                "services.model_download_service._fetch_verification_manifest",
+                side_effect=RepositoryNotFoundError("missing"),
+            ),
         ):
             result = ensure_model_cached("tiny", on_status=statuses.append)
 

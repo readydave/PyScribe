@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Dict, List, Optional, Set
 
 BADGES = {
@@ -35,7 +34,9 @@ TIERS: Dict[str, Dict] = {
     # Balanced tier
     "medium": _entry("medium", "BALANCED", 3.0, 13.0, 50),
     "distil-whisper/distil-large-v3": _entry("distil-whisper/distil-large-v3", "BALANCED", 3.0, 12.5, 55),
-    "deepdml/faster-whisper-large-v3-turbo-ct2": _entry("deepdml/faster-whisper-large-v3-turbo-ct2", "BALANCED", 4.0, 12.0, 48),
+    "deepdml/faster-whisper-large-v3-turbo-ct2": _entry(
+        "deepdml/faster-whisper-large-v3-turbo-ct2", "BALANCED", 4.0, 12.0, 48
+    ),
     # Pro tier
     "guillaumekln/whisper-large-v2-ct2": _entry("guillaumekln/whisper-large-v2-ct2", "PRO", 6.0, 11.5, 40),
     "guillaumekln/whisper-large-v3-ct2": _entry("guillaumekln/whisper-large-v3-ct2", "PRO", 6.5, 11.0, 35),
@@ -51,7 +52,7 @@ def detect_vram_gb() -> float:
         if not torch.cuda.is_available():
             return 0.0
         props = torch.cuda.get_device_properties(0)
-        return round(props.total_memory / (1024 ** 3), 1)
+        return round(props.total_memory / (1024**3), 1)
     except Exception:
         return 0.0
 
@@ -126,7 +127,7 @@ def strip_badges(label: str) -> str:
     cleaned = label
     for sym in ["✅", "🟢", "🟡", "🔴"]:
         if cleaned.startswith(sym):
-            cleaned = cleaned[len(sym):].strip()
+            cleaned = cleaned[len(sym) :].strip()
     if "• Verified" in cleaned:
         cleaned = cleaned.split("• Verified")[0].strip()
     return cleaned

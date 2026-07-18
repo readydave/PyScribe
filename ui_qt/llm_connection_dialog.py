@@ -21,7 +21,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from services import AppConfig, discover_local_networks, load_llm_profiles, scan_lan_for_llm_instances, run_connection_test
+from services import (
+    AppConfig,
+    discover_local_networks,
+    load_llm_profiles,
+    run_connection_test,
+    scan_lan_for_llm_instances,
+)
 
 
 class LLMConnectionsDialog(QDialog):
@@ -275,7 +281,9 @@ class LLMConnectionsDialog(QDialog):
         if provider == "lm_studio":
             if not current_url or current_url in {"http://127.0.0.1:11434", "http://localhost:11434"}:
                 self.base_url_input.setText("http://127.0.0.1:1234")
-            if (self.scope_combo.currentText() or "").strip().lower() == "lan" and "127.0.0.1" in self.base_url_input.text():
+            if (
+                self.scope_combo.currentText() or ""
+            ).strip().lower() == "lan" and "127.0.0.1" in self.base_url_input.text():
                 self.scope_combo.setCurrentText("local")
             return
         # openai_compatible default
@@ -403,11 +411,7 @@ class LLMConnectionsDialog(QDialog):
         except ValueError:
             QMessageBox.warning(self, "Invalid timeout", "Timeout must be a number.")
             return
-        cidr_values = [
-            part.strip()
-            for part in (self.allowed_cidrs_input.text() or "").split(",")
-            if part.strip()
-        ]
+        cidr_values = [part.strip() for part in (self.allowed_cidrs_input.text() or "").split(",") if part.strip()]
         scope_value = self.scope_combo.currentText().strip()
         base_url_value = (self.base_url_input.text() or "").strip()
         if scope_value == "lan" and ("127.0.0.1" in base_url_value or "localhost" in base_url_value):
@@ -421,11 +425,7 @@ class LLMConnectionsDialog(QDialog):
         persisted_api_key = entered_api_key if entered_api_key.lower().startswith("env:") else ""
         runtime_api_key = entered_api_key if entered_api_key and not entered_api_key.lower().startswith("env:") else ""
         verify_tls = self.verify_tls_check.isChecked()
-        if (
-            scope_value == "lan"
-            and base_url_value.lower().startswith("https://")
-            and not verify_tls
-        ):
+        if scope_value == "lan" and base_url_value.lower().startswith("https://") and not verify_tls:
             QMessageBox.warning(
                 self,
                 "TLS policy",
@@ -515,7 +515,9 @@ class LLMConnectionsDialog(QDialog):
     def _on_save_and_close(self) -> None:
         # Ensure active edits are applied before saving.
         self._on_apply_profile()
-        if self._default_profile and not any(self._default_profile == str(item.get("name", "")) for item in self._profiles):
+        if self._default_profile and not any(
+            self._default_profile == str(item.get("name", "")) for item in self._profiles
+        ):
             self._default_profile = None
         self.accept()
 

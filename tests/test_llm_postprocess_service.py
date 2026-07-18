@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 import json
+import tempfile
 import unittest
+from io import BytesIO
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
-from pathlib import Path
-import tempfile
 
 from services.llm_connection_service import LLMConnectionProfile
 from services.llm_postprocess_service import (
@@ -399,7 +399,10 @@ class LLMPostprocessServiceTests(unittest.TestCase):
                 image_ocr_backend="auto",
                 ocr_fallback_for_images=True,
             )
-            with patch("services.llm_postprocess_service.extract_text_from_images", return_value=("UI text", "pytesseract", None)):
+            with patch(
+                "services.llm_postprocess_service.extract_text_from_images",
+                return_value=("UI text", "pytesseract", None),
+            ):
                 prepared = prepare_llm_postprocess_payload(_profile(), _template(), request)
         self.assertEqual(prepared.status, "pass")
         self.assertEqual(prepared.image_paths_for_payload, ())

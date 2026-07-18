@@ -138,9 +138,7 @@ class QtLiveModeTests(unittest.TestCase):
         return window
 
     def test_live_mode_toggle_updates_visibility(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
 
         self.assertTrue(win.drop_card.isVisible())
         self.assertFalse(win.live_card.isVisible())
@@ -188,16 +186,12 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertEqual(payload, (report, "all"))
 
     def test_visual_scope_defaults_to_slides_only(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
 
         self.assertEqual(win.visual_scope_combo.currentData(), "slides_only")
 
     def test_auto_save_writes_separate_outputs_for_all_parts(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         with tempfile.TemporaryDirectory() as temp_dir:
             media_path = Path(temp_dir) / "lesson.mp4"
             media_path.write_bytes(b"placeholder")
@@ -222,9 +216,7 @@ class QtLiveModeTests(unittest.TestCase):
             self.assertEqual((Path(temp_dir) / "lesson_ocr.txt").read_text(encoding="utf-8"), visual)
 
     def test_auto_save_uses_numbered_suffix_for_existing_files(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         with tempfile.TemporaryDirectory() as temp_dir:
             media_path = Path(temp_dir) / "lesson.mp4"
             media_path.write_bytes(b"placeholder")
@@ -241,9 +233,7 @@ class QtLiveModeTests(unittest.TestCase):
             self.assertEqual((Path(temp_dir) / "lesson_ocr.txt").read_text(encoding="utf-8"), visual)
 
     def test_loopback_mode_disables_start_without_loopback_device(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
 
         win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
         win.live_source_combo.setCurrentIndex(win.live_source_combo.findData("loopback"))
@@ -253,9 +243,7 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertIn("No loopback input", win.live_guidance_label.text())
 
     def test_stop_live_capture_starts_final_post_pass(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
         session = _FakeLiveSession()
         win._live_session = session
@@ -275,9 +263,7 @@ class QtLiveModeTests(unittest.TestCase):
         win._live_session = None
 
     def test_pause_resume_live_capture_updates_button_state_and_timer(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
         win._live_session = _FakeLiveSession()
         win._live_capture_active = True
@@ -317,9 +303,7 @@ class QtLiveModeTests(unittest.TestCase):
         win._live_session = None
 
     def test_cancel_live_capture_confirmation_decline_preserves_session(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
 
         cancel_session = _FakeLiveSession()
@@ -339,9 +323,7 @@ class QtLiveModeTests(unittest.TestCase):
         win._live_session = None
 
     def test_cancel_and_force_stop_reset_live_ui_and_log_session_path(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
 
         cancel_session = _FakeLiveSession()
@@ -367,9 +349,7 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertEqual(win.status_label.text(), "Force-stopped.")
 
     def test_live_final_pass_completion_reenables_controls(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
         session = _FakeLiveSession()
         win._live_session = session
@@ -417,9 +397,7 @@ class QtLiveModeTests(unittest.TestCase):
             win._update_live_mode_ui()
 
     def test_live_finalizing_locks_setup_controls_and_keeps_status_visible(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
         win._live_session = _FakeLiveSession()
         win._live_capture_active = False
@@ -441,9 +419,7 @@ class QtLiveModeTests(unittest.TestCase):
         win._update_live_mode_ui()
 
     def test_live_vram_preflight_decline_cancels_start(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         win.runtime = RuntimeInfo(
             device="cuda",
             compute_type="float16",
@@ -474,9 +450,7 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertIn("low VRAM warning", win.terminal_log.toPlainText())
 
     def test_live_vram_preflight_continue_allows_start(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         result = LiveVramPreflight(
             status="low",
             model_name="large-v3",
@@ -499,9 +473,7 @@ class QtLiveModeTests(unittest.TestCase):
         self.assertIn("continued live transcription", win.terminal_log.toPlainText())
 
     def test_live_vram_preflight_unavailable_does_not_prompt(self) -> None:
-        win = self._build_window(
-            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
-        )
+        win = self._build_window([SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)])
         result = LiveVramPreflight(
             status="unavailable",
             model_name="large-v3",

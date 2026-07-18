@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from services.hf_auth_service import clear_session_hf_token, get_hf_token, save_hf_token
@@ -63,10 +63,13 @@ class HFTokenHardeningTests(unittest.TestCase):
         clear_session_hf_token()
 
     def test_save_hf_token_session_only_does_not_persist_or_set_env(self) -> None:
-        with patch("services.hf_auth_service.HfFolder.save_token") as mock_save, patch.dict(
-            os.environ,
-            {},
-            clear=True,
+        with (
+            patch("services.hf_auth_service.HfFolder.save_token") as mock_save,
+            patch.dict(
+                os.environ,
+                {},
+                clear=True,
+            ),
         ):
             save_hf_token("hf_secret", persist=False)
             token = get_hf_token()
@@ -85,10 +88,14 @@ class HFTokenHardeningTests(unittest.TestCase):
 
 class LoggingHardeningTests(unittest.TestCase):
     def test_default_log_path_prefers_user_private_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch(
-            "services.logging_service.Path.home",
-            return_value=Path(temp_dir),
-        ), patch.dict(os.environ, {}, clear=True):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch(
+                "services.logging_service.Path.home",
+                return_value=Path(temp_dir),
+            ),
+            patch.dict(os.environ, {}, clear=True),
+        ):
             log_dir = _find_log_directory()
 
         self.assertEqual(log_dir, Path(temp_dir) / ".pyscribe" / "logs")

@@ -61,10 +61,11 @@ class DiarizationRuntimeTests(unittest.TestCase):
         ]
 
         from contextlib import ExitStack
+
         with ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
-                
+
             diarization._TORCHAUDIO_SOUNDFILE_PATCHED = False
 
             backend = diarization._prefer_torchaudio_soundfile_backend()
@@ -119,7 +120,9 @@ class DiarizationRuntimeTests(unittest.TestCase):
 
     def test_prefer_torchaudio_soundfile_backend_skips_when_unavailable(self) -> None:
         if not hasattr(diarization.torchaudio, "list_audio_backends"):
-            self.skipTest("torchaudio 2.9+ dispatcher logic does not support 'unavailable' soundfile check via list_audio_backends")
+            self.skipTest(
+                "torchaudio 2.9+ dispatcher logic does not support 'unavailable' soundfile check via list_audio_backends"
+            )
 
         with patch.object(diarization.torchaudio, "list_audio_backends", return_value=["sox"]):
             diarization._TORCHAUDIO_SOUNDFILE_PATCHED = False
@@ -159,15 +162,20 @@ class DiarizationRuntimeTests(unittest.TestCase):
                 created.append(instance)
                 return instance
 
-        with patch("diarization.ensure_platform_sys_version_compat"), patch(
-            "diarization._prefer_torchaudio_soundfile_backend",
-            return_value="soundfile",
-        ), patch(
-            "diarization._lazy_import_pyannote",
-            return_value=_FakePipelineFactory,
-        ), patch(
-            "diarization.get_hf_token",
-            return_value=None,
+        with (
+            patch("diarization.ensure_platform_sys_version_compat"),
+            patch(
+                "diarization._prefer_torchaudio_soundfile_backend",
+                return_value="soundfile",
+            ),
+            patch(
+                "diarization._lazy_import_pyannote",
+                return_value=_FakePipelineFactory,
+            ),
+            patch(
+                "diarization.get_hf_token",
+                return_value=None,
+            ),
         ):
             segments = diarization.run_diarization(
                 "clip.wav",
@@ -198,15 +206,20 @@ class DiarizationRuntimeTests(unittest.TestCase):
             def from_pretrained(model_name: str, use_auth_token=None):
                 return _FakePipelineInstance()
 
-        with patch("diarization.ensure_platform_sys_version_compat"), patch(
-            "diarization._prefer_torchaudio_soundfile_backend",
-            return_value="soundfile",
-        ), patch(
-            "diarization._lazy_import_pyannote",
-            return_value=_FakePipelineFactory,
-        ), patch(
-            "diarization.get_hf_token",
-            return_value=None,
+        with (
+            patch("diarization.ensure_platform_sys_version_compat"),
+            patch(
+                "diarization._prefer_torchaudio_soundfile_backend",
+                return_value="soundfile",
+            ),
+            patch(
+                "diarization._lazy_import_pyannote",
+                return_value=_FakePipelineFactory,
+            ),
+            patch(
+                "diarization.get_hf_token",
+                return_value=None,
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "torchaudio.info missing"):
                 diarization.run_diarization("clip.wav", device="cpu")

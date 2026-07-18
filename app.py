@@ -2,27 +2,29 @@
 # Gradio-based listener UI for PyScribe.
 
 import argparse
-from collections.abc import Iterator
 import datetime
 import logging
 import os
 import socket
 import sys
 import threading
+from collections.abc import Iterator
 from typing import Any, Callable
 
 import gradio as gr
+
+import services as pyscribe_services
 from services.listener_security_service import (
     reject_legacy_auth_pass_flag,
     resolve_listener_auth,
     validate_listener_security,
 )
-import services as pyscribe_services
 from services.runtime_compat import ensure_platform_sys_version_compat
 from services.runtime_env_service import (
     configure_runtime_environment,
     reexec_if_loader_env_changed,
 )
+
 LOGGER = logging.getLogger(__name__)
 
 _LISTENER_RUNTIME_READY = False
@@ -56,6 +58,7 @@ def _ensure_listener_runtime() -> None:
         AVAILABLE_DIAR_BACKENDS = ["accurate"]
     APP_CONFIG = pyscribe_services.load_config()
     _LISTENER_RUNTIME_READY = True
+
 
 CUSTOM_CSS = """
 html.pyscribe-prog-red progress,
@@ -263,12 +266,7 @@ def test_listener_llm_connection(profile_name: str, model_override: str) -> tupl
         lines.append(f"Failure: {result.failure_code} - {result.failure_detail}")
 
     model_choices = list(result.detected_models)
-    preferred_model = (
-        str(model_override or "").strip()
-        or result.selected_model
-        or profile.default_model
-        or ""
-    )
+    preferred_model = str(model_override or "").strip() or result.selected_model or profile.default_model or ""
     if preferred_model and preferred_model not in model_choices:
         model_choices.append(preferred_model)
 
@@ -442,9 +440,8 @@ def find_open_port(host: str, preferred_port: int, max_tries: int = 50) -> int:
                 return port
             except OSError:
                 continue
-    raise RuntimeError(
-        f"No open port found between {preferred_port} and {preferred_port + max_tries}."
-    )
+    raise RuntimeError(f"No open port found between {preferred_port} and {preferred_port + max_tries}.")
+
 
 def transcribe(
     audio_path: Any,
@@ -550,9 +547,15 @@ def transcribe(
         APP_CONFIG = listener_cfg
     except Exception as exc:
         LOGGER.warning("Failed to save listener config: %s", exc, exc_info=True)
-        
+
     status_prefix = "Visual analysis" if run_mode == "visual_only" else "Transcription"
-    yield f"Status: {status_prefix} starting...", "", gr.update(visible=False), gr.update(visible=True, value="Cancel"), ""
+    yield (
+        f"Status: {status_prefix} starting...",
+        "",
+        gr.update(visible=False),
+        gr.update(visible=True, value="Cancel"),
+        "",
+    )
     _transcription_active.set()
 
     full_transcript = ""
@@ -560,6 +563,7 @@ def transcribe(
     last_phase = "Transcribing"
     last_pct = 0.0
     try:
+
         def _on_status(msg: str) -> None:
             nonlocal last_phase
             last_phase = msg
@@ -612,12 +616,25 @@ def transcribe(
 
     if was_cancelled or _cancel_event.is_set():
         _cancel_event.clear()
-        yield f"Status: {status_prefix} cancelled.", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), "Cancelled."
+        yield (
+            f"Status: {status_prefix} cancelled.",
+            full_transcript.strip(),
+            gr.update(visible=True),
+            gr.update(visible=False),
+            "Cancelled.",
+        )
         return
 
     final_badge = _progress_badge(100.0)
     final_done = "Visual analysis complete!" if run_mode == "visual_only" else "Transcription complete!"
-    yield f"Status: {final_badge} {final_done}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), final_done
+    yield (
+        f"Status: {final_badge} {final_done}",
+        full_transcript.strip(),
+        gr.update(visible=True),
+        gr.update(visible=False),
+        final_done,
+    )
+
 
 EXPORTS_MAX_AGE_DAYS = 7
 
@@ -693,6 +710,7 @@ def save_postprocess_output(postprocess_output: str, template_id: str) -> str | 
     except OSError as exc:
         raise gr.Error(f"Could not save file: {exc}")
 
+
 def set_cancel_flag() -> None:
     _cancel_event.set()
 
@@ -724,7 +742,9 @@ def create_interface() -> gr.Blocks:
         run_mode: str,
         use_diarization: bool,
         use_visual_analysis: bool,
-    ) -> tuple[GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate]:
+    ) -> tuple[
+        GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate, GradioUpdate
+    ]:
         mode = _normalize_run_mode(run_mode)
         allow_transcription = mode in {"full", "transcribe_only"}
         allow_visual = mode in {"full", "visual_only"}
@@ -779,10 +799,7 @@ def create_interface() -> gr.Blocks:
 
         with gr.Row():
             with gr.Column(scale=1):
-                audio_input = gr.File(
-                    label="Upload Audio/Video File",
-                    file_types=["audio", "video"]
-                )
+                audio_input = gr.File(label="Upload Audio/Video File", file_types=["audio", "video"])
 
                 model_dropdown = gr.Dropdown(
                     choices=ALL_MODELS,
@@ -936,7 +953,9 @@ def create_interface() -> gr.Blocks:
                         max_lines=8,
                     )
                     llm_status_output = gr.Textbox(label="LLM status", interactive=False, lines=6, max_lines=12)
-                    llm_payload_preview_output = gr.Textbox(label="LLM payload preview", interactive=True, lines=10, max_lines=16)
+                    llm_payload_preview_output = gr.Textbox(
+                        label="LLM payload preview", interactive=True, lines=10, max_lines=16
+                    )
                     llm_output = gr.Textbox(label="LLM output", interactive=True, lines=12, max_lines=18)
                     with gr.Row():
                         llm_save_btn = gr.Button("Save LLM Output")
@@ -984,16 +1003,9 @@ def create_interface() -> gr.Blocks:
             inputs=[visual_checkbox, run_mode_dropdown],
             outputs=[visual_profile_dropdown, visual_backend_dropdown, visual_interval],
         )
-        completion_btn.click(
-            fn=set_cancel_flag,
-            inputs=[],
-            outputs=[],
-            cancels=[click_event]
-        )
+        completion_btn.click(fn=set_cancel_flag, inputs=[], outputs=[], cancels=[click_event])
         save_btn.click(
-            fn=save_transcript,
-            inputs=[transcript_output, audio_input, model_dropdown],
-            outputs=[download_file]
+            fn=save_transcript, inputs=[transcript_output, audio_input, model_dropdown], outputs=[download_file]
         )
         llm_source_mode.change(
             fn=_update_postprocess_source_fields,

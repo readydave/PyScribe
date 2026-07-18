@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import os
+from collections.abc import Callable
 from pathlib import Path, PureWindowsPath
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
-    QFrame,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -32,9 +32,9 @@ from PySide6.QtWidgets import (
 from services import (
     AppConfig,
     LLMConnectionProfile,
-    LLMPreparedPayload,
     LLMPostprocessRequest,
     LLMPostprocessResult,
+    LLMPreparedPayload,
     LLMRunControl,
     PromptTemplate,
     create_user_prompt_template,
@@ -43,8 +43,8 @@ from services import (
     get_prompt_template,
     load_prompt_templates,
     prepare_llm_postprocess_payload,
-    run_llm_postprocess,
     run_connection_test,
+    run_llm_postprocess,
     update_user_prompt_template,
 )
 
@@ -611,7 +611,9 @@ class LLMPostprocessDialog(QDialog):
             ocr_fallback_for_images=self.image_ocr_fallback_checkbox.isChecked(),
         )
 
-    def _render_payload_preview(self) -> tuple[PromptTemplate | None, LLMPostprocessRequest | None, LLMPreparedPayload | None]:
+    def _render_payload_preview(
+        self,
+    ) -> tuple[PromptTemplate | None, LLMPostprocessRequest | None, LLMPreparedPayload | None]:
         profile = self._selected_profile()
         if profile is None:
             QMessageBox.warning(self, "Profile required", "Choose an enabled LLM profile.")
@@ -736,7 +738,9 @@ class LLMPostprocessDialog(QDialog):
 
     @Slot()
     def _on_load_transcript(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select Transcript File", "", "Text Files (*.txt *.md);;All Files (*.*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Transcript File", "", "Text Files (*.txt *.md);;All Files (*.*)"
+        )
         if not path:
             return
         try:
@@ -752,7 +756,9 @@ class LLMPostprocessDialog(QDialog):
 
     @Slot()
     def _on_load_ocr(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select OCR Context File", "", "Text Files (*.txt *.md);;All Files (*.*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select OCR Context File", "", "Text Files (*.txt *.md);;All Files (*.*)"
+        )
         if not path:
             return
         try:

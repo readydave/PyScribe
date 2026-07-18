@@ -41,7 +41,7 @@ def configure_logging() -> Path:
             except Exception:
                 # If we can't rename (e.g. file locked), we just append.
                 pass
-        
+
         # Cleanup old archives
         _cleanup_old_logs(log_dir, keep_count=21)
         os.environ["PYSCRIBE_SESSION_STARTED"] = "1"
@@ -59,12 +59,7 @@ def configure_logging() -> Path:
     )
 
     # Use RotatingFileHandler to also prevent indefinite growth within a long session.
-    file_handler = RotatingFileHandler(
-        log_file, 
-        maxBytes=10 * 1024 * 1024, 
-        backupCount=5, 
-        encoding="utf-8"
-    )
+    file_handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
     file_handler.setLevel(level)
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)

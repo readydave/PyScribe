@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import ctypes
-from difflib import SequenceMatcher
 import html as html_lib
 import importlib.util
 import inspect
@@ -14,7 +12,9 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections import Counter
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from threading import Event
 from typing import Callable, Iterable
 
@@ -385,7 +385,9 @@ def analyze_video_stream(
                 if source == "chat" and _is_low_value_chat_line(canonical_lines[canonical]):
                     continue
                 existing_new_lines = [text for _, text in newly_visible]
-                if canonical not in prev_keys and not _line_exists_similar(canonical_lines[canonical], existing_new_lines):
+                if canonical not in prev_keys and not _line_exists_similar(
+                    canonical_lines[canonical], existing_new_lines
+                ):
                     newly_visible.append((line_source.get(canonical, source), canonical_lines[canonical]))
 
             if detected_slide_keys:
@@ -514,11 +516,7 @@ def _extract_sampled_frames(
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         return []
-    frames = sorted(
-        os.path.join(out_dir, name)
-        for name in os.listdir(out_dir)
-        if name.lower().endswith(".jpg")
-    )
+    frames = sorted(os.path.join(out_dir, name) for name in os.listdir(out_dir) if name.lower().endswith(".jpg"))
     return frames
 
 
@@ -534,7 +532,11 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long
         "pytesseract": lambda **_: _build_tesseract_ocr_fn(),
     }
     if requested == "auto":
-        order = ["rapidocr", "paddleocr", "pytesseract", "surya"] if long_video else ["paddleocr", "rapidocr", "surya", "pytesseract"]
+        order = (
+            ["rapidocr", "paddleocr", "pytesseract", "surya"]
+            if long_video
+            else ["paddleocr", "rapidocr", "surya", "pytesseract"]
+        )
     elif requested == "rapidocr":
         order = ["rapidocr", "paddleocr", "pytesseract"]
     elif requested == "surya":
@@ -554,8 +556,7 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long
                 on_status(f"Requested OCR backend '{requested}' unavailable; using '{name}' fallback.")
                 fallback_reason = attempt_reason_by_backend.get(requested, "unavailable")
                 fallback_note = (
-                    f"Requested backend '{requested}' unavailable: {fallback_reason}. "
-                    f"Using '{name}' fallback."
+                    f"Requested backend '{requested}' unavailable: {fallback_reason}. Using '{name}' fallback."
                 )
             elif on_status and requested == "auto" and (name != "paddleocr" or long_video):
                 on_status(f"Using '{name}' OCR backend.")
@@ -1132,7 +1133,9 @@ def _is_ui_noise_line(line: str) -> bool:
 def _is_persistent_noise(line: str, count: int, total_frames: int) -> bool:
     if total_frames <= 0:
         return False
-    if (_looks_like_person_name(line) or _is_low_value_slide_line(line) or _is_low_value_chat_line(line)) and count >= max(6, int(total_frames * 0.18)):
+    if (
+        _looks_like_person_name(line) or _is_low_value_slide_line(line) or _is_low_value_chat_line(line)
+    ) and count >= max(6, int(total_frames * 0.18)):
         return True
     if count >= max(8, int(total_frames * 0.6)):
         if len(line) <= 36 or _is_ui_noise_line(line):
@@ -1239,15 +1242,13 @@ def _format_visual_report(
     slide_keys = [
         k
         for k in sorted_keys
-        if line_source.get(k, "slide") == "slide"
-        and not _is_low_value_slide_line(canonical_lines.get(k, ""))
+        if line_source.get(k, "slide") == "slide" and not _is_low_value_slide_line(canonical_lines.get(k, ""))
     ]
     slide_keys = sorted(slide_keys, key=lambda k: _slide_sort_key(k, line_counts, canonical_lines))[:18]
     top_chat = [
         k
         for k in sorted_keys
-        if line_source.get(k, "slide") == "chat"
-        and not _is_low_value_chat_line(canonical_lines.get(k, ""))
+        if line_source.get(k, "slide") == "chat" and not _is_low_value_chat_line(canonical_lines.get(k, ""))
     ]
     top_chat = sorted(top_chat, key=lambda k: _chat_sort_key(k, line_counts, canonical_lines))[:18]
 

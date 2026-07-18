@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-
 
 LOGGER = logging.getLogger(__name__)
 BUILTIN_PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "assets" / "prompts"
@@ -128,11 +127,14 @@ def create_user_prompt_template(
 ) -> PromptTemplate:
     """Create a user prompt template and return the normalized template."""
     base_id = _normalize_or_slug_id(template_id, name=name)
-    built_in_ids = {template.id for template in _load_templates_from_index(
-        index_path=built_in_index_path,
-        include_disabled=True,
-        warn_if_missing=True,
-    )[0]}
+    built_in_ids = {
+        template.id
+        for template in _load_templates_from_index(
+            index_path=built_in_index_path,
+            include_disabled=True,
+            warn_if_missing=True,
+        )[0]
+    }
     index_payload = _load_or_init_user_index(user_index_path)
     existing_ids = _collect_template_ids(index_payload)
     template_id_value = _make_unique_id(base_id, blocked_ids=built_in_ids | existing_ids)
@@ -309,7 +311,9 @@ def set_user_default_prompt_template(
     if not isinstance(raw_templates, list):
         raw_templates = []
     target_id = _as_optional_id(template_id)
-    if target_id and not any(_as_optional_id(item.get("id")) == target_id for item in raw_templates if isinstance(item, dict)):
+    if target_id and not any(
+        _as_optional_id(item.get("id")) == target_id for item in raw_templates if isinstance(item, dict)
+    ):
         return False
     index_payload["default_template_id"] = target_id
     _write_yaml_mapping(user_index_path, index_payload)

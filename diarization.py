@@ -34,6 +34,7 @@ if hasattr(torch.serialization, "add_safe_globals"):
             _trusted.append(np.dtype)
         try:
             import numpy.core.multiarray
+
             _trusted.append(numpy.core.multiarray.scalar)
         except (ImportError, AttributeError):
             pass
@@ -43,18 +44,24 @@ if hasattr(torch.serialization, "add_safe_globals"):
 
 # Robust monkeypatch for legacy torchaudio backend APIs removed in 2.9+
 if not hasattr(torchaudio, "set_audio_backend"):
+
     def _noop_set_backend(backend: str | None) -> None:
         pass
+
     torchaudio.set_audio_backend = _noop_set_backend  # type: ignore
 
 if not hasattr(torchaudio, "list_audio_backends"):
+
     def _noop_list_backends() -> list[str]:
         return ["soundfile", "ffmpeg"]
+
     torchaudio.list_audio_backends = _noop_list_backends  # type: ignore
 
 if not hasattr(torchaudio, "get_audio_backend"):
+
     def _noop_get_backend() -> str:
         return "soundfile"
+
     torchaudio.get_audio_backend = _noop_get_backend  # type: ignore
 
 # Guard against 'No module named torchaudio.backend' in modern torchaudio
@@ -62,11 +69,11 @@ if "torchaudio.backend" not in sys.modules:
     _dummy_backend = types.ModuleType("torchaudio.backend")
     # Some older torchaudio-dependent code might look for 'common' or 'utils' inside backend
     _dummy_backend_common = types.ModuleType("torchaudio.backend.common")
-    
+
     # Modern torchaudio (e.g. 2.11+) may have removed AudioMetaData entirely from public API.
     # Provide the expected dataclass structure as a stub.
     from dataclasses import dataclass
-    
+
     @dataclass(frozen=True)
     class AudioMetaData:
         sample_rate: int
@@ -79,7 +86,7 @@ if "torchaudio.backend" not in sys.modules:
         _dummy_backend_common.AudioMetaData = torchaudio.AudioMetaData  # type: ignore
     else:
         _dummy_backend_common.AudioMetaData = AudioMetaData  # type: ignore
-    
+
     _dummy_backend.common = _dummy_backend_common  # type: ignore
     sys.modules["torchaudio.backend"] = _dummy_backend
     sys.modules["torchaudio.backend.common"] = _dummy_backend_common
@@ -159,7 +166,10 @@ def _prefer_torchaudio_soundfile_backend() -> str | None:
     # For torchaudio < 2.9, we check available backends.
     # For torchaudio >= 2.9, list_audio_backends is removed.
     available = []
-    if hasattr(torchaudio, "list_audio_backends") and getattr(torchaudio.list_audio_backends, "__name__", None) != "_noop_list_backends":
+    if (
+        hasattr(torchaudio, "list_audio_backends")
+        and getattr(torchaudio.list_audio_backends, "__name__", None) != "_noop_list_backends"
+    ):
         try:
             available = list(torchaudio.list_audio_backends())
         except Exception as exc:
@@ -217,9 +227,7 @@ def _lazy_import_pyannote() -> object:
     try:
         from pyannote.audio import Pipeline  # type: ignore
     except ImportError as e:
-        raise ImportError(
-            "pyannote.audio is required for diarization. Install with: pip install pyannote.audio"
-        ) from e
+        raise ImportError("pyannote.audio is required for diarization. Install with: pip install pyannote.audio") from e
     return Pipeline
 
 
@@ -233,6 +241,7 @@ def _load_pyannote_pipeline(Pipeline: object, token: str | None, requested_devic
     # PyTorch 2.6+ defaults to weights_only=True, which breaks pyannote's complex pipeline load.
     # We temporarily monkeypatch torch.load to be permissive strictly during this trusted load.
     original_load = torch.load
+
     def permissive_load(*args, **kwargs):
         if "weights_only" not in kwargs:
             kwargs["weights_only"] = False
@@ -378,6 +387,7 @@ def assign_speakers(asr_segments: list[Segment], spk_segments: list[Segment]) ->
     Assigns a speaker label to each ASR segment based on maximum overlap.
     Returns updated ASR segments with 'speaker' key.
     """
+
     def overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
         return max(0.0, min(a_end, b_end) - max(a_start, b_start))
 

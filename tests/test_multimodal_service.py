@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from pathlib import Path
 import tempfile
 import unittest
+from collections import Counter
+from pathlib import Path
 from unittest.mock import patch
 
 from services.multimodal_service import (
-    analyze_video_stream,
     _format_visual_report,
-    _is_ui_noise_line,
     _is_low_value_chat_line,
     _is_low_value_slide_line,
-    _prepare_verified_paddle_ocr_model_dirs,
+    _is_ui_noise_line,
     _looks_like_person_name,
+    _prepare_verified_paddle_ocr_model_dirs,
     _resolve_effective_sample_seconds,
+    analyze_video_stream,
 )
 
 
@@ -38,15 +38,20 @@ class MultimodalServiceTests(unittest.TestCase):
             captured.update(kwargs)
             return []
 
-        with patch("services.multimodal_service._has_video_stream", return_value=True), patch(
-            "services.multimodal_service._get_video_duration_seconds",
-            return_value=8 * 60 * 60,
-        ), patch(
-            "services.multimodal_service._build_ocr_fn",
-            return_value=(lambda image, mode="slide": "", "rapidocr", None, None),
-        ), patch(
-            "services.multimodal_service._extract_sampled_frames",
-            side_effect=_fake_extract,
+        with (
+            patch("services.multimodal_service._has_video_stream", return_value=True),
+            patch(
+                "services.multimodal_service._get_video_duration_seconds",
+                return_value=8 * 60 * 60,
+            ),
+            patch(
+                "services.multimodal_service._build_ocr_fn",
+                return_value=(lambda image, mode="slide": "", "rapidocr", None, None),
+            ),
+            patch(
+                "services.multimodal_service._extract_sampled_frames",
+                side_effect=_fake_extract,
+            ),
         ):
             analyze_video_stream("webinar.mp4", visual_profile="accurate", visual_scope="slides_only")
 
@@ -136,16 +141,22 @@ class MultimodalServiceTests(unittest.TestCase):
                 return "PP-OCRv5_server_det", "en_PP-OCRv5_mobile_rec"
 
         verified_calls: list[tuple[str, str]] = []
-        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
-            "os.environ",
-            {
-                "PADDLE_PDX_MODEL_SOURCE": "huggingface",
-                "PADDLE_PDX_CACHE_HOME": temp_dir,
-            },
-            clear=False,
-        ), patch(
-            "services.multimodal_service.ensure_hf_repo_local_dir_verified",
-            side_effect=lambda repo_id, local_dir, **_: verified_calls.append((repo_id, local_dir)) or str(local_dir),
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.dict(
+                "os.environ",
+                {
+                    "PADDLE_PDX_MODEL_SOURCE": "huggingface",
+                    "PADDLE_PDX_CACHE_HOME": temp_dir,
+                },
+                clear=False,
+            ),
+            patch(
+                "services.multimodal_service.ensure_hf_repo_local_dir_verified",
+                side_effect=lambda repo_id, local_dir, **_: (
+                    verified_calls.append((repo_id, local_dir)) or str(local_dir)
+                ),
+            ),
         ):
             kwargs = _prepare_verified_paddle_ocr_model_dirs(_FakePaddleOCR)
 

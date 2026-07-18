@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 from huggingface_hub import HfApi, hf_hub_url, snapshot_download
@@ -211,8 +211,7 @@ def ensure_model_cached(
             except ModelVerificationError as exc:
                 if on_status:
                     on_status(
-                        f"Cached model verification failed for '{repo_id}': {exc}. "
-                        "Re-downloading verified files..."
+                        f"Cached model verification failed for '{repo_id}': {exc}. Re-downloading verified files..."
                     )
                 local_dir = _download_snapshot(
                     repo_id=repo_id,
@@ -233,8 +232,7 @@ def ensure_model_cached(
             return cached_path
         if on_status:
             on_status(
-                f"Cached model path for '{repo_id}' could not be tied to a revision. "
-                "Downloading a verified snapshot..."
+                f"Cached model path for '{repo_id}' could not be tied to a revision. Downloading a verified snapshot..."
             )
 
     try:
@@ -311,10 +309,7 @@ def ensure_hf_repo_local_dir_verified(
             _verify_model_snapshot(local_dir_path, manifest)
         except ModelVerificationError as exc:
             if on_status:
-                on_status(
-                    f"Cached model verification failed for '{repo_id}': {exc}. "
-                    "Re-downloading verified files..."
-                )
+                on_status(f"Cached model verification failed for '{repo_id}': {exc}. Re-downloading verified files...")
             _download_snapshot_to_local_dir(
                 repo_id=repo_id,
                 local_dir=local_dir_path,
@@ -337,8 +332,7 @@ def ensure_hf_repo_local_dir_verified(
     force_download = local_dir_path.exists()
     if force_download and on_status:
         on_status(
-            f"Cached model path for '{repo_id}' could not be tied to a revision. "
-            "Re-downloading verified files..."
+            f"Cached model path for '{repo_id}' could not be tied to a revision. Re-downloading verified files..."
         )
 
     manifest = _fetch_verification_manifest(
@@ -442,9 +436,7 @@ def _fetch_verification_manifest(
         )
 
     if not entries:
-        raise ModelVerificationError(
-            f"'{repo_id}' does not publish any LFS-backed files that PyScribe can verify."
-        )
+        raise ModelVerificationError(f"'{repo_id}' does not publish any LFS-backed files that PyScribe can verify.")
 
     return ModelVerificationManifest(
         repo_id=repo_id,
@@ -512,7 +504,9 @@ def _download_snapshot_to_local_dir(
     return str(local_dir_path)
 
 
-def _verify_model_snapshot(snapshot_path: str | os.PathLike[str], manifest: ModelVerificationManifest) -> ModelVerificationResult:
+def _verify_model_snapshot(
+    snapshot_path: str | os.PathLike[str], manifest: ModelVerificationManifest
+) -> ModelVerificationResult:
     base_path = Path(snapshot_path)
     if not base_path.is_dir():
         raise ModelVerificationError(f"Downloaded model path does not exist: {base_path}")
@@ -525,8 +519,7 @@ def _verify_model_snapshot(snapshot_path: str | os.PathLike[str], manifest: Mode
         actual_sha256 = _sha256_file(target_path)
         if actual_sha256 != entry.sha256:
             raise ModelVerificationError(
-                f"Checksum mismatch for '{entry.relative_path}' "
-                f"(expected {entry.sha256}, got {actual_sha256})."
+                f"Checksum mismatch for '{entry.relative_path}' (expected {entry.sha256}, got {actual_sha256})."
             )
         if isinstance(entry.size_bytes, int) and entry.size_bytes > 0:
             verified_bytes += entry.size_bytes

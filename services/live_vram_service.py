@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from .model_download_service import normalize_model_name, resolve_repo_id
 
-
 LIVE_VRAM_SAFETY_BUFFER_GB = 1.0
 
 _LIVE_MODEL_VRAM_GB: dict[str, float] = {

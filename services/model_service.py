@@ -12,7 +12,7 @@ from .granite_speech_service import load_granite_model
 from .model_download_service import normalize_model_name, resolve_repo_id
 
 if TYPE_CHECKING:
-    from faster_whisper import WhisperModel
+    pass
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ def detect_runtime() -> RuntimeInfo:
         try:
             gpu_name = torch.cuda.get_device_name(0)
             props = torch.cuda.get_device_properties(0)
-            vram_gb = round(props.total_memory / (1024 ** 3), 1)
+            vram_gb = round(props.total_memory / (1024**3), 1)
         except Exception:
             device = "cpu"
             gpu_name = "N/A"

@@ -9,6 +9,7 @@ import socket
 import sys
 import time
 import warnings
+
 from services.listener_security_service import (
     clean_env_value,
     reject_legacy_auth_pass_flag,
@@ -282,8 +283,7 @@ def _resolve_interactive_lan_auth() -> tuple[str, str]:
         password = prompted or None
     if not password:
         raise SystemExit(
-            "Interactive LAN listener requires a password. "
-            "Set PYSCRIBE_LAN_AUTH_PASS or enter one when prompted."
+            "Interactive LAN listener requires a password. Set PYSCRIBE_LAN_AUTH_PASS or enter one when prompted."
         )
     return user, password
 

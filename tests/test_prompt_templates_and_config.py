@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from services.config_service import AppConfig, load_config, save_config
 from services.prompt_template_service import (
@@ -211,7 +211,12 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
     def test_save_config_strips_plaintext_llm_api_keys(self) -> None:
         cfg = AppConfig(
             llm_profiles=[
-                {"name": "Plain", "provider": "openai_compatible", "api_key": "super-secret", "api_key_runtime": "runtime"},
+                {
+                    "name": "Plain",
+                    "provider": "openai_compatible",
+                    "api_key": "super-secret",
+                    "api_key_runtime": "runtime",
+                },
                 {"name": "EnvRef", "provider": "openai_compatible", "api_key": "env:PYSCRIBE_API_KEY"},
             ]
         )

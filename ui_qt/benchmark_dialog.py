@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import threading
 import time
-import logging
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 from PySide6.QtGui import QCloseEvent
@@ -16,8 +16,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPushButton,
     QProgressBar,
+    QPushButton,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -32,6 +32,7 @@ from services import (
     transcribe_prepared_audio,
 )
 from utils import convert_to_16k_mono, get_ffmpeg_cmd
+
 LOGGER = logging.getLogger(__name__)
 
 

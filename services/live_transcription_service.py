@@ -6,12 +6,11 @@ import datetime as _dt
 import json
 import logging
 import multiprocessing as mp
-import os
 import queue
 import time
 import uuid
 import wave
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +21,6 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtMultimedia import QAudioFormat, QMediaDevices
 
 from services.model_service import load_model, resolve_transcription_model
-
 
 LOGGER = logging.getLogger(__name__)
 LIVE_SAMPLE_RATE = 16_000
@@ -121,6 +119,7 @@ def normalize_session_title(title: str | None) -> str | None:
     if not title:
         return None
     import re
+
     # Trim and replace spaces with hyphens
     s = str(title).strip().replace(" ", "-")
     # Remove filesystem-invalid characters
@@ -266,7 +265,9 @@ def reconcile_live_transcript(
 
 
 def render_live_transcript(segments: list[dict[str, Any]]) -> str:
-    return " ".join(str(segment.get("text", "")).strip() for segment in segments if str(segment.get("text", "")).strip()).strip()
+    return " ".join(
+        str(segment.get("text", "")).strip() for segment in segments if str(segment.get("text", "")).strip()
+    ).strip()
 
 
 class LiveSessionController:
@@ -279,22 +280,22 @@ class LiveSessionController:
         output_root = Path(options.output_root or default_live_output_dir()).expanduser()
         timestamp = _dt.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         safe_title = normalize_session_title(options.session_title)
-        
+
         # Use timestamp + title for session directory name if title exists
         dir_name = timestamp
         if safe_title:
             dir_name = f"{timestamp}-{safe_title}"
-        
+
         session_id = dir_name + "_" + uuid.uuid4().hex[:8]
         self.options = options
         self.session_timestamp = timestamp
         self.session_dir = output_root / session_id
         self.capture_path = self.session_dir / f"{timestamp}-live-capture.wav"
         self.metadata_path = self.session_dir / "session.json"
-        
+
         # Final transcript path will be calculated during finalization
         self.final_transcript_path = self.session_dir / "final_transcript.txt"
-        
+
         self.metadata = LiveSessionMetadata(
             session_id=session_id,
             started_at=_now_iso(),
@@ -465,38 +466,38 @@ class LiveSessionController:
     def finalize_success(self, transcript: str) -> None:
         safe_title = normalize_session_title(self.metadata.session_title)
         timestamp = self.session_timestamp
-        
+
         final_audio_path = self.capture_path
         final_txt_path = self.final_transcript_path
-        
+
         if safe_title:
             base_name = f"{timestamp}-{safe_title}"
             candidate_audio = self.session_dir / f"{base_name}.wav"
             candidate_txt = self.session_dir / f"{base_name}.txt"
-            
+
             # Simple collision avoidance if needed
             counter = 1
             while candidate_audio.exists() or candidate_txt.exists():
                 counter += 1
                 candidate_audio = self.session_dir / f"{base_name}-{counter}.wav"
                 candidate_txt = self.session_dir / f"{base_name}-{counter}.txt"
-            
+
             final_audio_path = candidate_audio
             final_txt_path = candidate_txt
-            
+
             if self.capture_path.exists():
                 try:
                     self.capture_path.rename(final_audio_path)
                     self.metadata.saved_audio_path = str(final_audio_path)
                 except OSError:
                     LOGGER.warning("Failed to rename live capture to %s", final_audio_path, exc_info=True)
-        
+
         final_txt_path.write_text(transcript or "", encoding="utf-8")
         self.metadata.status = "completed"
         self.metadata.final_transcript_path = str(final_txt_path)
         self.metadata.error_text = None
         self._write_metadata()
-        
+
         if not self.options.keep_audio_on_success and final_audio_path.exists():
             try:
                 final_audio_path.unlink()
@@ -600,7 +601,13 @@ class LiveSessionController:
         self._event_queue = ctx.Queue()
         self._process = ctx.Process(
             target=_live_asr_process_entry,
-            args=(self.options.model_name, self.options.device, self.options.compute_type, self._request_queue, self._event_queue),
+            args=(
+                self.options.model_name,
+                self.options.device,
+                self.options.compute_type,
+                self._request_queue,
+                self._event_queue,
+            ),
         )
         self._process.start()
 

@@ -68,6 +68,5 @@ def reject_legacy_auth_pass_flag(argv: list[str]) -> None:
     for arg in argv[1:]:
         if arg == "--auth-pass" or arg.startswith("--auth-pass="):
             raise SystemExit(
-                "`--auth-pass` is no longer supported to avoid credential leakage. "
-                "Set PYSCRIBE_AUTH_PASS instead."
+                "`--auth-pass` is no longer supported to avoid credential leakage. Set PYSCRIBE_AUTH_PASS instead."
             )

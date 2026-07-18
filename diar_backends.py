@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Callable
+from typing import Callable, Dict, List, Optional
 
 ProgressCB = Optional[Callable[[float], None]]
 StatusCB = Optional[Callable[[str], None]]
@@ -61,20 +61,15 @@ BACKENDS = {
         "label": "Accurate (pyannote 3.1)",
         "runner": run_pyannote,
         "requires": "pyannote.audio",
-        "desc": "Highest accuracy; slower on long files."
+        "desc": "Highest accuracy; slower on long files.",
     },
     "fast": {
         "label": "Fast (approx)",
         "runner": run_pyannote_fast,
         "requires": "pyannote.audio",
-        "desc": "Slightly faster settings; good trade-off."
+        "desc": "Slightly faster settings; good trade-off.",
     },
-    "off": {
-        "label": "Off (no speakers)",
-        "runner": None,
-        "requires": None,
-        "desc": "Skip diarization."
-    },
+    "off": {"label": "Off (no speakers)", "runner": None, "requires": None, "desc": "Skip diarization."},
 }
 
 

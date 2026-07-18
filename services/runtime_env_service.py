@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import os
-from pathlib import Path
 import sys
 import tempfile
+from pathlib import Path
 
 
 def get_cache_root() -> str:

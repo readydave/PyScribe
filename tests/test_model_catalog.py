@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
+import models
 from services.catalog_service import (
     BASE_MODEL_CHOICES,
     _hf_hub_cache_dir,
     get_model_choices,
 )
-import models
 
 
 class ModelCatalogDriftTests(unittest.TestCase):

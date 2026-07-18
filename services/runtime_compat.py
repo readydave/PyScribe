@@ -47,4 +47,3 @@ def ensure_platform_sys_version_compat() -> None:
 
     platform._sys_version = _safe_sys_version  # type: ignore[attr-defined]
     platform._pyscribe_sysver_patch = True  # type: ignore[attr-defined]
-

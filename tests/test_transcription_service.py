@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-import threading
 import sys
-from types import SimpleNamespace
+import threading
 import unittest
+from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from services.granite_speech_service import GraniteSpeechModelBundle
@@ -58,12 +58,16 @@ class TranscriptionServiceTests(unittest.TestCase):
         captured_text: list[str] = []
         captured_progress: list[float] = []
 
-        with patch("services.transcription_service._probe_duration_seconds", return_value=12.5), patch(
-            "services.transcription_service.load_audio_waveform",
-            return_value=[0.1, 0.2],
-        ), patch(
-            "services.transcription_service.transcribe_granite_audio",
-            return_value="granite transcript",
+        with (
+            patch("services.transcription_service._probe_duration_seconds", return_value=12.5),
+            patch(
+                "services.transcription_service.load_audio_waveform",
+                return_value=[0.1, 0.2],
+            ),
+            patch(
+                "services.transcription_service.transcribe_granite_audio",
+                return_value="granite transcript",
+            ),
         ):
             result = transcribe_prepared_audio(
                 wav_path="prepared.wav",
@@ -93,32 +97,39 @@ class TranscriptionServiceTests(unittest.TestCase):
             )
         )
 
-        with patch.dict(sys.modules, {"services.multimodal_service": fake_multimodal}), patch(
-            "services.transcription_service.get_ffmpeg_cmd",
-            return_value="ffmpeg",
-        ), patch(
-            "services.transcription_service.convert_to_16k_mono",
-            return_value="prepared.wav",
-        ), patch(
-            "services.transcription_service.ensure_model_cached",
-            return_value="C:\\cache\\granite",
-        ), patch(
-            "services.transcription_service.load_model",
-            return_value=object(),
-        ) as load_model_mock, patch(
-            "services.transcription_service.transcribe_prepared_audio",
-            return_value=TranscriptionResult(
-                transcript="granite transcript",
-                transcript_only="granite transcript",
-                visual_report="",
-                segments=[],
-                cancelled=False,
-                duration_seconds=12.0,
-                transcription_seconds=2.0,
-                diarization_seconds=0.0,
-                visual_analysis_seconds=0.0,
+        with (
+            patch.dict(sys.modules, {"services.multimodal_service": fake_multimodal}),
+            patch(
+                "services.transcription_service.get_ffmpeg_cmd",
+                return_value="ffmpeg",
             ),
-        ) as transcribe_mock:
+            patch(
+                "services.transcription_service.convert_to_16k_mono",
+                return_value="prepared.wav",
+            ),
+            patch(
+                "services.transcription_service.ensure_model_cached",
+                return_value="C:\\cache\\granite",
+            ),
+            patch(
+                "services.transcription_service.load_model",
+                return_value=object(),
+            ) as load_model_mock,
+            patch(
+                "services.transcription_service.transcribe_prepared_audio",
+                return_value=TranscriptionResult(
+                    transcript="granite transcript",
+                    transcript_only="granite transcript",
+                    visual_report="",
+                    segments=[],
+                    cancelled=False,
+                    duration_seconds=12.0,
+                    transcription_seconds=2.0,
+                    diarization_seconds=0.0,
+                    visual_analysis_seconds=0.0,
+                ),
+            ) as transcribe_mock,
+        ):
             result = transcribe_media_file(
                 media_path="clip.mp4",
                 model_name="ibm-granite/granite-4.0-1b-speech",
@@ -187,12 +198,16 @@ class TranscriptionServiceTests(unittest.TestCase):
 
         spec = resolve_transcription_model("deepdml/faster-whisper-large-v3-turbo-ct2")
 
-        with patch("services.transcription_service._probe_duration_seconds", return_value=8.0), patch(
-            "services.transcription_service.load_audio_waveform",
-            return_value=[0.1, 0.2],
-        ), patch(
-            "services.transcription_service._run_diarization_backend",
-            side_effect=_fake_run,
+        with (
+            patch("services.transcription_service._probe_duration_seconds", return_value=8.0),
+            patch(
+                "services.transcription_service.load_audio_waveform",
+                return_value=[0.1, 0.2],
+            ),
+            patch(
+                "services.transcription_service._run_diarization_backend",
+                side_effect=_fake_run,
+            ),
         ):
             result = transcribe_prepared_audio(
                 wav_path="prepared.wav",
@@ -231,12 +246,16 @@ class TranscriptionServiceTests(unittest.TestCase):
 
         spec = resolve_transcription_model("deepdml/faster-whisper-large-v3-turbo-ct2")
 
-        with patch("services.transcription_service._probe_duration_seconds", return_value=8.0), patch(
-            "services.transcription_service.load_audio_waveform",
-            return_value=[0.1, 0.2],
-        ), patch(
-            "services.transcription_service._run_diarization_backend",
-            return_value=[],
+        with (
+            patch("services.transcription_service._probe_duration_seconds", return_value=8.0),
+            patch(
+                "services.transcription_service.load_audio_waveform",
+                return_value=[0.1, 0.2],
+            ),
+            patch(
+                "services.transcription_service._run_diarization_backend",
+                return_value=[],
+            ),
         ):
             result = transcribe_prepared_audio(
                 wav_path="prepared.wav",
@@ -275,15 +294,19 @@ class TranscriptionServiceTests(unittest.TestCase):
 
         spec = resolve_transcription_model("deepdml/faster-whisper-large-v3-turbo-ct2")
 
-        with patch("services.transcription_service._probe_duration_seconds", return_value=8.0), patch(
-            "services.transcription_service.load_audio_waveform",
-            return_value=[0.1, 0.2],
-        ), patch(
-            "services.transcription_service._run_diarization_backend",
-            return_value=[
-                {"start": 0.0, "end": 1.0, "speaker": "S1"},
-                {"start": 1.0, "end": 2.0, "speaker": "S2"},
-            ],
+        with (
+            patch("services.transcription_service._probe_duration_seconds", return_value=8.0),
+            patch(
+                "services.transcription_service.load_audio_waveform",
+                return_value=[0.1, 0.2],
+            ),
+            patch(
+                "services.transcription_service._run_diarization_backend",
+                return_value=[
+                    {"start": 0.0, "end": 1.0, "speaker": "S1"},
+                    {"start": 1.0, "end": 2.0, "speaker": "S2"},
+                ],
+            ),
         ):
             result = transcribe_prepared_audio(
                 wav_path="prepared.wav",

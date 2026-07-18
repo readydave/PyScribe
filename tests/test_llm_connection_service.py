@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 import json
 import socket
+import sys
 import types
 import unittest
-import sys
+from io import BytesIO
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -15,8 +15,8 @@ from services.llm_connection_service import (
     discover_local_networks,
     get_failure_suggestions,
     load_llm_profiles,
-    scan_lan_for_llm_instances,
     run_connection_test,
+    scan_lan_for_llm_instances,
 )
 
 

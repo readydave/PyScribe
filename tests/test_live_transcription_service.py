@@ -19,8 +19,8 @@ from services.live_transcription_service import (
     choose_live_audio_devices,
     classify_live_audio_device,
     live_model_supported,
-    reconcile_live_transcript,
     normalize_session_title,
+    reconcile_live_transcript,
 )
 
 
@@ -40,7 +40,9 @@ class _FakeRequestQueue:
 
 class LiveTranscriptionServiceTests(unittest.TestCase):
     @staticmethod
-    def _options(tmp_dir: str, *, source_mode: str = "microphone", keep_audio: bool = True, session_title: str | None = None) -> LiveSessionOptions:
+    def _options(
+        tmp_dir: str, *, source_mode: str = "microphone", keep_audio: bool = True, session_title: str | None = None
+    ) -> LiveSessionOptions:
         return LiveSessionOptions(
             model_name="deepdml/faster-whisper-large-v3-turbo-ct2",
             device="cpu",
@@ -67,14 +69,20 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
         self.assertIsNone(normalize_session_title(""))
 
     def test_live_session_dir_uses_title(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             title = "My-Session"
             controller = LiveSessionController(self._options(temp_dir, session_title=title))
             self.assertIn(title, controller.session_dir.name)
             self.assertTrue(controller.session_dir.name.startswith("20"))  # Starts with year
 
     def test_live_session_capture_path_uses_timestamped_name(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             controller = LiveSessionController(self._options(temp_dir))
             timestamp = controller.session_timestamp
 
@@ -82,36 +90,44 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             self.assertEqual(controller.metadata.saved_audio_path, str(controller.capture_path))
 
     def test_live_session_update_title_mid_session(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             controller = LiveSessionController(self._options(temp_dir, session_title="Initial"))
             controller.start()
             self.assertEqual(controller.metadata.session_title, "Initial")
-            
+
             controller.update_title("Updated Title")
             self.assertEqual(controller.metadata.session_title, "Updated Title")
-            
+
             metadata = json.loads(Path(controller.metadata_path).read_text(encoding="utf-8"))
             self.assertEqual(metadata["session_title"], "Updated Title")
             controller.shutdown()
 
     def test_live_session_finalize_renames_files_with_title(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             title = "Final-Title"
             controller = LiveSessionController(self._options(temp_dir, session_title=title))
             timestamp = controller.session_timestamp
             controller.start()
-            controller.append_audio_chunk(np.zeros(LIVE_SAMPLE_RATE, dtype=np.float32), np.zeros(LIVE_SAMPLE_RATE, dtype=np.int16).tobytes())
+            controller.append_audio_chunk(
+                np.zeros(LIVE_SAMPLE_RATE, dtype=np.float32), np.zeros(LIVE_SAMPLE_RATE, dtype=np.int16).tobytes()
+            )
             controller.close_capture()
-            
+
             self.assertTrue(controller.capture_path.exists())
             controller.finalize_success("transcript text")
-            
+
             # The timestamped live capture should be gone, replaced by T-Final-Title.wav.
             self.assertFalse(controller.capture_path.exists())
-            
+
             expected_audio = controller.session_dir / f"{timestamp}-{title}.wav"
             expected_txt = controller.session_dir / f"{timestamp}-{title}.txt"
-            
+
             self.assertTrue(expected_audio.exists())
             self.assertTrue(expected_txt.exists())
             self.assertEqual(controller.metadata.saved_audio_path, str(expected_audio))
@@ -130,8 +146,12 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             LiveAudioDevice(id="mic-2", name="Muted", kind="microphone", available=False),
         ]
 
-        self.assertEqual([device.id for device in choose_live_audio_devices(devices, source_mode="microphone")], ["mic-1"])
-        self.assertEqual([device.id for device in choose_live_audio_devices(devices, source_mode="loopback")], ["loop-1"])
+        self.assertEqual(
+            [device.id for device in choose_live_audio_devices(devices, source_mode="microphone")], ["mic-1"]
+        )
+        self.assertEqual(
+            [device.id for device in choose_live_audio_devices(devices, source_mode="loopback")], ["loop-1"]
+        )
 
     def test_reconcile_live_transcript_replaces_draft_tail_without_duplication(self) -> None:
         committed = [{"start": 0.0, "end": 2.0, "text": "hello"}]
@@ -160,7 +180,9 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             window_end_seconds=6.0,
             stabilization_tail_seconds=1.5,
         )
-        self.assertEqual([segment["text"] for segment in committed_after_second], ["hello", "draft one", "draft two corrected"])
+        self.assertEqual(
+            [segment["text"] for segment in committed_after_second], ["hello", "draft one", "draft two corrected"]
+        )
         self.assertEqual([segment["text"] for segment in draft_after_second], ["latest"])
 
     def test_live_model_supported_rejects_granite(self) -> None:
@@ -168,7 +190,10 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
         self.assertFalse(live_model_supported("ibm-granite/granite-4.0-1b-speech"))
 
     def test_live_session_emits_incremental_transcript_events(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             controller = LiveSessionController(self._options(temp_dir))
             controller.start()
             controller._request_queue = _FakeRequestQueue()
@@ -196,7 +221,10 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             controller.shutdown()
 
     def test_stop_during_inflight_decode_queues_forced_final_decode(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             controller = LiveSessionController(self._options(temp_dir))
             controller.start()
             controller._request_queue = _FakeRequestQueue()
@@ -230,7 +258,10 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             controller.shutdown()
 
     def test_live_session_error_event_marks_metadata_failed(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             controller = LiveSessionController(self._options(temp_dir, source_mode="loopback"))
             controller.start()
             controller._request_queue = _FakeRequestQueue()
@@ -246,12 +277,17 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             controller.shutdown()
 
     def test_live_session_finalize_success_can_delete_audio(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             controller = LiveSessionController(self._options(temp_dir, keep_audio=False))
             controller.start()
             controller._request_queue = _FakeRequestQueue()
             controller._event_queue = queue.Queue()
-            controller.append_audio_chunk(np.zeros(LIVE_SAMPLE_RATE, dtype=np.float32), np.zeros(LIVE_SAMPLE_RATE, dtype=np.int16).tobytes())
+            controller.append_audio_chunk(
+                np.zeros(LIVE_SAMPLE_RATE, dtype=np.float32), np.zeros(LIVE_SAMPLE_RATE, dtype=np.int16).tobytes()
+            )
             controller.close_capture()
             self.assertTrue(controller.capture_path.exists())
 
@@ -264,12 +300,17 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
             controller.shutdown()
 
     def test_live_session_finalize_cancelled_keeps_audio(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(LiveSessionController, "_start_asr_process", return_value=None),
+        ):
             controller = LiveSessionController(self._options(temp_dir))
             controller.start()
             controller._request_queue = _FakeRequestQueue()
             controller._event_queue = queue.Queue()
-            controller.append_audio_chunk(np.zeros(LIVE_SAMPLE_RATE, dtype=np.float32), np.zeros(LIVE_SAMPLE_RATE, dtype=np.int16).tobytes())
+            controller.append_audio_chunk(
+                np.zeros(LIVE_SAMPLE_RATE, dtype=np.float32), np.zeros(LIVE_SAMPLE_RATE, dtype=np.int16).tobytes()
+            )
             controller.close_capture()
             controller.finalize_cancelled()
             metadata = json.loads(Path(controller.metadata_path).read_text(encoding="utf-8"))

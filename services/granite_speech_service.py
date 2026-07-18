@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass
 from typing import Sequence
 
-
 GRANITE_TRANSCRIBE_PROMPT = "<|audio|>can you transcribe the speech into a written format?"
 GRANITE_SAMPLE_RATE = 16000
 GRANITE_CHUNK_SECONDS = 30

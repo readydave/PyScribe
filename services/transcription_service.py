@@ -7,12 +7,12 @@ import multiprocessing as mp
 import os
 import platform
 import queue
-from pathlib import Path
 import sys
 import tempfile
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event
 from typing import Callable
 
@@ -20,7 +20,6 @@ from services.granite_speech_service import GraniteSpeechModelBundle, transcribe
 from services.model_download_service import ensure_model_cached
 from services.model_service import TranscriptionModelSpec, load_model, resolve_transcription_model
 from utils import convert_to_16k_mono, get_ffmpeg_cmd, load_audio_waveform
-
 
 StatusCallback = Callable[[str], None]
 TextCallback = Callable[[str], None]
@@ -220,9 +219,7 @@ def _run_diarization_backend_in_subprocess(
             return result
         if error_text is not None:
             raise RuntimeError(error_text)
-        raise RuntimeError(
-            f"Diarization subprocess exited unexpectedly (exit code {getattr(proc, 'exitcode', None)})."
-        )
+        raise RuntimeError(f"Diarization subprocess exited unexpectedly (exit code {getattr(proc, 'exitcode', None)}).")
     finally:
         try:
             if proc.is_alive():
@@ -292,8 +289,7 @@ def _collect_cuda_diagnostics() -> str:
 
     try:
         nvrtc_candidates = sorted(
-            str(path)
-            for path in Path(sys.prefix).glob("lib/python*/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so*")
+            str(path) for path in Path(sys.prefix).glob("lib/python*/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so*")
         )
         if nvrtc_candidates:
             parts.append(f"nvrtc_candidates={';'.join(nvrtc_candidates[:4])}")

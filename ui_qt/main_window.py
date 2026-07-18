@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass
 import logging
 import multiprocessing as mp
 import os
@@ -11,6 +10,7 @@ import queue
 import threading
 import time
 from _thread import LockType
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QObject, Qt, QThread, QTimer, Signal, Slot
@@ -28,29 +28,29 @@ from PySide6.QtGui import (
 )
 from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
 from PySide6.QtWidgets import (
-    QSizePolicy,
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
-    QMenu,
-    QFileDialog,
-    QDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
-    QInputDialog,
     QPlainTextEdit,
-    QPushButton,
-    QProgressDialog,
     QProgressBar,
+    QProgressDialog,
+    QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QTextEdit,
@@ -65,37 +65,37 @@ from services import (
     LiveSessionController,
     LiveSessionOptions,
     LiveVramPreflight,
-    audio_format_to_dict,
-    assess_live_vram_preflight,
-    build_live_capture_format,
-    TranscriptionResult,
     RuntimeInfo,
+    TranscriptionResult,
+    assess_live_vram_preflight,
+    audio_format_to_dict,
+    build_live_capture_format,
     check_ocr_backend_ready,
     choose_live_audio_devices,
     default_live_output_dir,
-    detect_runtime,
     detect_language,
-    get_diarization_backend_availability,
+    detect_runtime,
+    estimate_model_download_size_bytes,
+    format_bytes,
     get_backend_label,
+    get_diarization_backend_availability,
     get_enabled_llm_profiles,
     get_hf_token,
     get_model_choices,
     is_experimental_model,
-    model_supports_diarization,
-    normalize_model_name,
-    estimate_model_download_size_bytes,
-    format_bytes,
     is_model_cached,
     list_live_audio_inputs,
-    load_config,
     live_model_supported,
+    load_config,
+    model_supports_diarization,
     normalize_live_pcm_chunk,
+    normalize_model_name,
     open_folder,
     recommend_model,
-    resolve_transcription_model,
     resolve_repo_id,
-    save_hf_token,
+    resolve_transcription_model,
     save_config,
+    save_hf_token,
     transcribe_media_file,
 )
 from services.logging_service import configure_logging, get_log_path
@@ -103,6 +103,7 @@ from ui_qt.benchmark_dialog import BenchmarkDialog
 from ui_qt.llm_connection_dialog import LLMConnectionsDialog
 from ui_qt.llm_postprocess_dialog import LLMPostprocessDialog
 from utils import load_audio_waveform
+
 AUDIO_VIDEO_FILTER = (
     "Media Files (*.m4a *.mp3 *.wav *.flac *.aac *.ogg *.wma *.mp4 *.mov *.mkv *.avi *.flv);;All Files (*.*)"
 )
@@ -121,6 +122,7 @@ ALLOWED_MEDIA_EXTS = {
     ".flv",
 }
 
+
 @dataclass
 class BatchQueueItem:
     path: str
@@ -128,6 +130,7 @@ class BatchQueueItem:
     status: str = "queued"
     progress: float = 0.0
     error_message: str | None = None
+
 
 class BatchQueueModel(QAbstractListModel):
     def __init__(self, parent=None):
@@ -223,6 +226,7 @@ class BatchQueueModel(QAbstractListModel):
             if item.status == "queued":
                 return i
         return -1
+
 
 _UNSET = object()
 LOGGER = logging.getLogger(__name__)
@@ -320,6 +324,7 @@ def _transcription_process_entry(
         event_queue.put({"type": kind, "value": value})
 
     try:
+
         def _run_with(device_name: str, compute_name: str) -> TranscriptionResult:
             return transcribe_media_file(
                 media_path=media_path,
@@ -450,7 +455,9 @@ class TranscriptionWorker(QObject):
             LOGGER.warning("Qt worker: terminating child pid=%s reason=%s", proc.pid, reason)
             proc.terminate()
         except Exception as exc:
-            LOGGER.warning("Qt worker: terminate failed pid=%s reason=%s error=%s", getattr(proc, "pid", None), reason, exc)
+            LOGGER.warning(
+                "Qt worker: terminate failed pid=%s reason=%s error=%s", getattr(proc, "pid", None), reason, exc
+            )
 
         deadline = time.perf_counter() + max(wait_timeout, 0.0)
         while time.perf_counter() < deadline:
@@ -480,7 +487,9 @@ class TranscriptionWorker(QObject):
 
     @Slot()
     def run(self) -> None:
-        LOGGER.info("Qt worker: run start model=%s diar=%s backend=%s", self.model_name, self.use_diarization, self.diar_backend)
+        LOGGER.info(
+            "Qt worker: run start model=%s diar=%s backend=%s", self.model_name, self.use_diarization, self.diar_backend
+        )
         # Always use spawn to avoid CUDA re-init issues after forking.
         mp_ctx = mp.get_context("spawn")
         event_queue = mp_ctx.Queue()
@@ -1025,7 +1034,9 @@ class MainWindow(QMainWindow):
         self.visual_scope_combo = QComboBox()
         self.visual_scope_combo.addItem("Slides only", "slides_only")
         self.visual_scope_combo.addItem("Slides + chat", "slides_chat")
-        scope_idx = self.visual_scope_combo.findData(str(getattr(self.config, "visual_scope", "slides_only") or "slides_only").lower())
+        scope_idx = self.visual_scope_combo.findData(
+            str(getattr(self.config, "visual_scope", "slides_only") or "slides_only").lower()
+        )
         self.visual_scope_combo.setCurrentIndex(max(scope_idx, 0))
         visual_grid.addWidget(self.visual_scope_combo, 2, 1)
         visual_grid.addWidget(QLabel("Sample every (sec)"), 3, 0)
@@ -1308,7 +1319,9 @@ class MainWindow(QMainWindow):
         self.openai_key_input.setPlaceholderText("sk-...")
         self.openai_key_input.setEchoMode(QLineEdit.Password)
         openai_show_btn = QPushButton("Show")
-        openai_show_btn.clicked.connect(lambda: self._toggle_secret_field_visibility(self.openai_key_input, openai_show_btn))
+        openai_show_btn.clicked.connect(
+            lambda: self._toggle_secret_field_visibility(self.openai_key_input, openai_show_btn)
+        )
         openai_test_btn = QPushButton("Test")
         openai_test_btn.clicked.connect(self.open_llm_connections_dialog)
         api_layout.addWidget(openai_label, 1, 0)
@@ -1785,7 +1798,9 @@ class MainWindow(QMainWindow):
         if not unique:
             unique = ["accurate"]
         self._diar_backends = unique
-        LOGGER.info("Populating diar_backend_combo with %s (preferred=%s, disabled=%s)", unique, preferred, disabled_reasons)
+        LOGGER.info(
+            "Populating diar_backend_combo with %s (preferred=%s, disabled=%s)", unique, preferred, disabled_reasons
+        )
         self.diar_backend_combo.blockSignals(True)
         try:
             self.diar_backend_combo.clear()
@@ -1798,16 +1813,16 @@ class MainWindow(QMainWindow):
                     if item is not None:
                         item.setEnabled(False)
                         item.setToolTip(reason)
-            
+
             target = str(preferred or self.config.diar_backend or "").strip().lower()
             enabled = [key for key in unique if key not in disabled_reasons]
             LOGGER.info("Resolved target backend: %s (enabled_count=%d)", target, len(enabled))
-            
+
             if target in enabled:
                 idx = unique.index(target)
                 self.diar_backend_combo.setCurrentIndex(idx)
                 return
-            
+
             fallback = enabled[0] if enabled else unique[0]
             self.diar_backend_combo.setCurrentIndex(unique.index(fallback))
         finally:
@@ -1858,7 +1873,9 @@ class MainWindow(QMainWindow):
             backend_list = [str(item).strip().lower() for item in (backends if isinstance(backends, list) else [])]
         backend_list = [item for item in backend_list if item]
         current = str(self.diar_backend_combo.currentData() or "").strip().lower() or self.config.diar_backend
-        self._populate_diar_backend_combo(backend_list or ["accurate"], preferred=current, disabled_reasons=disabled_reasons)
+        self._populate_diar_backend_combo(
+            backend_list or ["accurate"], preferred=current, disabled_reasons=disabled_reasons
+        )
         self._diar_backends_resolved = True
         self._set_window_title_status(None)
         # Avoid clobbering active processing status text.
@@ -1886,8 +1903,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Unsupported file",
-                "Please select an audio/video media file.\n\n"
-                f"Unsupported extension: {ext or '(none)'}",
+                f"Please select an audio/video media file.\n\nUnsupported extension: {ext or '(none)'}",
             )
             return
         self.media_path = path
@@ -1907,7 +1923,7 @@ class MainWindow(QMainWindow):
         )
         if not paths:
             return
-        
+
         self._handle_incoming_paths(paths)
 
     @Slot()
@@ -1923,7 +1939,7 @@ class MainWindow(QMainWindow):
     def _handle_incoming_paths(self, paths: list[str]) -> None:
         added_count = 0
         valid_paths = []
-        
+
         for p in paths:
             if os.path.isdir(p):
                 folder_media = self._scan_folder_for_media(p)
@@ -1932,15 +1948,15 @@ class MainWindow(QMainWindow):
                 ext = os.path.splitext(p)[1].lower()
                 if ext in ALLOWED_MEDIA_EXTS:
                     valid_paths.append(p)
-        
+
         for path in valid_paths:
             if self.batch_queue_model.add_item(path):
                 added_count += 1
-        
+
         if added_count > 0:
             self.last_open_dir = os.path.dirname(valid_paths[0]) or self.last_open_dir
             self._save_config()
-        
+
         self._update_queue_summary()
 
     def _scan_folder_for_media(self, folder_path: str) -> list[str]:
@@ -1954,7 +1970,7 @@ class MainWindow(QMainWindow):
                         results.append(entry.path)
         except Exception as exc:
             LOGGER.warning("Failed to scan folder: %s reason=%s", folder_path, exc)
-        
+
         return sorted(results)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
@@ -1966,7 +1982,7 @@ class MainWindow(QMainWindow):
         for url in event.mimeData().urls():
             if url.isLocalFile():
                 paths.append(url.toLocalFile())
-        
+
         if paths:
             self._handle_incoming_paths(paths)
             event.acceptProposedAction()
@@ -1976,19 +1992,19 @@ class MainWindow(QMainWindow):
         selection = self.batch_queue_view.selectionModel()
         if not selection or not selection.hasSelection():
             return
-        
+
         # Remove from bottom to top to preserve indices
         rows = sorted([idx.row() for idx in selection.selectedRows()], reverse=True)
         for row in rows:
             self.batch_queue_model.remove_item(row)
-        
+
         self._update_queue_summary()
 
     @Slot()
     def _on_clear_queue(self) -> None:
         if self.batch_queue_model.rowCount() == 0:
             return
-        
+
         self.batch_queue_model.clear()
         self._update_queue_summary()
 
@@ -2005,7 +2021,7 @@ class MainWindow(QMainWindow):
     def _on_start_batch(self) -> None:
         if self._batch_active:
             return
-        
+
         index = self.batch_queue_model.get_next_queued_index()
         if index == -1:
             QMessageBox.information(self, "Batch", "No queued items found.")
@@ -2023,7 +2039,7 @@ class MainWindow(QMainWindow):
     def _process_next_batch_item(self) -> None:
         if not self._batch_active:
             return
-        
+
         index = self.batch_queue_model.get_next_queued_index()
         if index == -1:
             self._batch_active = False
@@ -2032,24 +2048,28 @@ class MainWindow(QMainWindow):
             self._update_queue_summary()
             self._update_service_visibility()
             return
-        
+
         self._current_batch_index = index
         item = self.batch_queue_model.get_item(index)
         self.batch_queue_model.update_item_status(index, "processing")
-        
+
         # Update overall progress
         count = self.batch_queue_model.rowCount()
-        done = sum(1 for i in range(count) if self.batch_queue_model.get_item(i).status in {"completed", "failed", "canceled", "skipped"})
+        done = sum(
+            1
+            for i in range(count)
+            if self.batch_queue_model.get_item(i).status in {"completed", "failed", "canceled", "skipped"}
+        )
         self.queue_overall_progress.setValue(int((done / count) * 100))
         self.queue_overall_progress.setFormat(f"Batch: {done}/{count}")
-        
+
         self._update_queue_summary()
-        
+
         # Re-use existing transcription logic via self.media_path.
         self.media_path = item.path
-        
+
         try:
-            # We call start_transcription directly. 
+            # We call start_transcription directly.
             # Note: start_transcription will call _launch_transcription_worker
             self.start_transcription()
         finally:
@@ -2142,12 +2162,12 @@ class MainWindow(QMainWindow):
     def _on_rename_with_title_clicked(self) -> None:
         if self._last_live_session is None:
             return
-        
+
         title = self.live_title_input.text().strip()
         if not title:
             QMessageBox.information(self, "Rename", "Please enter a Session Title first.")
             return
-            
+
         try:
             self._last_live_session.update_title(title)
             self._last_live_session.finalize_success(self._last_live_transcript)
@@ -2192,7 +2212,7 @@ class MainWindow(QMainWindow):
         self.pause_live_btn.setVisible(live_mode)
         self.transcribe_btn.setText("Start Live" if live_mode else "Process File")
         self.pause_live_btn.setText("Resume" if self._live_paused else "Pause")
-        
+
         # Rename button is only for live mode when a session just ended
         self.rename_with_title_btn.setVisible(live_mode)
         has_last_session = self._last_live_session is not None
@@ -2201,9 +2221,7 @@ class MainWindow(QMainWindow):
 
         if live_mode:
             self.path_label.setText(
-                str(self._live_session.session_dir)
-                if self._live_session is not None
-                else "Live capture ready"
+                str(self._live_session.session_dir) if self._live_session is not None else "Live capture ready"
             )
         else:
             self.path_label.setText(self.media_path or "No file selected")
@@ -2230,7 +2248,9 @@ class MainWindow(QMainWindow):
         elif not live_supported:
             guidance = "Live mode requires a timestamp-capable Whisper backend. Granite remains file-only."
         elif not live_devices_available and loopback_selected:
-            guidance = "No loopback input was detected. On Linux, expose a monitor/loopback source in PipeWire or PulseAudio."
+            guidance = (
+                "No loopback input was detected. On Linux, expose a monitor/loopback source in PipeWire or PulseAudio."
+            )
         elif not live_devices_available:
             guidance = "No microphone input was detected."
         else:
@@ -2243,13 +2263,27 @@ class MainWindow(QMainWindow):
         else:
             self.live_path_hint_label.setText(f"Output root: {output_root}")
 
-        can_start_live = live_mode and live_supported and live_devices_available and not self._live_capture_active and not self._live_finalizing and not self._is_transcription_running()
+        can_start_live = (
+            live_mode
+            and live_supported
+            and live_devices_available
+            and not self._live_capture_active
+            and not self._live_finalizing
+            and not self._is_transcription_running()
+        )
         if live_mode:
             self.transcribe_btn.setEnabled(can_start_live)
         self.stop_live_btn.setEnabled(self._live_capture_active)
-        self.pause_live_btn.setEnabled(self._live_capture_active and self._live_session is not None and not self._live_finalizing)
+        self.pause_live_btn.setEnabled(
+            self._live_capture_active and self._live_session is not None and not self._live_finalizing
+        )
 
-        live_controls_enabled = live_mode and not self._live_capture_active and not self._live_finalizing and not self._is_transcription_running()
+        live_controls_enabled = (
+            live_mode
+            and not self._live_capture_active
+            and not self._live_finalizing
+            and not self._is_transcription_running()
+        )
         self.live_source_combo.setEnabled(live_controls_enabled)
         self.live_device_combo.setEnabled(live_controls_enabled and self.live_device_combo.count() > 0)
         self.live_output_dir_input.setEnabled(live_controls_enabled)
@@ -2472,7 +2506,7 @@ class MainWindow(QMainWindow):
             session.start()
             capture_format = self._attach_live_audio_source(qt_device)
         except Exception as exc:
-            if 'session' in locals():
+            if "session" in locals():
                 try:
                     session.finalize_failed(str(exc))
                     session.shutdown()
@@ -2694,7 +2728,9 @@ class MainWindow(QMainWindow):
 
         run_mode, allow_transcription, run_diarization, run_visual = self._effective_service_flags()
         if run_mode == "none":
-            QMessageBox.warning(self, "No task selected", "Enable at least one processing option (Transcribe audio or Analyze visuals).")
+            QMessageBox.warning(
+                self, "No task selected", "Enable at least one processing option (Transcribe audio or Analyze visuals)."
+            )
             return
 
         model_name = self.model_combo.currentText().strip()
@@ -2995,9 +3031,7 @@ class MainWindow(QMainWindow):
             else:
                 done = "Transcription complete."
         visual_unavailable = (
-            self._current_use_visual_analysis
-            and bool(visual_report)
-            and "Unavailable:" in visual_report
+            self._current_use_visual_analysis and bool(visual_report) and "Unavailable:" in visual_report
         )
         if visual_unavailable and not cancelled:
             if self._current_run_mode == "visual_only":
@@ -3050,7 +3084,9 @@ class MainWindow(QMainWindow):
                 return
 
         if not cancelled:
-            self._auto_save_completed_parts(transcript=transcript, transcript_only=transcript_only, visual_report=visual_report)
+            self._auto_save_completed_parts(
+                transcript=transcript, transcript_only=transcript_only, visual_report=visual_report
+            )
 
         if transcript or visual_report:
             self.save_btn.setEnabled(True)
@@ -3083,7 +3119,7 @@ class MainWindow(QMainWindow):
         self.transcription_time_label.setText("Transcription time: --")
         self.diar_time_label.setText("Diarization time: --")
         self.visual_time_label.setText("Visual analysis time: --")
-        
+
         # Batch handling
         if self._batch_active and self._current_batch_index != -1:
             self.batch_queue_model.update_item_status(self._current_batch_index, "failed", error=error_msg)
@@ -3213,7 +3249,9 @@ class MainWindow(QMainWindow):
             return "transcribe_only", allow_transcription, run_diarization, False
         allow_transcription = self.transcribe_checkbox.isChecked()
         allow_visual = self.visual_checkbox.isChecked()
-        run_diarization = allow_transcription and self.diar_checkbox.isChecked() and self._selected_model_supports_diarization()
+        run_diarization = (
+            allow_transcription and self.diar_checkbox.isChecked() and self._selected_model_supports_diarization()
+        )
         run_visual = allow_visual
         mode = "none"
         if allow_transcription and run_visual:
@@ -3238,9 +3276,13 @@ class MainWindow(QMainWindow):
         self.visual_progress_bar.setVisible(run_visual)
         self.visual_time_label.setVisible(run_visual)
 
-        controls_idle = not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing
+        controls_idle = (
+            not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing
+        )
         self.model_combo.setEnabled(allow_transcription and controls_idle)
-        self.input_mode_combo.setEnabled(not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing)
+        self.input_mode_combo.setEnabled(
+            not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing
+        )
         self.transcribe_checkbox.setEnabled(not live_mode and controls_idle)
         self.transcribe_checkbox.setChecked(True if live_mode else self.transcribe_checkbox.isChecked())
         self.diar_checkbox.setEnabled(diarization_supported and controls_idle and not self._live_capture_active)
@@ -3267,7 +3309,9 @@ class MainWindow(QMainWindow):
             diar_controls_enabled = run_diarization and diarization_supported
             # Allow interaction if resolved, even if the probe thread is still technically quitting.
             probe_active = self._diar_probe_running() and not self._diar_backends_resolved
-            self.diar_backend_combo.setEnabled(diar_controls_enabled and not probe_active and not self._live_capture_active)
+            self.diar_backend_combo.setEnabled(
+                diar_controls_enabled and not probe_active and not self._live_capture_active
+            )
             self.max_speakers_input.setEnabled(diar_controls_enabled and not self._live_capture_active)
             self.visual_profile_combo.setEnabled(not live_mode and not self._is_transcription_running())
             self.visual_backend_combo.setEnabled(not live_mode and not self._is_transcription_running())
@@ -3413,9 +3457,7 @@ class MainWindow(QMainWindow):
             return True
         extra = ""
         if backend == "surya":
-            extra = (
-                "\n\nSurya is experimental in this app and may require a separate environment with newer Torch."
-            )
+            extra = "\n\nSurya is experimental in this app and may require a separate environment with newer Torch."
         msg = (
             f"Visual OCR backend '{backend}' may download OCR model files on first run.\n\n"
             "This can take a few minutes depending on connection speed.\n\n"
@@ -3596,11 +3638,7 @@ class MainWindow(QMainWindow):
             with open(path, "r", encoding="utf-8") as fh:
                 return fh.read()
         except OSError:
-            return (
-                "# PyScribe Help\n\n"
-                "Documentation file was not found.\n\n"
-                "Expected path: docs/qt_help.md\n"
-            )
+            return "# PyScribe Help\n\nDocumentation file was not found.\n\nExpected path: docs/qt_help.md\n"
 
     def _resolve_language_choice(self, model_name: str) -> str | None:
         """
@@ -3740,7 +3778,11 @@ class MainWindow(QMainWindow):
     def _auto_save_completed_parts(self, *, transcript: str, transcript_only: str, visual_report: str) -> None:
         if self._is_live_mode() or not self.media_path:
             return
-        selected_count = int(self._current_run_mode in {"full", "transcribe_only"}) + int(self._current_use_diarization) + int(self._current_use_visual_analysis)
+        selected_count = (
+            int(self._current_run_mode in {"full", "transcribe_only"})
+            + int(self._current_use_diarization)
+            + int(self._current_use_visual_analysis)
+        )
         if selected_count < 2:
             return
 
@@ -3817,13 +3859,13 @@ class MainWindow(QMainWindow):
         if payload is None:
             return
         content, suffix = payload
-        
+
         stem = "transcript"
         if self._is_live_mode() and self.live_title_input.text().strip():
             stem = self.live_title_input.text().strip()
         elif self.media_path:
             stem = os.path.splitext(os.path.basename(self.media_path))[0]
-            
+
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         if self._is_live_mode() and self.live_title_input.text().strip():
             suggested = f"{ts}_{stem}.txt"
@@ -3834,7 +3876,11 @@ class MainWindow(QMainWindow):
         if not default_dir or not os.path.isdir(default_dir):
             default_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")
         suggested_path = os.path.join(default_dir, suggested)
-        title = "Save Transcript + OCR" if suffix == "all" else ("Save Transcript" if suffix == "transcript" else "Save OCR")
+        title = (
+            "Save Transcript + OCR"
+            if suffix == "all"
+            else ("Save Transcript" if suffix == "transcript" else "Save OCR")
+        )
         path, _ = QFileDialog.getSaveFileName(self, title, suggested_path, "Text Files (*.txt)")
         if not path:
             return
@@ -3892,10 +3938,7 @@ class MainWindow(QMainWindow):
             answer = QMessageBox.question(
                 self,
                 "No LLM profiles",
-                (
-                    "No enabled LLM profiles are configured.\n\n"
-                    "Open LLM Connections now?"
-                ),
+                ("No enabled LLM profiles are configured.\n\nOpen LLM Connections now?"),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
@@ -3981,8 +4024,14 @@ class MainWindow(QMainWindow):
             if live_keep_audio_on_success is not _UNSET:
                 self.config.live_keep_audio_on_success = bool(live_keep_audio_on_success)
             self.config.confirmed_visual_backends = sorted(self._confirmed_visual_backend_downloads)
-            self.config.last_open_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
-            self.config.last_save_dir = self.last_save_dir if self.last_save_dir and os.path.isdir(self.last_save_dir) else self.config.last_save_dir
+            self.config.last_open_dir = (
+                self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
+            )
+            self.config.last_save_dir = (
+                self.last_save_dir
+                if self.last_save_dir and os.path.isdir(self.last_save_dir)
+                else self.config.last_save_dir
+            )
             save_config(self.config)
         except Exception as exc:
             LOGGER.warning("Qt config save failed: %s", exc, exc_info=True)

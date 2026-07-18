@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 import ipaddress
 import json
 import logging
 import os
 import socket
 import ssl
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any
 from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -99,7 +98,9 @@ def get_enabled_llm_profiles(raw_profiles: list[dict[str, object]]) -> list[LLMC
     return [profile for profile in load_llm_profiles(raw_profiles) if profile.enabled]
 
 
-def discover_local_networks(*, include_non_private: bool = False, include_loopback: bool = False) -> list[LocalNetworkInfo]:
+def discover_local_networks(
+    *, include_non_private: bool = False, include_loopback: bool = False
+) -> list[LocalNetworkInfo]:
     """Detect local IPv4 interfaces and return normalized network details."""
     discovered: list[LocalNetworkInfo] = []
     seen_keys: set[tuple[str, str]] = set()

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable
-from dataclasses import dataclass
 import json
 import logging
 import mimetypes
 import os
 import ssl
 import threading
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib import error as urlerror
 from urllib import request as urlrequest
@@ -18,7 +18,6 @@ from urllib import request as urlrequest
 from services.llm_connection_service import LLMConnectionProfile, evaluate_profile_scope_policy
 from services.multimodal_service import extract_text_from_images
 from services.prompt_template_service import PromptTemplate
-
 
 LOGGER = logging.getLogger(__name__)
 _POSTPROCESS_TIMEOUT_RETRY_SECONDS = 30.0
@@ -366,7 +365,13 @@ def _run_ollama(
             output_text=(exc.partial_output or "").strip(),
         )
     if not response_text:
-        return _fail(profile=profile, model=model, code="empty_response", detail="Model returned an empty response.", info_note=info_note)
+        return _fail(
+            profile=profile,
+            model=model,
+            code="empty_response",
+            detail="Model returned an empty response.",
+            info_note=info_note,
+        )
     LOGGER.info(
         "llm.run.complete provider=%s model=%s template_id=%s output_chars=%d",
         profile.provider,
@@ -457,7 +462,13 @@ def _run_openai_compatible(
             output_text=(exc.partial_output or "").strip(),
         )
     if not response_text:
-        return _fail(profile=profile, model=model, code="empty_response", detail="Model returned an empty response.", info_note=info_note)
+        return _fail(
+            profile=profile,
+            model=model,
+            code="empty_response",
+            detail="Model returned an empty response.",
+            info_note=info_note,
+        )
     LOGGER.info(
         "llm.run.complete provider=%s model=%s template_id=%s output_chars=%d",
         profile.provider,
@@ -581,7 +592,9 @@ def _http_json_post(
     request = urlrequest.Request(url=url, method="POST", headers=req_headers, data=data)
     response_handle: Any | None = None
     try:
-        with _urlopen_with_tls_policy(request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls) as response:
+        with _urlopen_with_tls_policy(
+            request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls
+        ) as response:
             response_handle = response
             if run_control:
                 run_control.set_active_response(response)
@@ -713,7 +726,9 @@ def _stream_ollama_response(
     chunks: list[str] = []
     response_handle: Any | None = None
     try:
-        with _urlopen_with_tls_policy(request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls) as response:
+        with _urlopen_with_tls_policy(
+            request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls
+        ) as response:
             response_handle = response
             if run_control:
                 run_control.set_active_response(response)
@@ -792,7 +807,9 @@ def _stream_openai_response(
     chunks: list[str] = []
     response_handle: Any | None = None
     try:
-        with _urlopen_with_tls_policy(request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls) as response:
+        with _urlopen_with_tls_policy(
+            request=request, timeout_seconds=timeout_seconds, verify_tls=verify_tls
+        ) as response:
             response_handle = response
             if run_control:
                 run_control.set_active_response(response)

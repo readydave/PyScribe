@@ -2,15 +2,16 @@
 # Helper functions for PyScribe application.
 
 import os
-import sys
 import shutil
+import sys
 
 import numpy as np
+
 
 def get_ffmpeg_cmd(tool: str = "ffmpeg") -> str | None:
     """
     Finds the path to an ffmpeg tool (ffmpeg, ffprobe, or ffplay).
-    
+
     Args:
         tool (str): The name of the tool to find ('ffmpeg', 'ffprobe', 'ffplay').
     """
@@ -25,6 +26,7 @@ def get_ffmpeg_cmd(tool: str = "ffmpeg") -> str | None:
                 return tool_path
 
     return shutil.which(tool)
+
 
 def convert_to_16k_mono(src_path: str, tmpdir: str, ffmpeg_cmd: str) -> str:
     """Uses ffmpeg to convert any media file to a temporary 16kHz mono WAV file."""
@@ -41,6 +43,7 @@ def convert_to_16k_mono(src_path: str, tmpdir: str, ffmpeg_cmd: str) -> str:
     except ffmpeg.Error as e:
         raise RuntimeError(f"ffmpeg error: {e.stderr.decode()}") from e
 
+
 def load_audio_waveform(file_path: str) -> np.ndarray:
     """
     Loads an audio file and converts it to a float32 NumPy array,
@@ -50,9 +53,8 @@ def load_audio_waveform(file_path: str) -> np.ndarray:
 
     try:
         out, _ = (
-            ffmpeg
-            .input(file_path)
-            .output('pipe:', format='s16le', acodec='pcm_s16le', ac=1, ar=16000)
+            ffmpeg.input(file_path)
+            .output("pipe:", format="s16le", acodec="pcm_s16le", ac=1, ar=16000)
             .run(capture_stdout=True, capture_stderr=True, quiet=True)
         )
         audio_np = np.frombuffer(out, dtype=np.int16)

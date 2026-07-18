@@ -4,54 +4,8 @@
 import os
 import sys
 import shutil
-import subprocess
-import importlib.util
-import tkinter as tk
-from tkinter import messagebox
 
 import numpy as np
-
-def check_and_install_dependencies() -> bool:
-    """Checks for required packages and offers to install them via pip."""
-    required_packages = {
-        "numpy": "numpy",
-        "faster_whisper": "faster-whisper",
-        "torch": "torch",
-        "ffmpeg": "ffmpeg-python",
-        "ttkthemes": "ttkthemes",
-        "psutil": "psutil",
-        "pynvml": "pynvml"
-    }
-    
-    missing_packages: list[str] = []
-    for import_name, install_name in required_packages.items():
-        if not importlib.util.find_spec(import_name):
-             missing_packages.append(install_name)
-
-    if not missing_packages:
-        return True
-
-    root = tk.Tk()
-    root.withdraw()
-    
-    msg = (f"The following required packages are missing:\n\n"
-           f"{', '.join(missing_packages)}\n\n"
-           f"Do you want to attempt to install them now?")
-           
-    if messagebox.askyesno("Missing Dependencies", msg, parent=root):
-        try:
-            args = [sys.executable, "-m", "pip", "install"] + missing_packages
-            subprocess.check_call(args)
-            messagebox.showinfo("Installation Complete", "Packages installed successfully. Please restart the application.", parent=root)
-        except subprocess.CalledProcessError as e:
-            messagebox.showerror("Installation Failed", f"Failed to install packages. Please install them manually.\n\nError: {e}", parent=root)
-        finally:
-            root.destroy()
-            return False
-    else:
-        messagebox.showwarning("Dependencies Missing", "The application cannot run without the required packages. Exiting.", parent=root)
-        root.destroy()
-        return False
 
 def get_available_hf_models() -> list[str]:
     """Gets a list of curated HF models and any locally cached ones."""

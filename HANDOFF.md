@@ -92,7 +92,9 @@ PermissionError retry path in `_replace_config_file` in particular)*
 **Verify:** new tests pass; hand-corrupt `~/.pyscribe_config.json`, launch Qt,
 confirm a `.bad-*` file appears and settings reset without a crash.
 
-### P0.2 `[ ]` Remove dead tkinter/pip-install code (F8) [XOS]
+### P0.2 `[~]` Remove dead tkinter/pip-install code (F8) [XOS]
+*(done + verified on Linux (Tk-less venv imports `utils` cleanly) 2026-07-18;
+Windows verify is a formality — pure deletion)*
 **Files:** `utils.py`
 - Delete `check_and_install_dependencies` and the `tkinter`, `subprocess`,
   `importlib.util` imports it needed. Nothing calls it (verified in review).

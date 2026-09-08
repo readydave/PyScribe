@@ -15,8 +15,13 @@ The format is inspired by Keep a Changelog.
 - Application logging now consolidates all output for the current session into a single `pyscribe.log` file, with automatic timestamped archiving of previous logs on startup.
 - Automatic log rotation that keeps only the 21 most recent log files to manage disk space.
 - Qt live transcription now performs a GPU VRAM preflight before capture and warns when free memory is likely too low, including guidance for LM Studio/local GPU workload contention.
+- `turbo` and `large-v3-turbo` model aliases, mapped to `deepdml/faster-whisper-large-v3-turbo-ct2` and resolved through the shared model cache for both file and live transcription.
 
 ### Changed
+
+- Voice activity detection (`vad_filter`) is now enabled for file transcription to strip dead air and reduce silence hallucinations.
+- File transcription now runs video OCR concurrently with audio transcription instead of sequentially.
+- Qt live audio capture now writes and normalizes PCM on a bounded background worker queue instead of the audio callback thread, with a timeout-bounded shutdown so session teardown cannot hang on a stalled write.
 
 - Transcription progress now remains dedicated to audio transcription when OCR is also enabled.
 - Visual analysis defaults to slides-only OCR, applies lower frame caps for long videos, and prefers faster OCR backends in auto mode for long-video runs.

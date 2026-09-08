@@ -164,6 +164,7 @@ Note: Interactive LAN mode no longer uses a default password. Set
 ## Models
 
 - Built-in model choices are available in both UIs.
+- `turbo` / `large-v3-turbo` select `deepdml/faster-whisper-large-v3-turbo-ct2`, available for both file and live transcription.
 - Custom Hugging Face repo IDs are supported (for example `owner/repo`).
 - Full Hugging Face model URLs are normalized to repo IDs.
 - Qt mode asks for model download confirmation with a size estimate before first download.
@@ -171,6 +172,7 @@ Note: Interactive LAN mode no longer uses a default password. Set
 ## Feature Notes
 
 - **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. Modern Torchaudio compatibility shims provide `soundfile` fallbacks for metadata/loading APIs removed or changed in Torchaudio 2.9+ / 2.11. If diarization fails or produces no speaker segments, transcription completes without speaker labels instead of emitting `[S?]` lines.
+- **File transcription:** applies VAD filtering to skip silence and runs video OCR concurrently with audio transcription when both are enabled.
 - **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` while showing rolling transcript text, supports **Pause / Resume** within the same session, and runs a final file-based cleanup pass when you press **Stop**. Optional Session Title values can name live session outputs, and **Rename with Title** can apply a title after recording. Cancel asks for confirmation and preserves the session folder/audio when accepted. Speaker identification, when enabled, runs only in that final pass. Granite remains file-only.
 - **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles, slides-only or slides+chat scope, and `auto`, `rapidocr`, `paddleocr`, `surya`, or `pytesseract` OCR backend selection. Long videos use lower frame caps and faster auto backend preference to keep webinar OCR practical.
 - **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`. When multiple processing parts are enabled, Qt also auto-saves separate `<stem>_transcript.txt`, `<stem>_diarized.txt`, and/or `<stem>_ocr.txt` files beside the source media.

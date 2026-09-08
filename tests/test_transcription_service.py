@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import ExitStack
 import threading
 import sys
 from types import SimpleNamespace
@@ -30,6 +31,104 @@ class _FakeVisualResult:
 
 
 class TranscriptionServiceTests(unittest.TestCase):
+    def _parallel_job(self, audio, visual, **kwargs):
+        with ExitStack() as stack:
+            for name, value in (
+                ("get_ffmpeg_cmd", "ffmpeg"), ("convert_to_16k_mono", "prepared.wav"),
+                ("ensure_model_cached", "/cache/turbo"), ("load_model", object()),
+            ):
+                stack.enter_context(patch(f"services.transcription_service.{name}", return_value=value))
+            stack.enter_context(patch("services.transcription_service.transcribe_prepared_audio", side_effect=audio))
+            stack.enter_context(patch.dict(sys.modules, {
+                "services.multimodal_service": SimpleNamespace(analyze_video_stream=visual),
+            }))
+            return transcribe_media_file("video.mp4", "turbo", use_visual_analysis=True, **kwargs)
+
+    def test_parallel_stages_overlap_and_deliver_callbacks_on_caller(self) -> None:
+        barrier = threading.Barrier(2, timeout=3)
+        caller = threading.get_ident()
+        callbacks = []
+
+        def audio(**kwargs):
+            self.assertNotEqual(threading.get_ident(), caller)
+            barrier.wait()
+            kwargs["on_text"]("speech")
+            return TranscriptionResult("speech", "speech", "", [], False, 10, 1, 0, 0)
+
+        def visual(*args, **kwargs):
+            barrier.wait()
+            kwargs["on_progress"](50)
+            return _FakeVisualResult("slide text", True, False, 1)
+
+        result = self._parallel_job(
+            audio, visual,
+            on_text=lambda value: callbacks.append((threading.get_ident(), value)),
+            on_visual_progress=lambda value: callbacks.append((threading.get_ident(), value)),
+        )
+        self.assertEqual(result.transcript, "speech\n\nslide text")
+        self.assertCountEqual(callbacks, [(caller, "speech"), (caller, 50)])
+
+    def test_parallel_failure_cancels_and_joins_sibling(self) -> None:
+        for failing_stage in ("audio", "visual"):
+            with self.subTest(stage=failing_stage):
+                barrier = threading.Barrier(2, timeout=3)
+                stopped = threading.Event()
+
+                def stage(name, kwargs):
+                    barrier.wait()
+                    if name == failing_stage:
+                        raise RuntimeError("stage failed")
+                    self.assertTrue(kwargs["cancel_event"].wait(3))
+                    stopped.set()
+
+                def audio(**kwargs):
+                    stage("audio", kwargs)
+                    return TranscriptionResult("", "", "", [], True, 0, 0, 0, 0)
+
+                def visual(*args, **kwargs):
+                    stage("visual", kwargs)
+                    return _FakeVisualResult("", True, True, 0)
+
+                with self.assertRaisesRegex(RuntimeError, "stage failed"):
+                    self._parallel_job(audio, visual)
+                self.assertTrue(stopped.is_set())
+
+    def test_parallel_cancellation_reaches_both_stages(self) -> None:
+        barrier = threading.Barrier(2, timeout=3)
+        cancel = threading.Event()
+        stopped = []
+
+        def audio(**kwargs):
+            barrier.wait()
+            kwargs["on_text"]("partial")
+            self.assertTrue(kwargs["cancel_event"].wait(3))
+            stopped.append("audio")
+            return TranscriptionResult("partial", "partial", "", [], True, 10, 1, 0, 0)
+
+        def visual(*args, **kwargs):
+            barrier.wait()
+            self.assertTrue(kwargs["cancel_event"].wait(3))
+            stopped.append("visual")
+            return _FakeVisualResult("", True, True, 1)
+
+        result = self._parallel_job(audio, visual, cancel_event=cancel, on_text=lambda _: cancel.set())
+        self.assertTrue(result.cancelled)
+        self.assertCountEqual(stopped, ["audio", "visual"])
+
+    def test_whisper_vad_preserves_original_segment_timestamps(self) -> None:
+        def decode(audio, **kwargs):
+            self.assertTrue(kwargs["vad_filter"])
+            return iter([SimpleNamespace(start=3.0, end=4.0, text="speech")]), None
+
+        with patch("services.transcription_service._probe_duration_seconds", return_value=5.0), patch(
+            "services.transcription_service.load_audio_waveform", return_value=[0.0],
+        ):
+            result = transcribe_prepared_audio(
+                "prepared.wav", SimpleNamespace(transcribe=decode), "en",
+            )
+        self.assertEqual(result.transcript_only, "speech")
+        self.assertEqual(result.segments[0]["start"], 3.0)
+
     def test_should_retry_diarization_on_cpu_handles_cudnn_mismatch(self) -> None:
         exc = RuntimeError("cuDNN error: CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH")
 

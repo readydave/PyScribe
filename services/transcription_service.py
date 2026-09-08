@@ -12,7 +12,9 @@ import sys
 import tempfile
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from threading import Event
 from typing import Callable
 
@@ -381,7 +383,9 @@ def transcribe_prepared_audio(
         )
 
     task = "transcribe"
-    segments_generator, _ = model.transcribe(audio_np, task=task, language=language, beam_size=5)
+    segments_generator, _ = model.transcribe(
+        audio_np, task=task, language=language, beam_size=5, vad_filter=True,
+    )
 
     all_text_segments: list[str] = []
     streamed_text = ""
@@ -731,7 +735,8 @@ def transcribe_media_file(
 
         if on_status:
             on_status(f"Transcribing with '{model_name}'...")
-        result = transcribe_prepared_audio(
+        transcribe = partial(
+            transcribe_prepared_audio,
             wav_path=wav_path,
             model=model,
             language=language,
@@ -747,22 +752,65 @@ def transcribe_media_file(
             on_diar_progress=on_diar_progress,
         )
 
-        if run_mode == "transcribe_only" or not use_visual_analysis or result.cancelled:
+        if run_mode == "transcribe_only" or not use_visual_analysis:
+            result = transcribe()
             LOGGER.info("Job[%s] completed without visual analysis cancelled=%s", job_id, result.cancelled)
             return result
 
         from services.multimodal_service import analyze_video_stream
 
-        visual = analyze_video_stream(
-            media_path,
-            ocr_backend=visual_ocr_backend,
-            visual_profile=visual_profile,
-            visual_scope=visual_scope,
-            sample_seconds=visual_sample_seconds,
-            cancel_event=cancel_event,
-            on_status=on_status,
-            on_progress=on_visual_progress,
-        )
+        job_cancel = cancel_event if cancel_event is not None else Event()
+        callbacks: queue.SimpleQueue[tuple[Callable, object]] = queue.SimpleQueue()
+
+        def marshal(callback: Callable | None) -> Callable | None:
+            if callback is None:
+                return None
+            return lambda value: callbacks.put((callback, value))
+
+        # Workers enqueue notifications; Qt/Gradio callbacks run on the caller.
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyscribe-file") as pool:
+            audio_future = pool.submit(
+                transcribe, cancel_event=job_cancel,
+                on_status=marshal(on_status), on_text=marshal(on_text),
+                on_progress=marshal(on_progress), on_diar_progress=marshal(on_diar_progress),
+            )
+            visual_future = pool.submit(
+                analyze_video_stream, media_path,
+                ocr_backend=visual_ocr_backend, visual_profile=visual_profile,
+                visual_scope=visual_scope, sample_seconds=visual_sample_seconds,
+                cancel_event=job_cancel, on_status=marshal(on_status),
+                on_progress=marshal(on_visual_progress),
+            )
+            try:
+                while True:
+                    for future in (audio_future, visual_future):
+                        if future.done() and future.exception() is not None:
+                            future.result()  # Propagate failures and cancel the sibling.
+                    if audio_future.done() and audio_future.result().cancelled:
+                        job_cancel.set()
+                    if audio_future.done() and visual_future.done():
+                        break
+                    try:
+                        callback, value = callbacks.get(timeout=0.05)
+                    except queue.Empty:
+                        continue
+                    callback(value)
+                while True:
+                    try:
+                        callback, value = callbacks.get_nowait()
+                    except queue.Empty:
+                        break
+                    callback(value)
+                result = audio_future.result()
+                visual = visual_future.result()
+            except BaseException:
+                job_cancel.set()
+                audio_future.cancel()
+                visual_future.cancel()
+                raise
+        if result.cancelled:
+            return result
+
         if on_status and visual.available and not visual.cancelled:
             on_status("Visual analysis complete.")
         transcript_with_visual = result.transcript

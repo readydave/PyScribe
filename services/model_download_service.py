@@ -31,6 +31,8 @@ MODEL_REPO_MAP = {
     "medium.en": "Systran/faster-whisper-medium.en",
     "large-v2": "Systran/faster-whisper-large-v2",
     "large-v3": "Systran/faster-whisper-large-v3",
+    "turbo": "deepdml/faster-whisper-large-v3-turbo-ct2",
+    "large-v3-turbo": "deepdml/faster-whisper-large-v3-turbo-ct2",
 }
 
 

@@ -694,6 +694,12 @@ class MainWindow(QMainWindow):
         self._live_audio_source: QAudioSource | None = None
         self._live_audio_io: object | None = None
         self._live_capture_format: QAudioFormat | None = None
+        self._live_pcm_thread: threading.Thread | None = None
+        self._live_pcm_stop = threading.Event()
+        self._live_stop_callback: Callable[[], None] | None = None
+        self._live_pcm_queue: queue.Queue[bytes | None] = queue.Queue(maxsize=64)
+        self._live_pcm_errors: queue.SimpleQueue[str] = queue.SimpleQueue()
+        self._live_session_lock = threading.Lock()
         self._live_started_at: float | None = None
         self._last_live_session: LiveSessionController | None = None
         self._last_live_transcript: str = ""
@@ -2299,7 +2305,7 @@ class MainWindow(QMainWindow):
                 return device
         return None
 
-    def _stop_live_audio_source(self) -> None:
+    def _stop_live_audio_source(self) -> bool:
         audio_io = self._live_audio_io
         self._live_audio_io = None
         if audio_io is not None:
@@ -2316,6 +2322,80 @@ class MainWindow(QMainWindow):
                 pass
             audio_source.deleteLater()
         self._live_capture_format = None
+        if self._live_pcm_thread is not None:
+            # An event cannot block on a full queue; the worker drains then exits.
+            first_wait = not self._live_pcm_stop.is_set()
+            self._live_pcm_stop.set()
+            self._live_pcm_thread.join(timeout=3.0 if first_wait else 0.0)
+            if self._live_pcm_thread.is_alive():
+                if first_wait:
+                    LOGGER.warning("Live PCM writes exceeded 3 seconds; deferring session teardown.")
+                return False
+            self._live_pcm_thread = None
+        return True
+
+    def _await_live_pcm_stop(self, callback: Callable[[], None]) -> bool:
+        if self._stop_live_audio_source():
+            return True
+        self._live_capture_active = False
+        self._live_finalizing = True
+        self.status_label.setText("Waiting for captured audio to finish saving...")
+        self.stop_live_btn.setEnabled(False)
+        self.pause_live_btn.setEnabled(False)
+        if self._live_stop_callback is None:
+            QTimer.singleShot(100, self._resume_live_stop)
+        self._live_stop_callback = callback
+        return False
+
+    def _resume_live_stop(self) -> None:
+        if self._live_stop_callback is None:
+            return
+        if not self._stop_live_audio_source():
+            QTimer.singleShot(100, self._resume_live_stop)
+            return
+        callback = self._live_stop_callback
+        self._live_stop_callback = None
+        callback()
+
+    def _start_live_pcm_worker(self, session: LiveSessionController, capture_format: QAudioFormat) -> None:
+        self._live_pcm_queue = queue.Queue(maxsize=64)
+        self._live_pcm_errors = queue.SimpleQueue()
+        self._live_pcm_stop.clear()
+        thread = threading.Thread(
+            target=self._process_live_pcm,
+            args=(session, capture_format.sampleRate(), capture_format.channelCount(), capture_format.sampleFormat()),
+            name="pyscribe-live-pcm",
+            daemon=True,
+        )
+        thread.start()
+        self._live_pcm_thread = thread
+
+    def _process_live_pcm(
+        self, session: LiveSessionController, sample_rate: int,
+        channel_count: int, sample_format: QAudioFormat.SampleFormat,
+    ) -> None:
+        failed = False
+        while True:
+            try:
+                chunk = self._live_pcm_queue.get(timeout=0.05)
+            except queue.Empty:
+                if self._live_pcm_stop.is_set():
+                    return
+                continue
+            if chunk is None:
+                return
+            if failed:
+                continue
+            try:
+                audio_np, pcm16 = normalize_live_pcm_chunk(
+                    chunk, sample_rate=sample_rate,
+                    channel_count=channel_count, sample_format=sample_format,
+                )
+                with self._live_session_lock:
+                    session.append_audio_chunk(audio_np, pcm16)
+            except Exception as exc:
+                failed = True
+                self._live_pcm_errors.put(str(exc))
 
     def _teardown_live_session(self, *, shutdown: bool = True, preserve_error: bool = False) -> None:
         self._live_status_timer.stop()
@@ -2340,25 +2420,36 @@ class MainWindow(QMainWindow):
         ):
             return
         try:
-            while int(getattr(self._live_audio_io, "bytesAvailable", lambda: 0)()) > 0:
-                chunk = bytes(self._live_audio_io.readAll())
-                if not chunk:
-                    break
-                audio_np, pcm16 = normalize_live_pcm_chunk(
-                    chunk,
-                    sample_rate=self._live_capture_format.sampleRate(),
-                    channel_count=self._live_capture_format.channelCount(),
-                    sample_format=self._live_capture_format.sampleFormat(),
-                )
-                self._live_session.append_audio_chunk(audio_np, pcm16)
+            chunk = bytes(self._live_audio_io.readAll())
+            if chunk:
+                self._live_pcm_queue.put_nowait(chunk)
+        except queue.Full:
+            if self._live_audio_source is not None:
+                self._live_audio_source.suspend()
+            self._live_pcm_errors.put("Audio processing queue overflow; capture suspended.")
         except Exception as exc:
-            self._handle_live_session_error(str(exc))
+            self._live_pcm_errors.put(str(exc))
 
     def _poll_live_session_events(self) -> None:
         session = self._live_session
-        if session is None:
+        if session is None or self._live_stop_callback is not None:
             return
-        for event in session.poll_events():
+        try:
+            error = self._live_pcm_errors.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            self._handle_live_session_error(error)
+            return
+        # Never wait for a disk write in the UI event loop.
+        if not self._live_session_lock.acquire(blocking=False):
+            return
+        try:
+            events = session.poll_events()
+            idle = session.is_idle()
+        finally:
+            self._live_session_lock.release()
+        for event in events:
             etype = event.get("type")
             if etype == "status":
                 self._on_status_update(str(event.get("value", "")))
@@ -2371,10 +2462,12 @@ class MainWindow(QMainWindow):
         if self._live_paused:
             self.status_label.setText("Live capture paused.")
         worker_running = bool(self.worker_thread and self.worker_thread.isRunning())
-        if self._live_finalizing and not self._live_capture_active and not worker_running and session.is_idle():
+        if self._live_finalizing and not self._live_capture_active and not worker_running and idle:
             self._start_live_final_pass()
 
     def _handle_live_session_error(self, error_msg: str) -> None:
+        if not self._await_live_pcm_stop(lambda: self._handle_live_session_error(error_msg)):
+            return
         LOGGER.error("Live session failed: %s", error_msg)
         if self._live_session is not None:
             try:
@@ -2462,7 +2555,9 @@ class MainWindow(QMainWindow):
             session = LiveSessionController(options)
             session.start()
             capture_format = self._attach_live_audio_source(qt_device)
+            self._start_live_pcm_worker(session, capture_format)
         except Exception as exc:
+            self._stop_live_audio_source()
             if 'session' in locals():
                 try:
                     session.finalize_failed(str(exc))
@@ -2568,7 +2663,13 @@ class MainWindow(QMainWindow):
         self.pause_live_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.force_stop_btn.setEnabled(True)
-        self._stop_live_audio_source()
+        self._finish_live_capture()
+
+    def _finish_live_capture(self) -> None:
+        if not self._await_live_pcm_stop(self._finish_live_capture):
+            return
+        if self._live_session is None:
+            return
         self._live_session.close_capture()
         self._live_session.request_final_decode()
         self._update_live_mode_ui()
@@ -2604,6 +2705,8 @@ class MainWindow(QMainWindow):
         session = self._live_session
         if session is None:
             return
+        if not self._await_live_pcm_stop(self._cancel_live_capture):
+            return
         self._append_terminal_log("Cancellation requested.")
         session.finalize_cancelled()
         self._append_terminal_log(f"Recording preserved in: {session.session_dir}")
@@ -2625,6 +2728,8 @@ class MainWindow(QMainWindow):
     def _force_stop_live_capture(self) -> None:
         session = self._live_session
         if session is None:
+            return
+        if not self._await_live_pcm_stop(self._force_stop_live_capture):
             return
         self._append_terminal_log("Force-stop requested.")
         session.finalize_failed("Live session force-stopped.")

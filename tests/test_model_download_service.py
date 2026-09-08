@@ -19,6 +19,7 @@ from services.model_download_service import (
     _verify_model_snapshot,
     ensure_hf_repo_local_dir_verified,
     ensure_model_cached,
+    resolve_repo_id,
 )
 
 
@@ -32,6 +33,12 @@ def _repo_sibling(path: str, *, sha256: str | None = None, size: int | None = No
 
 
 class ModelDownloadServiceTests(unittest.TestCase):
+    def test_turbo_aliases_resolve_to_repository(self) -> None:
+        repo = "deepdml/faster-whisper-large-v3-turbo-ct2"
+        for name in ("turbo", "large-v3-turbo", repo):
+            with self.subTest(name=name):
+                self.assertEqual(resolve_repo_id(name), repo)
+
     def test_fetch_verification_manifest_collects_only_lfs_files(self) -> None:
         expected_sha = _sha256_bytes(b"weights")
         info = SimpleNamespace(
@@ -119,12 +126,13 @@ class ModelDownloadServiceTests(unittest.TestCase):
             ):
                 mock_api_cls.return_value.model_info.return_value = info
                 result = ensure_model_cached(
-                    "tiny",
+                    "turbo",
                     on_status=statuses.append,
                     on_progress=progresses.append,
                 )
 
         self.assertEqual(result, str(snapshot_dir))
+        self.assertEqual(captured["kwargs"]["repo_id"], "deepdml/faster-whisper-large-v3-turbo-ct2")
         self.assertEqual(captured["kwargs"]["revision"], "rev-download")
         self.assertFalse(bool(captured["kwargs"]["force_download"]))
         self.assertEqual(progresses[-1], 100.0)

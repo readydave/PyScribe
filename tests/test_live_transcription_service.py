@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import multiprocessing as mp
 import queue
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -21,7 +22,17 @@ from services.live_transcription_service import (
     live_model_supported,
     reconcile_live_transcript,
     normalize_session_title,
+    _live_asr_process_entry,
 )
+
+
+def _queue_shutdown_worker(requests, events):
+    events.put({"type": "test", "value": b"x" * 2_000_000})
+    requests.get()
+    requests.close()
+    requests.join_thread()
+    events.close()
+    events.join_thread()
 
 
 class _FakeRequestQueue:
@@ -39,6 +50,55 @@ class _FakeRequestQueue:
 
 
 class LiveTranscriptionServiceTests(unittest.TestCase):
+    def test_shutdown_drains_child_output_before_joining(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = LiveSessionController(self._options(tmp))
+            ctx = mp.get_context("spawn")
+            controller._request_queue = ctx.Queue()
+            controller._event_queue = ctx.Queue()
+            proc = ctx.Process(target=_queue_shutdown_worker, args=(controller._request_queue, controller._event_queue))
+            controller._process = proc
+            proc.start()
+            with patch.object(proc, "terminate", wraps=proc.terminate) as terminate:
+                controller.shutdown()
+            terminate.assert_not_called()
+            self.assertIsNone(controller._process)
+            self.assertIsNone(controller._request_queue)
+            self.assertIsNone(controller._event_queue)
+
+    def test_forced_shutdown_does_not_join_blocked_request_feeder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = LiveSessionController(self._options(tmp))
+            proc = MagicMock()
+            proc.is_alive.side_effect = [True, True, False, False]
+            controller._process = proc
+            requests = MagicMock()
+            events = MagicMock()
+            controller._request_queue = requests
+            controller._event_queue = events
+            with patch("services.live_transcription_service.time.perf_counter", side_effect=[0.0, 3.0]):
+                controller.shutdown()
+            requests.put.assert_called_once_with({"type": "shutdown"})
+            requests.cancel_join_thread.assert_called_once()
+            requests.join_thread.assert_not_called()
+            requests.close.assert_called_once()
+            events.close.assert_called_once()
+            events.join_thread.assert_called_once()
+            proc.terminate.assert_called_once()
+            proc.close.assert_called_once()
+
+    def test_child_closes_queues_when_model_load_fails(self) -> None:
+        requests, events = MagicMock(), MagicMock()
+        with patch("services.live_transcription_service.ensure_model_cached", return_value="/cache/turbo"), patch(
+            "services.live_transcription_service.load_model", side_effect=RuntimeError("load failed"),
+        ) as load:
+            _live_asr_process_entry("turbo", "cpu", "int8", requests, events)
+        self.assertEqual(load.call_args.args[0], "/cache/turbo")
+        events.put.assert_called_once_with({"type": "error", "value": "load failed"})
+        for channel in (requests, events):
+            channel.close.assert_called_once()
+            channel.join_thread.assert_called_once()
+
     @staticmethod
     def _options(tmp_dir: str, *, source_mode: str = "microphone", keep_audio: bool = True, session_title: str | None = None) -> LiveSessionOptions:
         return LiveSessionOptions(

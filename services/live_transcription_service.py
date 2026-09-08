@@ -22,6 +22,7 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtMultimedia import QAudioFormat, QMediaDevices
 
 from services.model_service import load_model, resolve_transcription_model
+from services.model_download_service import ensure_model_cached
 
 
 LOGGER = logging.getLogger(__name__)
@@ -519,11 +520,15 @@ class LiveSessionController:
                 self._request_queue.put({"type": "shutdown"})
             except Exception:
                 pass
-        self._stop_process()
+        forced = self._stop_process()
         if self._request_queue is not None:
             try:
+                if forced:
+                    # A killed consumer cannot drain a pending audio payload.
+                    self._request_queue.cancel_join_thread()
                 self._request_queue.close()
-                self._request_queue.join_thread()
+                if not forced:
+                    self._request_queue.join_thread()
             except Exception:
                 pass
         if self._event_queue is not None:
@@ -604,42 +609,34 @@ class LiveSessionController:
         )
         self._process.start()
 
-    def _stop_process(self) -> None:
+    def _stop_process(self) -> bool:
+        """Drain child output while joining; return whether termination was needed."""
         proc = self._process
         if proc is None:
-            return
-        try:
-            if not proc.is_alive():
-                proc.join(timeout=1.0)
-                return
-        except Exception:
-            return
-        try:
+            return False
+        deadline = time.perf_counter() + 2.0
+        while proc.is_alive() and time.perf_counter() < deadline:
+            # The child joins its output feeder on exit. Keep its pipe flowing.
+            if self._event_queue is not None:
+                for _ in range(32):
+                    try:
+                        self._event_queue.get_nowait()
+                    except queue.Empty:
+                        break
+            proc.join(timeout=0.05)
+        forced = proc.is_alive()
+        if forced:
+            LOGGER.warning("Live ASR did not exit gracefully; terminating worker.")
+            proc.terminate()
             proc.join(timeout=1.0)
-        except Exception:
-            pass
-        try:
-            if proc.is_alive():
-                proc.terminate()
-        except Exception:
-            pass
-        deadline = time.perf_counter() + 0.75
-        while time.perf_counter() < deadline:
-            try:
-                if not proc.is_alive():
-                    break
-            except Exception:
-                break
-            time.sleep(0.05)
-        try:
-            if proc.is_alive():
-                proc.kill()
-        except Exception:
-            pass
-        try:
+        if proc.is_alive():
+            proc.kill()
             proc.join(timeout=1.0)
-        except Exception:
-            pass
+        if proc.is_alive():
+            raise RuntimeError("Live ASR worker could not be stopped.")
+        proc.join(timeout=0)
+        proc.close()
+        return forced
 
 
 def _live_asr_process_entry(
@@ -654,7 +651,7 @@ def _live_asr_process_entry(
         if spec.backend_kind != "faster_whisper" or not spec.supports_timestamps:
             raise RuntimeError(f"Model '{spec.display_name}' does not support live transcription.")
         model = load_model(
-            model_name,
+            ensure_model_cached(model_name),
             device=device,
             compute_type=compute_type,
             use_cache=False,
@@ -706,3 +703,9 @@ def _live_asr_process_entry(
             )
     except Exception as exc:
         event_queue.put({"type": "error", "value": str(exc)})
+    finally:
+        # Close both local queue handles; flush results before normal child exit.
+        request_queue.close()
+        request_queue.join_thread()
+        event_queue.close()
+        event_queue.join_thread()

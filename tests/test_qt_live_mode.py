@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+import wave
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtMultimedia import QAudioFormat
 
 from services import AppConfig
 from services.live_vram_service import LiveVramPreflight
@@ -27,6 +30,7 @@ class _FakeLiveSession:
             diar_backend="off",
             max_speakers=None,
             language=None,
+            input_device_name="Test Mic",
         )
         self.close_capture_calls = 0
         self.request_final_decode_calls = 0
@@ -104,6 +108,122 @@ class _FakeAudioSource:
 
 
 class QtLiveModeTests(unittest.TestCase):
+    def test_timed_out_pcm_drain_defers_close_and_keeps_worker(self) -> None:
+        win = self._build_window([])
+        def clear_live_state():
+            win._live_capture_active = False
+            win._live_finalizing = False
+            win._live_pcm_thread = None
+            win._live_stop_callback = None
+            win._live_session = None
+        self.addCleanup(clear_live_state)
+        session = _FakeLiveSession()
+        win._live_session = session
+        win._live_capture_active = True
+        worker = MagicMock()
+        worker.is_alive.return_value = True
+        win._live_pcm_thread = worker
+        for _ in range(win._live_pcm_queue.maxsize):
+            win._live_pcm_queue.put_nowait(b"\x00\x00")
+        with patch("ui_qt.main_window.QTimer.singleShot"):
+            win.stop_live_capture()
+            worker.join.assert_called_once_with(timeout=3.0)
+            self.assertIs(win._live_pcm_thread, worker)
+            self.assertEqual(session.close_capture_calls, 0)
+            self.assertEqual(session.request_final_decode_calls, 0)
+            win._poll_live_session_events()
+            self.assertEqual(session.shutdown_calls, 0)
+            worker.is_alive.return_value = False
+            win._resume_live_stop()
+        self.assertIsNone(win._live_pcm_thread)
+        self.assertEqual(session.close_capture_calls, 1)
+        self.assertEqual(session.request_final_decode_calls, 1)
+        win._live_finalizing = False
+        win._live_session = None
+
+    def test_audio_callback_queues_pcm_and_stop_drains_in_order(self) -> None:
+        win = self._build_window([])
+        capture_format = QAudioFormat()
+        capture_format.setSampleRate(16000)
+        capture_format.setChannelCount(1)
+        capture_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        entered, release = threading.Event(), threading.Event()
+        worker_threads = []
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "capture.wav")
+            with wave.open(path, "wb") as audio_file:
+                audio_file.setnchannels(1)
+                audio_file.setsampwidth(2)
+                audio_file.setframerate(16000)
+
+                def append(audio, pcm):
+                    worker_threads.append(threading.get_ident())
+                    entered.set()
+                    if not release.wait(3):
+                        raise TimeoutError("Test did not release capture worker")
+                    audio_file.writeframes(pcm)
+
+                session = _FakeLiveSession()
+                session.append_audio_chunk = append
+                win._live_session = session
+                win._live_capture_active = True
+                win._live_capture_format = capture_format
+                chunks = [b"\x01\x00" * 160, b"\x02\x00" * 160]
+                win._live_audio_io = SimpleNamespace(readAll=lambda: chunks.pop(0))
+                win._start_live_pcm_worker(session, capture_format)
+                try:
+                    win._on_live_audio_ready()
+                    self.assertTrue(entered.wait(3))
+                    win._on_live_audio_ready()  # Returns while disk writer is blocked.
+                    win._poll_live_session_events()  # Must not wait on the session lock.
+                finally:
+                    release.set()
+                    win._stop_live_audio_source()
+                    win._live_capture_active = False
+                    win._live_session = None
+                self.assertTrue(win._live_pcm_errors.empty())
+                self.assertEqual(len(worker_threads), 2)
+                self.assertTrue(all(t != threading.get_ident() for t in worker_threads))
+            with wave.open(path, "rb") as saved:
+                # Existing float-to-PCM scaling truncates these amplitudes by one.
+                self.assertEqual(saved.readframes(320), b"\x00\x00" * 160 + b"\x01\x00" * 160)
+
+    def test_capture_overflow_suspends_source_and_reports_error(self) -> None:
+        win = self._build_window([])
+        win._live_session = _FakeLiveSession()
+        win._live_capture_active = True
+        win._live_capture_format = QAudioFormat()
+        source = _FakeAudioSource()
+        win._live_audio_source = source
+        win._live_audio_io = SimpleNamespace(readAll=lambda: b"\x00\x00")
+        for _ in range(win._live_pcm_queue.maxsize):
+            win._live_pcm_queue.put_nowait(b"\x00\x00")
+        win._on_live_audio_ready()
+        self.assertEqual(source.suspend_calls, 1)
+        with patch.object(win, "_handle_live_session_error") as error:
+            win._poll_live_session_events()
+        self.assertIn("overflow", error.call_args.args[0])
+        win._live_capture_active = False
+        win._stop_live_audio_source()
+        win._live_session = None
+
+    def test_capture_worker_failure_reaches_ui(self) -> None:
+        win = self._build_window([])
+        capture_format = QAudioFormat()
+        capture_format.setSampleRate(16000)
+        capture_format.setChannelCount(1)
+        capture_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        session = _FakeLiveSession()
+        win._live_session = session
+        with patch("ui_qt.main_window.normalize_live_pcm_chunk", side_effect=OSError("disk failed")):
+            win._start_live_pcm_worker(session, capture_format)
+            win._live_pcm_queue.put_nowait(b"\x00\x00")
+            win._stop_live_audio_source()
+        with patch.object(win, "_handle_live_session_error") as error:
+            win._poll_live_session_events()
+        error.assert_called_once_with("disk failed")
+        win._live_session = None
+
     @classmethod
     def setUpClass(cls) -> None:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

@@ -302,6 +302,7 @@ def _transcription_process_entry(
     visual_sample_seconds: float,
     event_queue: object,
     cancel_event: object,
+    hotwords: str | None = None,
 ) -> None:
     configure_logging()
 
@@ -321,6 +322,7 @@ def _transcription_process_entry(
                 use_diarization=use_diarization,
                 diar_backend=diar_backend,
                 max_speakers=max_speakers,
+                hotwords=hotwords,
                 use_visual_analysis=use_visual_analysis,
                 visual_profile=visual_profile,
                 visual_ocr_backend=visual_ocr_backend,
@@ -383,6 +385,7 @@ class TranscriptionWorker(QObject):
         visual_scope: str,
         visual_sample_seconds: float,
         language: str | None,
+        hotwords: str | None = None,
     ) -> None:
         super().__init__()
         self.media_path: str = media_path
@@ -391,6 +394,7 @@ class TranscriptionWorker(QObject):
         self.use_diarization: bool = use_diarization
         self.diar_backend: str = diar_backend
         self.max_speakers: int | None = max_speakers
+        self.hotwords: str | None = hotwords
         self.use_visual_analysis: bool = use_visual_analysis
         self.visual_profile: str = visual_profile
         self.visual_ocr_backend: str = visual_ocr_backend
@@ -493,6 +497,7 @@ class TranscriptionWorker(QObject):
                 self.visual_sample_seconds,
                 event_queue,
                 cancel_event,
+                self.hotwords,
             ),
         )
         latest_transcript = ""
@@ -984,6 +989,14 @@ class MainWindow(QMainWindow):
             self.max_speakers_input.setText(str(self.config.max_speakers))
         diar_grid.addWidget(self.max_speakers_input, 1, 1)
         advanced_layout.addLayout(diar_grid)
+
+        advanced_layout.addWidget(QLabel("Names / terms (optional)"))
+        self.hotwords_input = QLineEdit()
+        self.hotwords_input.setPlaceholderText("e.g. Kubernetes, Dr. Okafor, PyScribe")
+        self.hotwords_input.setToolTip(
+            "Comma-separated names and jargon to bias recognition toward. Keep it short and relevant."
+        )
+        advanced_layout.addWidget(self.hotwords_input)
 
         divider = QFrame()
         divider.setFrameShape(QFrame.HLine)
@@ -2934,6 +2947,7 @@ class MainWindow(QMainWindow):
             visual_scope=visual_scope,
             visual_sample_seconds=visual_sample_seconds,
             language=forced_language,
+            hotwords=self.hotwords_input.text().strip() or None,
         )
 
     def _launch_transcription_worker(
@@ -2951,6 +2965,7 @@ class MainWindow(QMainWindow):
         visual_scope: str,
         visual_sample_seconds: float,
         language: str | None,
+        hotwords: str | None = None,
     ) -> None:
         self.worker_thread = QThread()
         self.worker = TranscriptionWorker(
@@ -2966,6 +2981,7 @@ class MainWindow(QMainWindow):
             visual_scope=visual_scope,
             visual_sample_seconds=visual_sample_seconds,
             language=language,
+            hotwords=hotwords,
         )
         self._update_service_visibility()
         self.worker.moveToThread(self.worker_thread)

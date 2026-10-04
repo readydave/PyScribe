@@ -459,6 +459,7 @@ def transcribe(
     visual_profile: str,
     visual_ocr_backend: str,
     visual_sample_seconds: float,
+    hotwords_text: str = "",
     progress: gr.Progress = gr.Progress(),
 ) -> Iterator[TranscribeYield]:
     """
@@ -594,6 +595,7 @@ def transcribe(
             use_diarization=use_diarization,
             diar_backend=diar_backend,
             max_speakers=max_speakers,
+            hotwords=(hotwords_text or "").strip() or None,
             use_visual_analysis=use_visual_analysis,
             visual_profile=visual_profile,
             visual_ocr_backend=visual_ocr_backend,
@@ -799,6 +801,12 @@ def create_interface() -> gr.Blocks:
                     placeholder="e.g. 2",
                     visible=initial_allow_transcription and APP_CONFIG.use_diarization,
                 )
+                hotwords_input = gr.Textbox(
+                    label="Names / terms (optional)",
+                    placeholder="e.g. Kubernetes, Dr. Okafor, PyScribe",
+                    info="Comma-separated names and jargon to bias recognition toward. Keep it short and relevant.",
+                    visible=initial_allow_transcription,
+                )
                 visual_checkbox = gr.Checkbox(
                     label="Analyze visuals (slides/chat OCR, beta)",
                     value=APP_CONFIG.use_visual_analysis,
@@ -937,6 +945,7 @@ def create_interface() -> gr.Blocks:
                 visual_profile_dropdown,
                 visual_backend_dropdown,
                 visual_interval,
+                hotwords_input,
             ],
             outputs=[status_output, transcript_output, submit_btn, completion_btn, final_status_output],
         )

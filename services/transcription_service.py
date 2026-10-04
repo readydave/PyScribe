@@ -18,6 +18,7 @@ from functools import partial
 from threading import Event
 from typing import Callable
 
+from services.asr_decode import open_segment_stream, resolve_batch_size, segment_words
 from services.granite_speech_service import GraniteSpeechModelBundle, transcribe_granite_audio
 from services.model_download_service import ensure_model_cached
 from services.model_service import TranscriptionModelSpec, load_model, resolve_transcription_model
@@ -335,6 +336,8 @@ def transcribe_prepared_audio(
     diar_backend: str = "accurate",
     device: str = "cpu",
     max_speakers: int | None = None,
+    hotwords: str | None = None,
+    batch_size: int | None = None,
     on_status: StatusCallback | None = None,
     on_text: TextCallback | None = None,
     on_progress: ProgressCallback | None = None,
@@ -342,6 +345,10 @@ def transcribe_prepared_audio(
 ) -> TranscriptionResult:
     """
     Transcribes a prepared 16k mono wav file and optionally runs diarization.
+
+    `hotwords` biases decoding toward names/terms (faster-whisper backends only).
+    `batch_size` None picks a VRAM-aware default (GPU only); 1 forces sequential decoding.
+    Word timestamps are captured when diarization is on, for word-level speaker assignment.
     """
     duration = _probe_duration_seconds(wav_path)
     spec = model_spec or resolve_transcription_model("")
@@ -382,9 +389,15 @@ def transcribe_prepared_audio(
             visual_analysis_seconds=0.0,
         )
 
-    task = "transcribe"
-    segments_generator, _ = model.transcribe(
-        audio_np, task=task, language=language, beam_size=5, vad_filter=True,
+    effective_batch = resolve_batch_size(device, batch_size)
+    LOGGER.info("ASR decode batch_size=%d hotwords=%s word_timestamps=%s", effective_batch, bool(hotwords), use_diarization)
+    segments_generator = open_segment_stream(
+        model,
+        audio_np,
+        language,
+        batch_size=effective_batch,
+        hotwords=hotwords,
+        word_timestamps=use_diarization,
     )
 
     all_text_segments: list[str] = []
@@ -422,13 +435,15 @@ def transcribe_prepared_audio(
         all_text_segments.append(segment_text)
         if segment_text:
             streamed_text = f"{streamed_text} {segment_text}".strip() if streamed_text else segment_text
-        all_segments_struct.append(
-            {
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment_text,
-            }
-        )
+        segment_struct = {
+            "start": segment.start,
+            "end": segment.end,
+            "text": segment_text,
+        }
+        words = segment_words(segment)
+        if words:
+            segment_struct["words"] = words
+        all_segments_struct.append(segment_struct)
 
         now = time.perf_counter()
         if on_text and (now - last_text_emit >= STREAM_TEXT_UPDATE_INTERVAL_SECONDS):
@@ -631,6 +646,8 @@ def transcribe_media_file(
     use_diarization: bool = False,
     diar_backend: str = "accurate",
     max_speakers: int | None = None,
+    hotwords: str | None = None,
+    batch_size: int | None = None,
     use_visual_analysis: bool = False,
     visual_profile: str = "balanced",
     visual_ocr_backend: str = "auto",
@@ -746,6 +763,8 @@ def transcribe_media_file(
             diar_backend=diar_backend,
             device=device,
             max_speakers=max_speakers,
+            hotwords=hotwords,
+            batch_size=batch_size,
             on_status=on_status,
             on_text=on_text,
             on_progress=on_progress,

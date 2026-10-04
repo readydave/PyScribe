@@ -302,6 +302,7 @@ class TranscriptionServiceTests(unittest.TestCase):
                 diar_backend="accurate",
                 device="cuda",
                 max_speakers=2,
+                batch_size=1,
                 on_status=statuses.append,
             )
 

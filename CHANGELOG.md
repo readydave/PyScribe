@@ -8,6 +8,9 @@ The format is inspired by Keep a Changelog.
 
 ### Added
 
+- Batched GPU transcription for file mode (`BatchedInferencePipeline`): ~2.5x faster on a 15-minute clip. The batch size is picked from free VRAM (16/8/4, else sequential), CPU stays sequential, and a CUDA out-of-memory error resumes sequentially from the last decoded segment.
+- Optional "Names / terms" field (Qt and Listener) passed to faster-whisper as `hotwords` to bias recognition toward names and jargon; `hotwords` and `batch_size` are also accepted by `transcribe_media_file`.
+- Word-level timestamps are captured in transcript segments (`words`) when diarization is on, preparing word-level speaker assignment.
 - `scripts/evaluate.py` evaluation harness (WER/CER, DER, real-time factor, peak RAM/VRAM) with a LibriVox benchmark manifest and reference texts in `evaluation/`.
 - CI job running the CPU-safe unit tests (`pytest -q tests`); test modules needing heavy optional dependencies are skipped when those are missing.
 - Qt now shows visual/OCR progress in a dedicated progress bar separate from audio transcription progress.
@@ -21,6 +24,7 @@ The format is inspired by Keep a Changelog.
 
 ### Changed
 
+- Qt live transcription now uses Silero VAD on each decode window, which removes hallucinated text on silence and noise without dropping short utterances.
 - Runtime stack moved to PyTorch 2.11 / torchaudio 2.11 / torchvision 0.26 with CUDA 12.8 wheels, `torchcodec` 0.11, NumPy 2.x, `ctranslate2` 4.8 and `pyannote.audio` 4.x. `soundfile` is now an explicit requirement because pyannote 4 no longer installs it. Previous pins: torch 2.5.1+cu121, numpy 1.26.4, ctranslate2 4.6.1, pyannote.audio 3.1.1.
 - Voice activity detection (`vad_filter`) is now enabled for file transcription to strip dead air and reduce silence hallucinations.
 - File transcription now runs video OCR concurrently with audio transcription instead of sequentially.

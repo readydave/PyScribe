@@ -39,6 +39,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--compute-type", default=None, help="Default: float16 on cuda, int8 on cpu.")
     parser.add_argument("--diar-backend", default="accurate")
+    parser.add_argument("--batch-size", type=int, default=None, help="Decode batch size (default: auto; 1 = sequential).")
     parser.add_argument("--label", default="baseline", help="Config label stored with the results.")
     parser.add_argument("--only", default=None, help="Run only the manifest item with this id.")
     parser.add_argument("--out", type=Path, default=None, help="Results JSON path.")
@@ -75,6 +76,8 @@ def _evaluate_item(item: dict[str, Any], args: argparse.Namespace, model: Any) -
             diar_backend=args.diar_backend,
             device=args.device,
             max_speakers=item.get("max_speakers"),
+            hotwords=item.get("hotwords"),
+            batch_size=args.batch_size,
         )
         wall_seconds = time.perf_counter() - started
 

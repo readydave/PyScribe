@@ -32,6 +32,9 @@ LIVE_CHANNELS = 1
 LIVE_DECODE_HOP_SECONDS = 3.0
 LIVE_DECODE_WINDOW_SECONDS = 12.0
 LIVE_STABILIZATION_TAIL_SECONDS = 2.0
+# Silero VAD for live windows: suppresses hallucinated text on silence/noise while keeping
+# 1 s utterances (verified in Phase 2); tighter silence gap and padding suit short windows.
+LIVE_VAD_PARAMETERS = {"min_silence_duration_ms": 500, "speech_pad_ms": 300}
 LIVE_SESSION_ROOT = Path.home() / "PyScribe Live Sessions"
 _LOOPBACK_MARKERS = ("monitor", "loopback", "stereo mix", "what u hear", "monitor of")
 
@@ -677,7 +680,14 @@ def _live_asr_process_entry(
             )
             final = bool(request.get("final"))
 
-            segments_gen, _ = model.transcribe(audio_np, task="transcribe", language=language, beam_size=5)
+            segments_gen, _ = model.transcribe(
+                audio_np,
+                task="transcribe",
+                language=language,
+                beam_size=5,
+                vad_filter=True,
+                vad_parameters=LIVE_VAD_PARAMETERS,
+            )
             segments = []
             for segment in segments_gen:
                 text = str(getattr(segment, "text", "") or "").strip()

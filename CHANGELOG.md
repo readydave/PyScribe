@@ -10,7 +10,7 @@ The format is inspired by Keep a Changelog.
 
 - Word-level speaker assignment: segments with word timestamps are split at speaker changes instead of taking a single label (new `services/speaker_assignment.py`; segment-level labelling remains the fallback).
 - Diarization uses `pyannote/speaker-diarization-community-1` when pyannote.audio 4.x is installed (older 3.1/3.0 pipelines remain fallbacks), passes audio to pyannote in memory via `soundfile`, and reports real progress through a pyannote pipeline hook.
-- Batched GPU transcription for file mode (`BatchedInferencePipeline`): ~2.5x faster on a 15-minute clip. The batch size is picked from free VRAM (16/8/4, else sequential), CPU stays sequential, and a CUDA out-of-memory error resumes sequentially from the last decoded segment.
+- Optional batched GPU transcription for file mode (`BatchedInferencePipeline`, "Faster GPU decoding" in Qt and Listener, `batched=True` in the services): ~2.5x faster ASR on GPU. Off by default because on conversational audio it dropped filler words and short replies. The batch size is picked from free VRAM (16/8/4, else sequential), CPU stays sequential, and a CUDA out-of-memory error resumes sequentially from the last decoded segment.
 - Optional "Names / terms" field (Qt and Listener) passed to faster-whisper as `hotwords` to bias recognition toward names and jargon; `hotwords` and `batch_size` are also accepted by `transcribe_media_file`.
 - Word-level timestamps are captured in transcript segments (`words`) when diarization is on, preparing word-level speaker assignment.
 - `scripts/evaluate.py` evaluation harness (WER/CER, DER, real-time factor, peak RAM/VRAM) with a LibriVox benchmark manifest and reference texts in `evaluation/`.

@@ -14,15 +14,17 @@ LOGGER = logging.getLogger(__name__)
 _BATCH_TIERS = ((8.0, 16), (5.0, 8), (3.5, 4))
 
 
-def resolve_batch_size(device: str, requested: int | None = None) -> int:
+def resolve_batch_size(device: str, requested: int | None = None, *, batched: bool = False) -> int:
     """Return the decode batch size (1 means sequential).
 
-    Batching is GPU-only: on CPU it was faster but measurably less accurate in the
-    Phase 2 evaluation, so CPU stays sequential unless a size is requested explicitly.
+    Sequential decoding is the default: batched decoding is faster but, on conversational
+    audio, it dropped filler words and some short real utterances (about 14% fewer words on a
+    32-minute interview), and on CPU it also cost ~1 pt WER. `batched=True` opts in to a
+    VRAM-aware size on GPU; an explicit `requested` size always wins.
     """
     if requested is not None:
         return max(1, int(requested))
-    if device.lower() != "cuda":
+    if not batched or device.lower() != "cuda":
         return 1
     info = get_gpu_memory_info()
     if info is None:

@@ -340,6 +340,7 @@ def transcribe_prepared_audio(
     max_speakers: int | None = None,
     hotwords: str | None = None,
     batch_size: int | None = None,
+    batched: bool = False,
     on_status: StatusCallback | None = None,
     on_text: TextCallback | None = None,
     on_progress: ProgressCallback | None = None,
@@ -349,7 +350,8 @@ def transcribe_prepared_audio(
     Transcribes a prepared 16k mono wav file and optionally runs diarization.
 
     `hotwords` biases decoding toward names/terms (faster-whisper backends only).
-    `batch_size` None picks a VRAM-aware default (GPU only); 1 forces sequential decoding.
+    Decoding is sequential by default. `batched=True` opts in to faster VRAM-sized batching on GPU
+    (it can drop filler words and short utterances); an explicit `batch_size` overrides both.
     Word timestamps are captured when diarization is on, for word-level speaker assignment.
     """
     duration = _probe_duration_seconds(wav_path)
@@ -392,7 +394,7 @@ def transcribe_prepared_audio(
         )
 
     diar_backend = _LEGACY_DIAR_BACKENDS.get(str(diar_backend or "").strip().lower(), diar_backend)
-    effective_batch = resolve_batch_size(device, batch_size)
+    effective_batch = resolve_batch_size(device, batch_size, batched=batched)
     LOGGER.info("ASR decode batch_size=%d hotwords=%s word_timestamps=%s", effective_batch, bool(hotwords), use_diarization)
     segments_generator = open_segment_stream(
         model,
@@ -651,6 +653,7 @@ def transcribe_media_file(
     max_speakers: int | None = None,
     hotwords: str | None = None,
     batch_size: int | None = None,
+    batched: bool = False,
     use_visual_analysis: bool = False,
     visual_profile: str = "balanced",
     visual_ocr_backend: str = "auto",
@@ -768,6 +771,7 @@ def transcribe_media_file(
             max_speakers=max_speakers,
             hotwords=hotwords,
             batch_size=batch_size,
+            batched=batched,
             on_status=on_status,
             on_text=on_text,
             on_progress=on_progress,

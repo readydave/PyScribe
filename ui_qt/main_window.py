@@ -303,6 +303,7 @@ def _transcription_process_entry(
     event_queue: object,
     cancel_event: object,
     hotwords: str | None = None,
+    batched: bool = False,
 ) -> None:
     configure_logging()
 
@@ -323,6 +324,7 @@ def _transcription_process_entry(
                 diar_backend=diar_backend,
                 max_speakers=max_speakers,
                 hotwords=hotwords,
+                batched=batched,
                 use_visual_analysis=use_visual_analysis,
                 visual_profile=visual_profile,
                 visual_ocr_backend=visual_ocr_backend,
@@ -386,6 +388,7 @@ class TranscriptionWorker(QObject):
         visual_sample_seconds: float,
         language: str | None,
         hotwords: str | None = None,
+        batched: bool = False,
     ) -> None:
         super().__init__()
         self.media_path: str = media_path
@@ -395,6 +398,7 @@ class TranscriptionWorker(QObject):
         self.diar_backend: str = diar_backend
         self.max_speakers: int | None = max_speakers
         self.hotwords: str | None = hotwords
+        self.batched: bool = batched
         self.use_visual_analysis: bool = use_visual_analysis
         self.visual_profile: str = visual_profile
         self.visual_ocr_backend: str = visual_ocr_backend
@@ -498,6 +502,7 @@ class TranscriptionWorker(QObject):
                 event_queue,
                 cancel_event,
                 self.hotwords,
+                self.batched,
             ),
         )
         latest_transcript = ""
@@ -997,6 +1002,13 @@ class MainWindow(QMainWindow):
             "Comma-separated names and jargon to bias recognition toward. Keep it short and relevant."
         )
         advanced_layout.addWidget(self.hotwords_input)
+
+        self.batched_checkbox = QCheckBox("Faster GPU decoding (may drop short utterances)")
+        self.batched_checkbox.setToolTip(
+            "Batched decoding is about 2.5x faster on GPU but can drop filler words and brief replies. "
+            "Leave off for interviews and conversations; it has no effect on CPU."
+        )
+        advanced_layout.addWidget(self.batched_checkbox)
 
         divider = QFrame()
         divider.setFrameShape(QFrame.HLine)
@@ -2948,6 +2960,7 @@ class MainWindow(QMainWindow):
             visual_sample_seconds=visual_sample_seconds,
             language=forced_language,
             hotwords=self.hotwords_input.text().strip() or None,
+            batched=self.batched_checkbox.isChecked(),
         )
 
     def _launch_transcription_worker(
@@ -2966,6 +2979,7 @@ class MainWindow(QMainWindow):
         visual_sample_seconds: float,
         language: str | None,
         hotwords: str | None = None,
+        batched: bool = False,
     ) -> None:
         self.worker_thread = QThread()
         self.worker = TranscriptionWorker(
@@ -2982,6 +2996,7 @@ class MainWindow(QMainWindow):
             visual_sample_seconds=visual_sample_seconds,
             language=language,
             hotwords=hotwords,
+            batched=batched,
         )
         self._update_service_visibility()
         self.worker.moveToThread(self.worker_thread)

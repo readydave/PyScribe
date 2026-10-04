@@ -15,8 +15,12 @@ def _gpu(free_gb: float) -> GpuMemoryInfo:
 
 
 class ResolveBatchSizeTests(unittest.TestCase):
-    def test_cpu_defaults_to_sequential(self) -> None:
-        self.assertEqual(asr_decode.resolve_batch_size("cpu"), 1)
+    def test_default_is_sequential_even_on_a_roomy_gpu(self) -> None:
+        with patch("services.asr_decode.get_gpu_memory_info", return_value=_gpu(20.0)):
+            self.assertEqual(asr_decode.resolve_batch_size("cuda"), 1)
+
+    def test_cpu_stays_sequential_even_when_batched_requested(self) -> None:
+        self.assertEqual(asr_decode.resolve_batch_size("cpu", batched=True), 1)
 
     def test_explicit_request_wins_and_is_clamped(self) -> None:
         self.assertEqual(asr_decode.resolve_batch_size("cpu", 8), 8)
@@ -25,11 +29,11 @@ class ResolveBatchSizeTests(unittest.TestCase):
     def test_gpu_tiers_follow_free_vram(self) -> None:
         for free_gb, expected in ((20.0, 16), (6.0, 8), (4.0, 4), (2.0, 1)):
             with patch("services.asr_decode.get_gpu_memory_info", return_value=_gpu(free_gb)):
-                self.assertEqual(asr_decode.resolve_batch_size("cuda"), expected, free_gb)
+                self.assertEqual(asr_decode.resolve_batch_size("cuda", batched=True), expected, free_gb)
 
     def test_unknown_gpu_memory_is_sequential(self) -> None:
         with patch("services.asr_decode.get_gpu_memory_info", return_value=None):
-            self.assertEqual(asr_decode.resolve_batch_size("cuda"), 1)
+            self.assertEqual(asr_decode.resolve_batch_size("cuda", batched=True), 1)
 
 
 class OpenSegmentStreamTests(unittest.TestCase):

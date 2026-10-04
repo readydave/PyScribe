@@ -460,6 +460,7 @@ def transcribe(
     visual_ocr_backend: str,
     visual_sample_seconds: float,
     hotwords_text: str = "",
+    batched: bool = False,
     progress: gr.Progress = gr.Progress(),
 ) -> Iterator[TranscribeYield]:
     """
@@ -596,6 +597,7 @@ def transcribe(
             diar_backend=diar_backend,
             max_speakers=max_speakers,
             hotwords=(hotwords_text or "").strip() or None,
+            batched=bool(batched),
             use_visual_analysis=use_visual_analysis,
             visual_profile=visual_profile,
             visual_ocr_backend=visual_ocr_backend,
@@ -807,6 +809,12 @@ def create_interface() -> gr.Blocks:
                     info="Comma-separated names and jargon to bias recognition toward. Keep it short and relevant.",
                     visible=initial_allow_transcription,
                 )
+                batched_checkbox = gr.Checkbox(
+                    label="Faster GPU decoding (may drop short utterances)",
+                    value=False,
+                    info="About 2.5x faster on GPU, but can drop filler words and brief replies. Leave off for interviews; no effect on CPU.",
+                    visible=initial_allow_transcription,
+                )
                 visual_checkbox = gr.Checkbox(
                     label="Analyze visuals (slides/chat OCR, beta)",
                     value=APP_CONFIG.use_visual_analysis,
@@ -946,6 +954,7 @@ def create_interface() -> gr.Blocks:
                 visual_backend_dropdown,
                 visual_interval,
                 hotwords_input,
+                batched_checkbox,
             ],
             outputs=[status_output, transcript_output, submit_btn, completion_btn, final_status_output],
         )

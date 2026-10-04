@@ -176,7 +176,7 @@ Note: Interactive LAN mode no longer uses a default password. Set
 
 ## Feature Notes
 
-- **Speed vs accuracy:** on GPU, file transcription is batched (size chosen from free VRAM; roughly 2.5x faster, within ~0.3 pt WER of sequential decoding in our LibriVox evaluation). CPU runs sequentially because batching cost ~1 pt WER there.
+- **Speed vs completeness:** file transcription decodes sequentially by default. The optional **Faster GPU decoding** setting batches decoding (size chosen from free VRAM; roughly 2.5x faster ASR on GPU, within ~0.3 pt WER on clean read speech) but on a real 32-minute interview it dropped filler words and some short replies (about 15% fewer words), so it is off by default. CPU always decodes sequentially.
 - **Names / terms:** the optional field biases recognition toward names and jargon. Keep it short and relevant; irrelevant terms can raise the error rate.
 
 - **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. Modern Torchaudio compatibility shims provide `soundfile` fallbacks for metadata/loading APIs removed or changed in Torchaudio 2.9+ / 2.11. If diarization fails or produces no speaker segments, transcription completes without speaker labels instead of emitting `[S?]` lines.

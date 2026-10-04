@@ -1,0 +1,1278 @@
+"""Optional video-stream analysis helpers (slides/chat OCR)."""
+
+from __future__ import annotations
+
+from collections import Counter
+import ctypes
+from difflib import SequenceMatcher
+import html as html_lib
+import importlib.util
+import inspect
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import time
+from dataclasses import dataclass
+from threading import Event
+from typing import Callable, Iterable
+
+import ffmpeg
+
+from services.model_download_service import ensure_hf_repo_local_dir_verified
+from services.runtime_env_service import configure_runtime_environment
+from utils import get_ffmpeg_cmd
+
+StatusCallback = Callable[[str], None]
+ProgressCallback = Callable[[float], None]
+OcrFunction = Callable[..., str]
+OcrBuildResult = tuple[OcrFunction | None, str, str | None, str | None]
+OcrBackendBuildResult = tuple[OcrFunction | None, str | None]
+_UI_NOISE_TERMS = (
+    "app.zoom.us/",
+    "zoom workplace",
+    "recording on",
+    "who can see your messages",
+    "who can see your responses",
+    "you are viewing",
+    "write a message",
+    "shared a file in the meeting",
+    "navigation icons",
+    "chat people raise react",
+    "camera mic share leave",
+    "take control",
+    "pop out",
+    "copilot",
+    "apps",
+    "mute mic",
+    "share leave",
+    "sysadmin meeting",
+    "banfield",
+    "slide show",
+    "slideshow",
+    "animations",
+    "add-ins",
+)
+_PADDLE_OCR = None
+_PADDLE_OCR_MODEL_DIR_KWARGS = None
+_RAPID_OCR = None
+_SURYA_DET_PREDICTOR = None
+_SURYA_REC_PREDICTOR = None
+_VISUAL_PROFILE_SETTINGS: dict[str, dict[str, float | int]] = {
+    # Faster runtime: fewer chat scans + more aggressive dedupe.
+    "fast": {
+        "slide_change_threshold": 0.020,
+        "chat_change_threshold": 0.028,
+        "chat_stride": 3,
+        "max_frames": 180,
+        "long_max_frames": 90,
+    },
+    # Good default quality/speed balance.
+    "balanced": {
+        "slide_change_threshold": 0.014,
+        "chat_change_threshold": 0.020,
+        "chat_stride": 2,
+        "max_frames": 240,
+        "long_max_frames": 120,
+    },
+    # Most complete capture (slowest).
+    "accurate": {
+        "slide_change_threshold": 0.010,
+        "chat_change_threshold": 0.014,
+        "chat_stride": 1,
+        "max_frames": 360,
+        "long_max_frames": 180,
+    },
+}
+_LONG_VIDEO_SECONDS = 2 * 60 * 60
+
+
+@dataclass
+class VisualAnalysisResult:
+    report: str
+    frames_scanned: int
+    elapsed_seconds: float
+    cancelled: bool
+    available: bool
+    reason: str | None = None
+
+
+def check_ocr_backend_ready(backend: str) -> tuple[bool, str | None]:
+    requested = (backend or "auto").strip().lower()
+    if requested == "auto":
+        return True, None
+
+    if requested == "paddleocr":
+        if importlib.util.find_spec("paddleocr") is None:
+            return False, "Install PaddleOCR: pip install paddleocr paddlepaddle"
+        return True, None
+
+    if requested == "surya":
+        if importlib.util.find_spec("surya") is None:
+            return (
+                False,
+                "Install Surya OCR: pip install surya-ocr (note: this may require a newer Torch stack).",
+            )
+        return True, None
+
+    if requested == "rapidocr":
+        if importlib.util.find_spec("rapidocr_onnxruntime") is None:
+            return False, "Install RapidOCR: pip install rapidocr-onnxruntime"
+        return True, None
+
+    if requested == "pytesseract":
+        if importlib.util.find_spec("pytesseract") is None:
+            return False, "Install pytesseract: pip install pytesseract"
+        if shutil.which("tesseract") is None:
+            return False, "Install the OS package for Tesseract and ensure the `tesseract` command is in PATH."
+        return True, None
+
+    return False, f"Unknown OCR backend '{backend}'."
+
+
+def extract_text_from_images(
+    image_paths: list[str] | tuple[str, ...],
+    *,
+    ocr_backend: str = "auto",
+    on_status: StatusCallback | None = None,
+) -> tuple[str, str | None, str | None]:
+    """Extract OCR text from a list of image files.
+
+    Returns:
+    - extracted_text: newline-joined text lines (can be empty)
+    - backend_used: resolved OCR backend name when available
+    - detail: fallback/info/error detail text
+    """
+    normalized_paths: list[str] = []
+    for path in image_paths:
+        candidate = str(path or "").strip()
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        if candidate not in normalized_paths:
+            normalized_paths.append(candidate)
+    if not normalized_paths:
+        return "", None, "No readable image files were provided."
+
+    ocr_fn, backend_used, reason, backend_note = _build_ocr_fn(ocr_backend, on_status=on_status)
+    if ocr_fn is None:
+        return "", None, reason or "No OCR backend available."
+
+    from PIL import Image
+
+    lines: list[str] = []
+    for image_path in normalized_paths:
+        try:
+            with Image.open(image_path) as image:
+                text = ocr_fn(image.convert("RGB"), mode="slide")
+        except Exception as exc:
+            if on_status:
+                on_status(f"Image OCR failed for '{os.path.basename(image_path)}': {exc}")
+            continue
+        for line in _extract_ocr_lines(text):
+            if line not in lines:
+                lines.append(line)
+    if not lines:
+        detail = backend_note or "OCR ran but no readable text was found in attached images."
+        return "", backend_used, detail
+    return "\n".join(lines), backend_used, backend_note
+
+
+def analyze_video_stream(
+    media_path: str,
+    *,
+    ocr_backend: str = "auto",
+    visual_profile: str = "balanced",
+    visual_scope: str = "slides_only",
+    sample_seconds: float = 1.0,
+    max_frames: int | None = None,
+    cancel_event: Event | None = None,
+    on_status: StatusCallback | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> VisualAnalysisResult:
+    """
+    Samples video frames and extracts on-screen text (OCR) when available.
+    """
+    started = time.perf_counter()
+    visual_profile = _normalize_visual_profile(visual_profile)
+    profile_cfg = _VISUAL_PROFILE_SETTINGS[visual_profile]
+    sample_seconds = max(0.5, float(sample_seconds or 1.0))
+    visual_scope = _normalize_visual_scope(visual_scope)
+    include_chat = visual_scope == "slides_chat"
+    media_duration_seconds = _get_video_duration_seconds(media_path)
+    long_video = bool(media_duration_seconds and media_duration_seconds >= _LONG_VIDEO_SECONDS)
+    if max_frames is None:
+        frame_key = "long_max_frames" if long_video else "max_frames"
+        max_frames = int(profile_cfg[frame_key])
+    max_frames = max(1, int(max_frames))
+    effective_sample_seconds = _resolve_effective_sample_seconds(
+        requested_sample_seconds=sample_seconds,
+        max_frames=max_frames,
+        media_duration_seconds=media_duration_seconds,
+    )
+
+    if not _has_video_stream(media_path):
+        return VisualAnalysisResult(
+            report="",
+            frames_scanned=0,
+            elapsed_seconds=time.perf_counter() - started,
+            cancelled=False,
+            available=False,
+            reason="Input has no video stream.",
+        )
+
+    requested_backend = (ocr_backend or "auto").strip().lower()
+    ocr_fn, ocr_name, ocr_reason, backend_note = _build_ocr_fn(ocr_backend, on_status=on_status, long_video=long_video)
+    if ocr_fn is None:
+        if on_status:
+            on_status(f"Visual analysis unavailable: {ocr_reason}")
+        return VisualAnalysisResult(
+            report=_format_unavailable_report(ocr_reason, requested_backend=requested_backend),
+            frames_scanned=0,
+            elapsed_seconds=time.perf_counter() - started,
+            cancelled=False,
+            available=False,
+            reason=ocr_reason,
+        )
+
+    if on_status:
+        on_status(
+            f"Analyzing video frames for on-screen text ({ocr_name}, profile={visual_profile}, scope={visual_scope})..."
+        )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        frames = _extract_sampled_frames(
+            media_path=media_path,
+            out_dir=temp_dir,
+            sample_seconds=effective_sample_seconds,
+            max_frames=max_frames,
+        )
+
+        if not frames:
+            reason = "No frames were extracted from the video stream."
+            if on_status:
+                on_status(f"Visual analysis: {reason}")
+            return VisualAnalysisResult(
+                report=_format_unavailable_report(reason, requested_backend=requested_backend),
+                frames_scanned=0,
+                elapsed_seconds=time.perf_counter() - started,
+                cancelled=False,
+                available=False,
+                reason=reason,
+            )
+
+        from PIL import Image
+
+        canonical_lines: dict[str, str] = {}
+        line_counts: Counter[str] = Counter()
+        line_source: dict[str, str] = {}
+        timeline: list[str] = []
+        prev_keys: set[str] = set()
+        prev_slide_sig = None
+        prev_chat_sig = None
+        last_visible_slide_keys: set[str] = set()
+        last_visible_chat_keys: set[str] = set()
+        slide_change_threshold = float(profile_cfg["slide_change_threshold"])
+        chat_change_threshold = float(profile_cfg["chat_change_threshold"])
+        chat_stride = max(1, int(profile_cfg["chat_stride"]))
+        ocr_calls_slide = 0
+        ocr_calls_chat = 0
+        dedupe_skipped_slide = 0
+        dedupe_skipped_chat = 0
+        for idx, frame_path in enumerate(frames, start=1):
+            if cancel_event and cancel_event.is_set():
+                return VisualAnalysisResult(
+                    report=_format_visual_report(
+                        partial=True,
+                        sample_seconds=effective_sample_seconds,
+                        frames_scanned=idx - 1,
+                        visual_profile=visual_profile,
+                        visual_scope=visual_scope,
+                        requested_backend=requested_backend,
+                        ocr_name=ocr_name,
+                        backend_note=backend_note,
+                        ocr_calls_slide=ocr_calls_slide,
+                        ocr_calls_chat=ocr_calls_chat,
+                        dedupe_skipped_slide=dedupe_skipped_slide,
+                        dedupe_skipped_chat=dedupe_skipped_chat,
+                        canonical_lines=canonical_lines,
+                        line_counts=line_counts,
+                        line_source=line_source,
+                        total_frames=idx - 1,
+                        timeline=timeline,
+                    ),
+                    frames_scanned=idx - 1,
+                    elapsed_seconds=time.perf_counter() - started,
+                    cancelled=True,
+                    available=True,
+                    reason="Cancelled during visual analysis.",
+                )
+
+            with Image.open(frame_path) as frame_img:
+                rois = _extract_rois(frame_img, include_chat=include_chat)
+                frame_lines: list[tuple[str, str]] = []
+                current_keys: set[str] = set()
+                newly_visible: list[tuple[str, str]] = []
+                detected_slide_keys: set[str] = set()
+                detected_chat_keys: set[str] = set()
+                try:
+                    slide_sig = _roi_signature(rois["slide"])
+                    should_ocr_slide = idx == 1 or _signature_changed(prev_slide_sig, slide_sig, slide_change_threshold)
+                    prev_slide_sig = slide_sig
+                    if should_ocr_slide:
+                        slide_text = ocr_fn(rois["slide"], mode="slide")
+                        frame_lines.extend(("slide", line) for line in _extract_ocr_lines(slide_text))
+                        ocr_calls_slide += 1
+                    else:
+                        dedupe_skipped_slide += 1
+                        for key in last_visible_slide_keys:
+                            line_counts[key] += 1
+                            current_keys.add(key)
+
+                    if "chat" in rois:
+                        chat_sig = _roi_signature(rois["chat"])
+                        chat_changed = idx == 1 or _signature_changed(prev_chat_sig, chat_sig, chat_change_threshold)
+                        prev_chat_sig = chat_sig
+                        should_ocr_chat = chat_changed and (idx == 1 or idx % chat_stride == 0)
+                        if should_ocr_chat:
+                            chat_text = ocr_fn(rois["chat"], mode="chat")
+                            frame_lines.extend(("chat", line) for line in _extract_ocr_lines(chat_text))
+                            ocr_calls_chat += 1
+                        else:
+                            dedupe_skipped_chat += 1
+                            for key in last_visible_chat_keys:
+                                line_counts[key] += 1
+                                current_keys.add(key)
+                    else:
+                        prev_chat_sig = None
+                        last_visible_chat_keys.clear()
+                except Exception as exc:
+                    reason = f"OCR runtime error: {exc}"
+                    if on_status:
+                        on_status(f"Visual analysis unavailable: {reason}")
+                    return VisualAnalysisResult(
+                        report=_format_unavailable_report(reason, requested_backend=requested_backend),
+                        frames_scanned=idx - 1,
+                        elapsed_seconds=time.perf_counter() - started,
+                        cancelled=False,
+                        available=False,
+                        reason=reason,
+                    )
+
+            for source, line in frame_lines:
+                if source == "slide" and _is_ui_noise_line(line):
+                    continue
+                if source == "chat" and _is_ui_noise_line(line) and not _is_chat_like(line):
+                    continue
+                key = _line_key(line)
+                if not key:
+                    continue
+                canonical = _canonicalize_key(key, canonical_lines.keys())
+                if canonical not in canonical_lines:
+                    canonical_lines[canonical] = line
+                    line_source[canonical] = source
+                line_counts[canonical] += 1
+                if line_source.get(canonical) == "slide" and source == "chat" and _prefer_chat_source(line):
+                    # Reclassify only when the right-side line looks like actual chat content.
+                    line_source[canonical] = "chat"
+                current_keys.add(canonical)
+                if source == "slide":
+                    detected_slide_keys.add(canonical)
+                else:
+                    detected_chat_keys.add(canonical)
+                if source == "slide" and _is_low_value_slide_line(canonical_lines[canonical]):
+                    continue
+                if source == "chat" and _is_low_value_chat_line(canonical_lines[canonical]):
+                    continue
+                existing_new_lines = [text for _, text in newly_visible]
+                if canonical not in prev_keys and not _line_exists_similar(canonical_lines[canonical], existing_new_lines):
+                    newly_visible.append((line_source.get(canonical, source), canonical_lines[canonical]))
+
+            if detected_slide_keys:
+                last_visible_slide_keys = detected_slide_keys
+            elif frame_lines:
+                last_visible_slide_keys = set()
+            if detected_chat_keys:
+                last_visible_chat_keys = detected_chat_keys
+            elif any(src == "chat" for src, _ in frame_lines):
+                last_visible_chat_keys = set()
+
+            if newly_visible:
+                timestamp = _seconds_to_hhmmss((idx - 1) * effective_sample_seconds)
+                excerpt = " | ".join(f"[{src}] {txt}" for src, txt in newly_visible[:3])
+                timeline.append(f"- [{timestamp}] {excerpt}")
+            prev_keys = current_keys
+            if on_progress:
+                on_progress((idx / len(frames)) * 100.0)
+
+        report = _format_visual_report(
+            partial=False,
+            sample_seconds=effective_sample_seconds,
+            frames_scanned=len(frames),
+            visual_profile=visual_profile,
+            visual_scope=visual_scope,
+            requested_backend=requested_backend,
+            ocr_name=ocr_name,
+            backend_note=backend_note,
+            ocr_calls_slide=ocr_calls_slide,
+            ocr_calls_chat=ocr_calls_chat,
+            dedupe_skipped_slide=dedupe_skipped_slide,
+            dedupe_skipped_chat=dedupe_skipped_chat,
+            canonical_lines=canonical_lines,
+            line_counts=line_counts,
+            line_source=line_source,
+            total_frames=len(frames),
+            timeline=timeline,
+        )
+        if on_status and not canonical_lines:
+            on_status(
+                "Visual analysis found no readable text. Try a shorter sample interval (0.5-1.0s) or higher-resolution source video."
+            )
+        return VisualAnalysisResult(
+            report=report,
+            frames_scanned=len(frames),
+            elapsed_seconds=time.perf_counter() - started,
+            cancelled=False,
+            available=True,
+        )
+
+
+def _has_video_stream(media_path: str) -> bool:
+    try:
+        probe = ffmpeg.probe(media_path)
+        streams = probe.get("streams", [])
+    except Exception:
+        return False
+    return any(s.get("codec_type") == "video" for s in streams)
+
+
+def _get_video_duration_seconds(media_path: str) -> float | None:
+    try:
+        probe = ffmpeg.probe(media_path)
+    except Exception:
+        return None
+
+    try:
+        duration = float(probe.get("format", {}).get("duration"))
+        if duration > 0:
+            return duration
+    except Exception:
+        pass
+
+    for stream in probe.get("streams", []):
+        if stream.get("codec_type") != "video":
+            continue
+        try:
+            duration = float(stream.get("duration"))
+        except Exception:
+            continue
+        if duration > 0:
+            return duration
+    return None
+
+
+def _resolve_effective_sample_seconds(
+    *,
+    requested_sample_seconds: float,
+    max_frames: int,
+    media_duration_seconds: float | None,
+) -> float:
+    requested = max(0.5, float(requested_sample_seconds or 1.0))
+    if not media_duration_seconds or media_duration_seconds <= 0 or max_frames <= 0:
+        return requested
+    duration_based = max(0.5, float(media_duration_seconds) / float(max_frames))
+    return max(requested, duration_based)
+
+
+def _extract_sampled_frames(
+    *,
+    media_path: str,
+    out_dir: str,
+    sample_seconds: float,
+    max_frames: int,
+) -> list[str]:
+    ffmpeg_cmd = get_ffmpeg_cmd(tool="ffmpeg")
+    if not ffmpeg_cmd:
+        return []
+
+    pattern = os.path.join(out_dir, "frame_%06d.jpg")
+    cmd = [
+        ffmpeg_cmd,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        media_path,
+        "-vf",
+        f"fps=1/{sample_seconds}",
+        "-frames:v",
+        str(max_frames),
+        "-q:v",
+        "4",
+        pattern,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return []
+    frames = sorted(
+        os.path.join(out_dir, name)
+        for name in os.listdir(out_dir)
+        if name.lower().endswith(".jpg")
+    )
+    return frames
+
+
+def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long_video: bool = False) -> OcrBuildResult:
+    requested = (backend or "auto").strip().lower()
+    attempts: list[str] = []
+    attempt_reason_by_backend: dict[str, str] = {}
+
+    backend_builders: dict[str, Callable[..., OcrBackendBuildResult]] = {
+        "paddleocr": _build_paddle_ocr_fn,
+        "rapidocr": _build_rapid_ocr_fn,
+        "surya": _build_surya_ocr_fn,
+        "pytesseract": lambda **_: _build_tesseract_ocr_fn(),
+    }
+    if requested == "auto":
+        order = ["rapidocr", "paddleocr", "pytesseract", "surya"] if long_video else ["paddleocr", "rapidocr", "surya", "pytesseract"]
+    elif requested == "rapidocr":
+        order = ["rapidocr", "paddleocr", "pytesseract"]
+    elif requested == "surya":
+        order = ["surya", "rapidocr", "paddleocr", "pytesseract"]
+    elif requested == "paddleocr":
+        order = ["paddleocr", "rapidocr", "pytesseract"]
+    elif requested == "pytesseract":
+        order = ["pytesseract"]
+    else:
+        order = ["paddleocr", "rapidocr", "surya", "pytesseract"]
+
+    for name in order:
+        fn, reason = backend_builders[name](on_status=on_status)
+        if fn is not None:
+            fallback_note = None
+            if on_status and name != requested and requested != "auto":
+                on_status(f"Requested OCR backend '{requested}' unavailable; using '{name}' fallback.")
+                fallback_reason = attempt_reason_by_backend.get(requested, "unavailable")
+                fallback_note = (
+                    f"Requested backend '{requested}' unavailable: {fallback_reason}. "
+                    f"Using '{name}' fallback."
+                )
+            elif on_status and requested == "auto" and (name != "paddleocr" or long_video):
+                on_status(f"Using '{name}' OCR backend.")
+                fallback_note = (
+                    f"Auto mode selected '{name}' for long-video OCR runtime."
+                    if long_video
+                    else f"Auto mode selected '{name}' (higher-priority backends unavailable)."
+                )
+            return fn, name, None, fallback_note
+        attempt_reason_by_backend[name] = reason or "backend unavailable"
+        attempts.append(f"{name}: {reason}")
+
+    fn, reason = _build_tesseract_ocr_fn()
+    if fn is not None:
+        if on_status and attempts:
+            on_status("Using pytesseract fallback OCR backend.")
+        fallback_note = (
+            f"Requested backend '{requested}' unavailable; using 'pytesseract' fallback."
+            if requested != "pytesseract"
+            else None
+        )
+        return fn, "pytesseract", None, fallback_note
+
+    if attempts:
+        reason = "; ".join(attempts)
+    return None, "", reason or "No OCR backend available.", None
+
+
+def _build_tesseract_ocr_fn() -> OcrBackendBuildResult:
+    try:
+        import pytesseract
+
+        pytesseract.get_tesseract_version()
+
+        def _ocr(image: "Image.Image", mode: str = "slide") -> str:
+            config = "--psm 6"
+            return pytesseract.image_to_string(image, config=config)
+
+        return _ocr, None
+    except Exception as exc:
+        reason = (
+            "Install OCR dependencies to enable visual analysis: "
+            "pip install pytesseract pillow and install Tesseract OCR on the OS."
+        )
+        return None, f"{reason} ({exc})"
+
+
+def _resolve_paddle_ocr_model_dir_kwargs(PaddleOCR: type[object]) -> dict[str, str]:
+    helper = object.__new__(PaddleOCR)
+    det_model_name, rec_model_name = PaddleOCR._get_ocr_model_names(helper, "en", None)
+    if not det_model_name or not rec_model_name:
+        raise RuntimeError("Unable to resolve PaddleOCR model names for English OCR.")
+
+    return {
+        "doc_orientation_classify_model_dir": "PP-LCNet_x1_0_doc_ori",
+        "doc_unwarping_model_dir": "UVDoc",
+        "text_detection_model_dir": str(det_model_name),
+        "textline_orientation_model_dir": "PP-LCNet_x1_0_textline_ori",
+        "text_recognition_model_dir": str(rec_model_name),
+    }
+
+
+def _prepare_verified_paddle_ocr_model_dirs(
+    PaddleOCR: type[object],
+    *,
+    on_status: StatusCallback | None = None,
+) -> dict[str, str]:
+    model_source = str(os.environ.get("PADDLE_PDX_MODEL_SOURCE") or "").strip().lower()
+    if model_source != "huggingface":
+        return {}
+
+    paddlex_cache = str(os.environ.get("PADDLE_PDX_CACHE_HOME") or "").strip()
+    if not paddlex_cache:
+        paddlex_cache = configure_runtime_environment()["paddlex_cache"]
+    official_models_root = os.path.join(paddlex_cache, "official_models")
+    os.makedirs(official_models_root, exist_ok=True)
+
+    model_dir_kwargs = _resolve_paddle_ocr_model_dir_kwargs(PaddleOCR)
+    verified_kwargs: dict[str, str] = {}
+    total_models = len(model_dir_kwargs)
+    for idx, (arg_name, model_name) in enumerate(model_dir_kwargs.items(), start=1):
+        if on_status:
+            on_status(f"Preparing PaddleOCR model {idx}/{total_models}: {model_name}...")
+        verified_kwargs[arg_name] = ensure_hf_repo_local_dir_verified(
+            repo_id=f"PaddlePaddle/{model_name}",
+            local_dir=os.path.join(official_models_root, model_name),
+            on_status=on_status,
+        )
+    return verified_kwargs
+
+
+def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBackendBuildResult:
+    global _PADDLE_OCR, _PADDLE_OCR_MODEL_DIR_KWARGS
+    configure_runtime_environment()
+    _sanitize_ld_library_path(on_status=on_status)
+    try:
+        import paddle
+
+        paddle_lib_dir = os.path.join(os.path.dirname(paddle.__file__), "libs")
+        if os.path.isdir(paddle_lib_dir):
+            current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+            paths = [p for p in current_ld.split(":") if p]
+            if paddle_lib_dir not in paths:
+                os.environ["LD_LIBRARY_PATH"] = ":".join([paddle_lib_dir, *paths])
+            iomp_lib = os.path.join(paddle_lib_dir, "libiomp5.so")
+            if os.path.isfile(iomp_lib):
+                ctypes.CDLL(iomp_lib, mode=ctypes.RTLD_GLOBAL)
+            mkl_lib = os.path.join(paddle_lib_dir, "libmklml_intel.so")
+            if os.path.isfile(mkl_lib):
+                ctypes.CDLL(mkl_lib, mode=ctypes.RTLD_GLOBAL)
+            # Preload common Paddle bundled runtime libs before importing paddleocr/paddlex.
+            for name in ("libphi.so", "libphi_core.so", "libdnnl.so.3"):
+                path = os.path.join(paddle_lib_dir, name)
+                if os.path.isfile(path):
+                    try:
+                        ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+                    except Exception:
+                        pass
+        from paddleocr import PaddleOCR
+    except Exception as exc:
+        return None, (
+            "Install/repair PaddleOCR backend: pip install paddleocr paddlepaddle; "
+            "if you use Pinokio/Conda shell shims, run PyScribe in a clean shell with "
+            "`unset LD_LIBRARY_PATH` "
+            f"({exc})"
+        )
+
+    try:
+        if _PADDLE_OCR_MODEL_DIR_KWARGS is None:
+            if on_status:
+                on_status("Preparing verified PaddleOCR model files...")
+            _PADDLE_OCR_MODEL_DIR_KWARGS = _prepare_verified_paddle_ocr_model_dirs(
+                PaddleOCR,
+                on_status=on_status,
+            )
+        if _PADDLE_OCR is None:
+            if on_status:
+                on_status("Initializing PaddleOCR...")
+            _PADDLE_OCR = PaddleOCR(
+                use_textline_orientation=True,
+                lang="en",
+                **(_PADDLE_OCR_MODEL_DIR_KWARGS or {}),
+            )
+
+        def _ocr(image: "Image.Image", mode: str = "slide") -> str:
+            import numpy as np
+
+            image_np = np.array(image)
+            min_conf = 0.45 if mode == "slide" else 0.35
+            result = None
+            predict_exc: Exception | None = None
+            ocr_exc: Exception | None = None
+
+            # PaddleOCR >=3 prefers `predict`; older versions expose `ocr`.
+            if hasattr(_PADDLE_OCR, "predict"):
+                try:
+                    result = _PADDLE_OCR.predict(image_np)
+                except Exception as exc:
+                    predict_exc = exc
+
+            if result is None and hasattr(_PADDLE_OCR, "ocr"):
+                try:
+                    result = _PADDLE_OCR.ocr(image_np, cls=True)
+                except TypeError as exc:
+                    if "unexpected keyword argument 'cls'" not in str(exc):
+                        ocr_exc = exc
+                    else:
+                        try:
+                            result = _PADDLE_OCR.ocr(image_np)
+                        except Exception as sub_exc:
+                            ocr_exc = sub_exc
+                except Exception as exc:
+                    ocr_exc = exc
+
+            if result is None and (predict_exc or ocr_exc):
+                details = []
+                if predict_exc:
+                    details.append(f"predict: {predict_exc}")
+                if ocr_exc:
+                    details.append(f"ocr: {ocr_exc}")
+                raise RuntimeError("; ".join(details))
+
+            lines = _extract_paddle_lines(result, min_conf=min_conf)
+            return "\n".join(lines)
+
+        return _ocr, None
+    except Exception as exc:
+        return None, f"PaddleOCR init/runtime error: {exc}"
+
+
+def _build_rapid_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBackendBuildResult:
+    global _RAPID_OCR
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except Exception as exc:
+        return None, f"Install RapidOCR backend: pip install rapidocr-onnxruntime ({exc})"
+
+    try:
+        if _RAPID_OCR is None:
+            if on_status:
+                on_status("Initializing RapidOCR (first run may download OCR model files)...")
+            _RAPID_OCR = RapidOCR()
+
+        def _ocr(image: "Image.Image", mode: str = "slide") -> str:
+            import numpy as np
+
+            image_np = np.array(image)
+            min_conf = 0.48 if mode == "slide" else 0.40
+            result, _ = _RAPID_OCR(image_np)
+            lines = _extract_rapidocr_lines(result, min_conf=min_conf)
+            return "\n".join(lines)
+
+        return _ocr, None
+    except Exception as exc:
+        return None, f"RapidOCR init/runtime error: {exc}"
+
+
+def _extract_paddle_lines(result: object, *, min_conf: float) -> list[str]:
+    lines: list[str] = []
+
+    def _append_text(text: object, conf: object) -> None:
+        text_val = str(text or "").strip()
+        if not text_val:
+            return
+        try:
+            conf_val = float(conf) if conf is not None else 1.0
+        except Exception:
+            conf_val = 1.0
+        if conf_val >= min_conf:
+            lines.append(text_val)
+
+    def _consume(item: object) -> None:
+        if item is None:
+            return
+
+        # PaddleOCR <=2 style: [poly, (text, conf)]
+        if isinstance(item, (list, tuple)):
+            if (
+                len(item) >= 2
+                and isinstance(item[1], (list, tuple))
+                and len(item[1]) >= 2
+                and isinstance(item[1][0], (str, bytes))
+            ):
+                _append_text(item[1][0], item[1][1])
+                return
+            for sub in item:
+                _consume(sub)
+            return
+
+        # Dict-like outputs (PaddleOCR >=3 / PaddleX OCRResult serialized)
+        mapping = None
+        if isinstance(item, dict):
+            mapping = item
+        elif hasattr(item, "keys"):
+            try:
+                mapping = {k: item[k] for k in item.keys()}
+            except Exception:
+                mapping = None
+
+        if mapping is not None:
+            rec_texts = mapping.get("rec_texts")
+            rec_scores = mapping.get("rec_scores")
+            if isinstance(rec_texts, (list, tuple)):
+                for idx, txt in enumerate(rec_texts):
+                    conf = rec_scores[idx] if isinstance(rec_scores, (list, tuple)) and idx < len(rec_scores) else None
+                    _append_text(txt, conf)
+            elif rec_texts is not None:
+                _append_text(rec_texts, mapping.get("rec_score") or mapping.get("score"))
+
+            if "text" in mapping:
+                _append_text(mapping.get("text"), mapping.get("confidence") or mapping.get("score"))
+
+            for key in ("result", "results", "data", "ocr_res", "output"):
+                if key in mapping:
+                    _consume(mapping.get(key))
+            return
+
+        # Generic object fallback
+        text = getattr(item, "text", None)
+        if text is not None:
+            _append_text(text, getattr(item, "confidence", None))
+
+    _consume(result)
+    return lines
+
+
+def _sanitize_ld_library_path(*, on_status: StatusCallback | None = None) -> None:
+    """
+    Remove known conflicting runtime library paths injected by external app launchers.
+    """
+    raw = os.environ.get("LD_LIBRARY_PATH", "")
+    if not raw:
+        return
+    parts = [p for p in raw.split(":") if p]
+    blocked_markers = ("pinokio", "facefusion-pinokio.git/.env/lib")
+    kept = [p for p in parts if not any(marker in p for marker in blocked_markers)]
+    if len(kept) != len(parts):
+        os.environ["LD_LIBRARY_PATH"] = ":".join(kept)
+        if on_status:
+            on_status("Detected conflicting LD_LIBRARY_PATH entries; using a cleaned runtime library path for OCR.")
+
+
+def _build_surya_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBackendBuildResult:
+    global _SURYA_DET_PREDICTOR, _SURYA_REC_PREDICTOR
+    try:
+        from surya.detection import DetectionPredictor
+        from surya.recognition import RecognitionPredictor
+    except Exception as exc:
+        return None, f"Install Surya OCR backend: pip install surya-ocr ({exc})"
+
+    try:
+        if _SURYA_DET_PREDICTOR is None or _SURYA_REC_PREDICTOR is None:
+            if on_status:
+                on_status("Initializing Surya OCR (first run may download OCR model files)...")
+            _SURYA_REC_PREDICTOR = RecognitionPredictor()
+            if not _surya_supports_full_page_ocr(_SURYA_REC_PREDICTOR):
+                _SURYA_DET_PREDICTOR = DetectionPredictor()
+
+        def _ocr(image: "Image.Image", mode: str = "slide") -> str:
+            global _SURYA_DET_PREDICTOR
+            if _surya_supports_full_page_ocr(_SURYA_REC_PREDICTOR):
+                predictions = _SURYA_REC_PREDICTOR([image], full_page=True)
+            else:
+                if _SURYA_DET_PREDICTOR is None:
+                    _SURYA_DET_PREDICTOR = DetectionPredictor()
+                predictions = _SURYA_REC_PREDICTOR([image], [["en"]], _SURYA_DET_PREDICTOR)
+            return _extract_surya_prediction_text(predictions, mode=mode)
+
+        return _ocr, None
+    except Exception as exc:
+        return None, f"Surya init/runtime error: {exc}"
+
+
+def _surya_supports_full_page_ocr(predictor: object) -> bool:
+    try:
+        return "full_page" in inspect.signature(predictor.__call__).parameters
+    except Exception:
+        return False
+
+
+def _extract_surya_prediction_text(predictions: object, *, mode: str) -> str:
+    lines: list[str] = []
+    min_conf = 0.45 if mode == "slide" else 0.35
+    for pred in predictions or []:
+        text_lines = getattr(pred, "text_lines", None) or getattr(pred, "lines", None) or []
+        for line in text_lines:
+            text = _object_value(line, "text")
+            conf = _object_value(line, "confidence")
+            try:
+                conf_val = float(conf) if conf is not None else 1.0
+            except Exception:
+                conf_val = 1.0
+            if text and conf_val >= min_conf:
+                lines.append(str(text).strip())
+        blocks = getattr(pred, "blocks", None) or []
+        for block in blocks:
+            if bool(_object_value(block, "skipped")) or bool(_object_value(block, "error")):
+                continue
+            block_html = _object_value(block, "html")
+            if block_html:
+                lines.extend(_html_fragment_to_lines(str(block_html)))
+        if not text_lines and not blocks and getattr(pred, "text", None):
+            lines.append(str(pred.text).strip())
+    return "\n".join(dict.fromkeys(line for line in lines if line))
+
+
+def _object_value(value: object, key: str) -> object | None:
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _html_fragment_to_lines(fragment: str) -> list[str]:
+    text = re.sub(r"<\s*br\s*/?\s*>", "\n", fragment, flags=re.IGNORECASE)
+    text = re.sub(r"</\s*(p|div|li|tr|h[1-6])\s*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    return _extract_ocr_lines(text)
+
+
+def _normalize_visual_profile(profile: str) -> str:
+    normalized = str(profile or "").strip().lower()
+    if normalized in _VISUAL_PROFILE_SETTINGS:
+        return normalized
+    return "balanced"
+
+
+def _normalize_visual_scope(scope: str) -> str:
+    normalized = str(scope or "").strip().lower().replace("-", "_")
+    if normalized in {"slides_only", "slides_chat"}:
+        return normalized
+    return "slides_only"
+
+
+def _roi_signature(image: "Image.Image") -> "np.ndarray":
+    import numpy as np
+
+    # Small grayscale signature for cheap change detection.
+    sig = image.convert("L").resize((32, 32))
+    return np.asarray(sig, dtype=np.uint8)
+
+
+def _signature_changed(prev_sig: "np.ndarray | None", cur_sig: "np.ndarray", threshold: float) -> bool:
+    if prev_sig is None:
+        return True
+    try:
+        import numpy as np
+
+        delta = np.mean(np.abs(cur_sig.astype(np.int16) - prev_sig.astype(np.int16))) / 255.0
+        return float(delta) > float(threshold)
+    except Exception:
+        return True
+
+
+def _extract_ocr_lines(text: str) -> list[str]:
+    if not text:
+        return []
+    lines: list[str] = []
+    for raw in text.splitlines():
+        normalized = re.sub(r"\s+", " ", raw).strip()
+        if len(normalized) < 4 or len(normalized) > 180:
+            continue
+        if not re.search(r"[A-Za-z0-9]{3,}", normalized):
+            continue
+        if re.fullmatch(r"[-_=+|/\\.,:;!?~`'\"()\[\]{}<>* ]+", normalized):
+            continue
+        lines.append(normalized[:180])
+    return lines
+
+
+def _extract_rapidocr_lines(result: object, *, min_conf: float) -> list[str]:
+    lines: list[str] = []
+    if not isinstance(result, list):
+        return lines
+    for item in result:
+        if not isinstance(item, (list, tuple)) or len(item) < 3:
+            continue
+        text = str(item[1] or "").strip()
+        if not text:
+            continue
+        try:
+            conf = float(item[2]) if item[2] is not None else 1.0
+        except Exception:
+            conf = 1.0
+        if conf >= min_conf:
+            lines.append(text)
+    return lines
+
+
+def _extract_rois(image: "Image.Image", *, include_chat: bool = True) -> dict[str, "Image.Image"]:
+    w, h = image.size
+    top = int(h * 0.05)
+    bottom = int(h * 0.96)
+    left = int(w * 0.01)
+    slide_right = int(w * 0.99)
+
+    rois = {
+        "slide": image.crop((left, top, slide_right, bottom)),
+    }
+    chat_left = int(w * 0.84)
+    if include_chat and w - chat_left >= 180:
+        rois["chat"] = image.crop((chat_left, top, int(w * 0.995), int(h * 0.95)))
+    return rois
+
+
+def _line_key(line: str) -> str:
+    key = re.sub(r"[^a-z0-9: ]+", " ", line.lower())
+    key = re.sub(r"\s+", " ", key).strip()
+    if len(key) < 4:
+        return ""
+    return key
+
+
+def _canonicalize_key(key: str, existing_keys: Iterable[str]) -> str:
+    for existing in existing_keys:
+        if key == existing:
+            return existing
+        if SequenceMatcher(None, key, existing).ratio() >= 0.92:
+            return existing
+    return key
+
+
+def _line_exists_similar(candidate: str, existing_lines: list[str]) -> bool:
+    for line in existing_lines:
+        if SequenceMatcher(None, candidate.lower(), line.lower()).ratio() >= 0.94:
+            return True
+    return False
+
+
+def _looks_like_person_name(line: str) -> bool:
+    normalized = re.sub(r"\s+", " ", line or "").strip()
+    if not normalized or any(char.isdigit() for char in normalized):
+        return False
+    parts = re.findall(r"[A-Za-z][A-Za-z'-]*", normalized.replace(".", " "))
+    if len(parts) < 2 or len(parts) > 4:
+        return False
+    if len("".join(parts)) < 6:
+        return False
+    if re.search(r"[:;,.!?()%$]", normalized.replace(".", "")):
+        return False
+    for part in parts:
+        if len(part) == 1:
+            continue
+        if not part[:1].isupper():
+            return False
+    return True
+
+
+def _is_chat_like(line: str) -> bool:
+    return bool(re.match(r"^[A-Za-z][A-Za-z0-9_. -]{0,24}:\s+\S+", line))
+
+
+def _is_low_value_chat_line(line: str) -> bool:
+    normalized = re.sub(r"\s+", " ", line or "").strip()
+    if not normalized:
+        return True
+    if _is_ui_noise_line(normalized):
+        return True
+    if re.fullmatch(r"[\d:.]+", normalized):
+        return True
+    if _looks_like_person_name(normalized):
+        return True
+    if _is_chat_like(normalized):
+        return False
+    if any(char.isdigit() for char in normalized):
+        return False
+    if re.search(r"[.!?;,]", normalized):
+        return False
+    words = re.findall(r"[A-Za-z]+", normalized)
+    if not words:
+        return True
+    if len(words) <= 2 and all(word[:1].isupper() for word in words):
+        return True
+    if len(words) <= 3 and len(normalized) <= 24:
+        return True
+    return False
+
+
+def _prefer_chat_source(line: str) -> bool:
+    return _is_chat_like(line) or not _is_low_value_chat_line(line)
+
+
+def _is_ui_noise_line(line: str) -> bool:
+    lower = line.lower()
+    compact = re.sub(r"\s+", " ", lower).strip()
+    if lower in {"chat", "people", "raise", "react", "camera", "mic", "share", "leave", "view", "notes"}:
+        return True
+    if any(term in lower for term in _UI_NOISE_TERMS):
+        return True
+    if re.search(r"https?://|www\.|zoom\.us|app\.zoom", lower):
+        return True
+    if re.search(r"\b(rec|recording)\b", lower) and re.search(r"\b(zoom|workplace|on)\b", lower):
+        return True
+    if re.search(r"\b(search|gmaps|routes|youtube|yt|fb)\b", lower) and len(compact.split()) >= 6:
+        return True
+    if re.search(r"\b(submit|answered|single choice|choice \*)\b", lower) and len(compact) <= 120:
+        return True
+    if re.search(r"\banimat\w*", lower):
+        return True
+    if ("shom" in lower or "side sh" in lower or "side sho" in lower) and re.search(r"(animat|armat)", lower):
+        return True
+    if re.search(r"\bslide\s*s\w*", lower):
+        return True
+    if re.search(r"\b(home|record|review|add-ins|view|help)\b", lower) and len(lower) <= 36:
+        return True
+    if re.search(r"\b(chat|people|raise|react|camera|mic|share|leave|copilot|apps|view|notes)\b", lower):
+        if len(lower.split()) >= 4:
+            return True
+    if re.match(r"^o\s*\d{3,}", lower):
+        return True
+    return False
+
+
+def _is_persistent_noise(line: str, count: int, total_frames: int) -> bool:
+    if total_frames <= 0:
+        return False
+    if (_looks_like_person_name(line) or _is_low_value_slide_line(line) or _is_low_value_chat_line(line)) and count >= max(6, int(total_frames * 0.18)):
+        return True
+    if count >= max(8, int(total_frames * 0.6)):
+        if len(line) <= 36 or _is_ui_noise_line(line):
+            return True
+    return False
+
+
+def _is_low_value_slide_line(line: str) -> bool:
+    normalized = re.sub(r"\s+", " ", line or "").strip()
+    if not normalized:
+        return True
+    if _looks_like_person_name(normalized):
+        return True
+    if re.search(r"\d", normalized):
+        return False
+    words = re.findall(r"[A-Za-z]+", normalized)
+    if len(words) <= 1:
+        return True
+    # Filter likely participant-name fragments from side panes.
+    if len(words) <= 3 and len(normalized) <= 32 and all(w[:1].isupper() for w in words):
+        return True
+    return False
+
+
+def _slide_sort_key(key: str, line_counts: Counter[str], canonical_lines: dict[str, str]) -> tuple[float, int, str]:
+    line = canonical_lines.get(key, "")
+    score = float(line_counts[key])
+    if re.search(r"\d", line):
+        score += 1.0
+    if re.search(r"[:;,.()%$]", line):
+        score += 0.8
+    score += min(len(line), 120) / 80.0
+    return (-score, -line_counts[key], line.lower())
+
+
+def _chat_sort_key(key: str, line_counts: Counter[str], canonical_lines: dict[str, str]) -> tuple[float, int, str]:
+    line = canonical_lines.get(key, "")
+    score = float(line_counts[key])
+    if _is_chat_like(line):
+        score += 2.0
+    if re.search(r"[:;,.!?]", line):
+        score += 1.2
+    score += min(len(line), 120) / 60.0
+    return (-score, -line_counts[key], line.lower())
+
+
+def _seconds_to_hhmmss(total_seconds: float) -> str:
+    seconds = max(0, int(total_seconds))
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _format_visual_report(
+    *,
+    partial: bool,
+    sample_seconds: float,
+    frames_scanned: int,
+    visual_profile: str,
+    requested_backend: str,
+    visual_scope: str = "slides_only",
+    ocr_name: str,
+    backend_note: str | None,
+    ocr_calls_slide: int,
+    ocr_calls_chat: int,
+    dedupe_skipped_slide: int,
+    dedupe_skipped_chat: int,
+    canonical_lines: dict[str, str],
+    line_counts: Counter[str],
+    line_source: dict[str, str],
+    total_frames: int,
+    timeline: list[str],
+) -> str:
+    title = "=== Visual Analysis (Beta, Partial) ===" if partial else "=== Visual Analysis (Beta) ==="
+    unique_count = len(canonical_lines)
+    lines = [
+        title,
+        f"- Visual mode: {visual_profile}",
+        f"- Visual scope: {visual_scope}",
+        f"- OCR backend requested: {requested_backend}",
+        f"- OCR engine used: {ocr_name}",
+        f"- Frames sampled: {frames_scanned} (every {sample_seconds:.1f}s)",
+        (
+            "- OCR calls: "
+            f"slide={ocr_calls_slide}, chat={ocr_calls_chat} "
+            f"(dedupe skipped: slide={dedupe_skipped_slide}, chat={dedupe_skipped_chat})"
+        ),
+        f"- Unique text snippets: {unique_count}",
+    ]
+    if backend_note:
+        lines.append(f"- Backend note: {backend_note}")
+
+    if unique_count == 0:
+        lines.append("- On-screen text: no readable text detected.")
+        return "\n".join(lines)
+
+    filtered_keys = [
+        k
+        for k in line_counts.keys()
+        if not _is_persistent_noise(canonical_lines.get(k, ""), line_counts[k], total_frames)
+    ]
+    sorted_keys = sorted(filtered_keys, key=lambda k: (-line_counts[k], canonical_lines.get(k, "")))
+    slide_keys = [
+        k
+        for k in sorted_keys
+        if line_source.get(k, "slide") == "slide"
+        and not _is_low_value_slide_line(canonical_lines.get(k, ""))
+    ]
+    slide_keys = sorted(slide_keys, key=lambda k: _slide_sort_key(k, line_counts, canonical_lines))[:18]
+    top_chat = [
+        k
+        for k in sorted_keys
+        if line_source.get(k, "slide") == "chat"
+        and not _is_low_value_chat_line(canonical_lines.get(k, ""))
+    ]
+    top_chat = sorted(top_chat, key=lambda k: _chat_sort_key(k, line_counts, canonical_lines))[:18]
+
+    if slide_keys:
+        lines.append("- Likely slide/presentation text:")
+        for key in slide_keys:
+            lines.append(f"  - {canonical_lines[key]} (seen {line_counts[key]}x)")
+
+    if top_chat:
+        lines.append("- Likely chat/right-panel text:")
+        for key in top_chat:
+            lines.append(f"  - {canonical_lines[key]} (seen {line_counts[key]}x)")
+
+    if timeline:
+        lines.append("- Timeline (new on-screen text):")
+        lines.extend(timeline[:40])
+
+    return "\n".join(lines)
+
+
+def _format_unavailable_report(reason: str, *, requested_backend: str) -> str:
+    return "\n".join(
+        [
+            "=== Visual Analysis (Beta) ===",
+            f"- OCR backend requested: {requested_backend}",
+            f"- Unavailable: {reason}",
+        ]
+    )

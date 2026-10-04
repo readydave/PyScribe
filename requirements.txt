@@ -1,0 +1,44 @@
+# For GPU support, it is highly recommended to install PyTorch manually first
+# using the --index-url that matches your system's CUDA toolkit.
+# Example for CUDA 12.1:
+# pip install torch==2.5.1 torchvision==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
+# Use the PyTorch CUDA 12.1 wheels (keep this line so pip finds the GPU builds)
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Core dependencies (pinned to CUDA 12.1 GPU builds)
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+torchaudio==2.5.1+cu121
+faster-whisper==1.2.1
+ffmpeg-python==0.2.0
+numpy==1.26.4
+pyperclip
+opencv-python<4.12
+rapidocr-onnxruntime==1.4.4
+
+# Hardware Monitoring
+psutil
+nvidia-ml-py
+
+gradio
+PySide6>=6.7
+requests
+tqdm
+PyYAML
+Pillow
+hf_xet  # Optional accelerator for Hugging Face Xet storage; speeds up model downloads
+transformers>=4.52.1
+peft>=0.14.0
+pytesseract>=0.3.10  # Optional multimodal OCR (requires OS package: tesseract-ocr)
+paddleocr>=2.7.0.3  # Optional multimodal OCR backend
+paddlepaddle>=3.3.0  # Required runtime for PaddleOCR backend
+
+
+# Additional pinned packages added after environment sync
+# (these are required by the app at runtime or by faster-whisper/hf tooling)
+huggingface-hub[hf_xet]==0.36.0
+ctranslate2==4.6.1
+typing_extensions==4.15.0
+# Optional: speaker diarization
+pyannote.audio==3.1.1

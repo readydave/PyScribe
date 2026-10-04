@@ -1,0 +1,647 @@
+"""Qt live mode UI tests."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+import threading
+import wave
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtMultimedia import QAudioFormat
+
+from services import AppConfig
+from services.live_vram_service import LiveVramPreflight
+from services.model_service import RuntimeInfo
+from ui_qt.main_window import MainWindow
+
+
+class _FakeLiveSession:
+    def __init__(self) -> None:
+        self.session_dir = Path("/tmp/pyscribe-live/session-1")
+        self.capture_path = self.session_dir / "2026-04-29_120000-live-capture.wav"
+        self.options = SimpleNamespace(
+            model_name="deepdml/faster-whisper-large-v3-turbo-ct2",
+            use_diarization=False,
+            diar_backend="off",
+            max_speakers=None,
+            language=None,
+            input_device_name="Test Mic",
+        )
+        self.close_capture_calls = 0
+        self.request_final_decode_calls = 0
+        self.shutdown_calls = 0
+        self.mark_finalizing_calls = 0
+        self.finalize_cancelled_calls = 0
+        self.finalize_failed_calls: list[str] = []
+        self.finalize_success_calls: list[str] = []
+
+    def poll_events(self) -> list[dict]:
+        return []
+
+    def is_idle(self) -> bool:
+        return True
+
+    def close_capture(self) -> None:
+        self.close_capture_calls += 1
+
+    def request_final_decode(self) -> None:
+        self.request_final_decode_calls += 1
+
+    def shutdown(self, preserve_error: bool = False) -> None:
+        del preserve_error
+        self.shutdown_calls += 1
+
+    def mark_finalizing(self) -> None:
+        self.mark_finalizing_calls += 1
+
+    def finalize_cancelled(self) -> None:
+        self.finalize_cancelled_calls += 1
+
+    def finalize_failed(self, error_text: str) -> None:
+        self.finalize_failed_calls.append(error_text)
+
+    def finalize_success(self, transcript: str) -> None:
+        self.finalize_success_calls.append(transcript)
+
+
+class _FakeThread:
+    def __init__(self, running: bool = True) -> None:
+        self._running = running
+        self.quit_calls = 0
+
+    def isRunning(self) -> bool:
+        return self._running
+
+    def quit(self) -> None:
+        self.quit_calls += 1
+        self._running = False
+
+    def wait(self, timeout: int) -> bool:
+        del timeout
+        self._running = False
+        return True
+
+
+class _FakeAudioSource:
+    def __init__(self) -> None:
+        self.suspend_calls = 0
+        self.resume_calls = 0
+        self.stop_calls = 0
+        self.deleted = False
+
+    def suspend(self) -> None:
+        self.suspend_calls += 1
+
+    def resume(self) -> None:
+        self.resume_calls += 1
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+
+    def deleteLater(self) -> None:
+        self.deleted = True
+
+
+class QtLiveModeTests(unittest.TestCase):
+    def test_timed_out_pcm_drain_defers_close_and_keeps_worker(self) -> None:
+        win = self._build_window([])
+        def clear_live_state():
+            win._live_capture_active = False
+            win._live_finalizing = False
+            win._live_pcm_thread = None
+            win._live_stop_callback = None
+            win._live_session = None
+        self.addCleanup(clear_live_state)
+        session = _FakeLiveSession()
+        win._live_session = session
+        win._live_capture_active = True
+        worker = MagicMock()
+        worker.is_alive.return_value = True
+        win._live_pcm_thread = worker
+        for _ in range(win._live_pcm_queue.maxsize):
+            win._live_pcm_queue.put_nowait(b"\x00\x00")
+        with patch("ui_qt.main_window.QTimer.singleShot"):
+            win.stop_live_capture()
+            worker.join.assert_called_once_with(timeout=3.0)
+            self.assertIs(win._live_pcm_thread, worker)
+            self.assertEqual(session.close_capture_calls, 0)
+            self.assertEqual(session.request_final_decode_calls, 0)
+            win._poll_live_session_events()
+            self.assertEqual(session.shutdown_calls, 0)
+            worker.is_alive.return_value = False
+            win._resume_live_stop()
+        self.assertIsNone(win._live_pcm_thread)
+        self.assertEqual(session.close_capture_calls, 1)
+        self.assertEqual(session.request_final_decode_calls, 1)
+        win._live_finalizing = False
+        win._live_session = None
+
+    def test_audio_callback_queues_pcm_and_stop_drains_in_order(self) -> None:
+        win = self._build_window([])
+        capture_format = QAudioFormat()
+        capture_format.setSampleRate(16000)
+        capture_format.setChannelCount(1)
+        capture_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        entered, release = threading.Event(), threading.Event()
+        worker_threads = []
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "capture.wav")
+            with wave.open(path, "wb") as audio_file:
+                audio_file.setnchannels(1)
+                audio_file.setsampwidth(2)
+                audio_file.setframerate(16000)
+
+                def append(audio, pcm):
+                    worker_threads.append(threading.get_ident())
+                    entered.set()
+                    if not release.wait(3):
+                        raise TimeoutError("Test did not release capture worker")
+                    audio_file.writeframes(pcm)
+
+                session = _FakeLiveSession()
+                session.append_audio_chunk = append
+                win._live_session = session
+                win._live_capture_active = True
+                win._live_capture_format = capture_format
+                chunks = [b"\x01\x00" * 160, b"\x02\x00" * 160]
+                win._live_audio_io = SimpleNamespace(readAll=lambda: chunks.pop(0))
+                win._start_live_pcm_worker(session, capture_format)
+                try:
+                    win._on_live_audio_ready()
+                    self.assertTrue(entered.wait(3))
+                    win._on_live_audio_ready()  # Returns while disk writer is blocked.
+                    win._poll_live_session_events()  # Must not wait on the session lock.
+                finally:
+                    release.set()
+                    win._stop_live_audio_source()
+                    win._live_capture_active = False
+                    win._live_session = None
+                self.assertTrue(win._live_pcm_errors.empty())
+                self.assertEqual(len(worker_threads), 2)
+                self.assertTrue(all(t != threading.get_ident() for t in worker_threads))
+            with wave.open(path, "rb") as saved:
+                # Existing float-to-PCM scaling truncates these amplitudes by one.
+                self.assertEqual(saved.readframes(320), b"\x00\x00" * 160 + b"\x01\x00" * 160)
+
+    def test_capture_overflow_suspends_source_and_reports_error(self) -> None:
+        win = self._build_window([])
+        win._live_session = _FakeLiveSession()
+        win._live_capture_active = True
+        win._live_capture_format = QAudioFormat()
+        source = _FakeAudioSource()
+        win._live_audio_source = source
+        win._live_audio_io = SimpleNamespace(readAll=lambda: b"\x00\x00")
+        for _ in range(win._live_pcm_queue.maxsize):
+            win._live_pcm_queue.put_nowait(b"\x00\x00")
+        win._on_live_audio_ready()
+        self.assertEqual(source.suspend_calls, 1)
+        with patch.object(win, "_handle_live_session_error") as error:
+            win._poll_live_session_events()
+        self.assertIn("overflow", error.call_args.args[0])
+        win._live_capture_active = False
+        win._stop_live_audio_source()
+        win._live_session = None
+
+    def test_capture_worker_failure_reaches_ui(self) -> None:
+        win = self._build_window([])
+        capture_format = QAudioFormat()
+        capture_format.setSampleRate(16000)
+        capture_format.setChannelCount(1)
+        capture_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        session = _FakeLiveSession()
+        win._live_session = session
+        with patch("ui_qt.main_window.normalize_live_pcm_chunk", side_effect=OSError("disk failed")):
+            win._start_live_pcm_worker(session, capture_format)
+            win._live_pcm_queue.put_nowait(b"\x00\x00")
+            win._stop_live_audio_source()
+        with patch.object(win, "_handle_live_session_error") as error:
+            win._poll_live_session_events()
+        error.assert_called_once_with("disk failed")
+        win._live_session = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        cls._app = QApplication.instance() or QApplication([])
+
+    @staticmethod
+    def _runtime() -> RuntimeInfo:
+        return RuntimeInfo(
+            device="cpu",
+            compute_type="int8",
+            gpu_name="N/A",
+            vram_gb=0.0,
+            cpu_count=8,
+        )
+
+    def _build_window(self, devices: list[object], config: AppConfig | None = None) -> MainWindow:
+        if config is None:
+            config = AppConfig()
+        patches = [
+            patch("ui_qt.main_window.detect_runtime", return_value=self._runtime()),
+            patch("ui_qt.main_window.load_config", return_value=config),
+            patch("ui_qt.main_window.save_config", return_value=None),
+            patch("ui_qt.main_window.list_live_audio_inputs", return_value=devices),
+        ]
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        window = MainWindow()
+        window.show()
+        QApplication.processEvents()
+        self.addCleanup(window.close)
+        return window
+
+    def test_live_mode_toggle_updates_visibility(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+
+        self.assertTrue(win.drop_card.isVisible())
+        self.assertFalse(win.live_card.isVisible())
+        self.assertFalse(win.pause_live_btn.isVisible())
+
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+        QApplication.processEvents()
+
+        self.assertFalse(win.drop_card.isVisible())
+        self.assertTrue(win.live_card.isVisible())
+        self.assertTrue(win.stop_live_btn.isVisible())
+        self.assertTrue(win.pause_live_btn.isVisible())
+        self.assertFalse(win.pause_live_btn.isEnabled())
+        self.assertEqual(win.transcribe_btn.text(), "Start Live")
+
+    def test_speaker_checkbox_can_enable_transcription_from_visual_only_mode(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)],
+            config=AppConfig(run_mode="visual_only", use_visual_analysis=True, use_diarization=False),
+        )
+
+        self.assertFalse(win.transcribe_checkbox.isChecked())
+        self.assertTrue(win.diar_checkbox.isEnabled())
+        self.assertIn("enable audio transcription", win.diar_checkbox.toolTip())
+
+        win.diar_checkbox.setChecked(True)
+        QApplication.processEvents()
+
+        self.assertTrue(win.transcribe_checkbox.isChecked())
+        self.assertTrue(win.diar_checkbox.isChecked())
+        self.assertEqual(win._effective_service_flags()[:3], ("full", True, True))
+
+    def test_visual_only_save_all_does_not_duplicate_ocr_report(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)],
+            config=AppConfig(run_mode="visual_only", use_visual_analysis=True),
+        )
+        report = "=== Visual Analysis (Beta) ===\n- OCR text"
+        win.transcript_text = report
+        win.transcript_only_text = ""
+        win.visual_report_text = report
+
+        payload = win._save_payload_for_mode("all")
+
+        self.assertEqual(payload, (report, "all"))
+
+    def test_visual_scope_defaults_to_slides_only(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+
+        self.assertEqual(win.visual_scope_combo.currentData(), "slides_only")
+
+    def test_auto_save_writes_separate_outputs_for_all_parts(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            media_path = Path(temp_dir) / "lesson.mp4"
+            media_path.write_bytes(b"placeholder")
+            win.media_path = str(media_path)
+            win._current_run_mode = "full"
+            win._current_use_diarization = True
+            win._current_use_visual_analysis = True
+
+            visual = "=== Visual Analysis (Beta) ===\n- OCR text"
+            win._on_worker_finished(
+                False,
+                f"[S1] hello\n\n{visual}",
+                "hello",
+                visual,
+                1.0,
+                2.0,
+                3.0,
+            )
+
+            self.assertEqual((Path(temp_dir) / "lesson_transcript.txt").read_text(encoding="utf-8"), "hello")
+            self.assertEqual((Path(temp_dir) / "lesson_diarized.txt").read_text(encoding="utf-8"), "[S1] hello")
+            self.assertEqual((Path(temp_dir) / "lesson_ocr.txt").read_text(encoding="utf-8"), visual)
+
+    def test_auto_save_uses_numbered_suffix_for_existing_files(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            media_path = Path(temp_dir) / "lesson.mp4"
+            media_path.write_bytes(b"placeholder")
+            (Path(temp_dir) / "lesson_transcript.txt").write_text("existing", encoding="utf-8")
+            win.media_path = str(media_path)
+            win._current_run_mode = "full"
+            win._current_use_diarization = False
+            win._current_use_visual_analysis = True
+
+            visual = "=== Visual Analysis (Beta) ===\n- OCR text"
+            win._on_worker_finished(False, f"hello\n\n{visual}", "hello", visual, 1.0, 0.0, 3.0)
+
+            self.assertEqual((Path(temp_dir) / "lesson_transcript_1.txt").read_text(encoding="utf-8"), "hello")
+            self.assertEqual((Path(temp_dir) / "lesson_ocr.txt").read_text(encoding="utf-8"), visual)
+
+    def test_loopback_mode_disables_start_without_loopback_device(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+        win.live_source_combo.setCurrentIndex(win.live_source_combo.findData("loopback"))
+        QApplication.processEvents()
+
+        self.assertFalse(win.transcribe_btn.isEnabled())
+        self.assertIn("No loopback input", win.live_guidance_label.text())
+
+    def test_stop_live_capture_starts_final_post_pass(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+        session = _FakeLiveSession()
+        win._live_session = session
+        win._live_capture_active = True
+        win._live_finalizing = False
+
+        with patch.object(win, "_launch_transcription_worker") as launch_worker:
+            win.stop_live_capture()
+            win._poll_live_session_events()
+
+        self.assertEqual(session.close_capture_calls, 1)
+        self.assertEqual(session.request_final_decode_calls, 1)
+        self.assertEqual(session.shutdown_calls, 1)
+        self.assertEqual(session.mark_finalizing_calls, 1)
+        launch_worker.assert_called_once()
+        win._live_finalizing = False
+        win._live_session = None
+
+    def test_pause_resume_live_capture_updates_button_state_and_timer(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+        win._live_session = _FakeLiveSession()
+        win._live_capture_active = True
+        win._live_audio_source = _FakeAudioSource()
+        win._live_started_at = 100.0
+        win.cancel_btn.setEnabled(True)
+        win.force_stop_btn.setEnabled(True)
+        win._update_live_mode_ui()
+
+        with patch("ui_qt.main_window.time.perf_counter", return_value=107.0):
+            win.toggle_live_pause()
+
+        self.assertTrue(win._live_paused)
+        self.assertEqual(win._live_audio_source.suspend_calls, 1)
+        self.assertEqual(win.pause_live_btn.text(), "Resume")
+        self.assertEqual(win.status_label.text(), "Live capture paused.")
+        self.assertTrue(win.stop_live_btn.isEnabled())
+        self.assertTrue(win.force_stop_btn.isEnabled())
+
+        with patch("ui_qt.main_window.time.perf_counter", return_value=113.0):
+            win._update_live_elapsed_label()
+        self.assertEqual(win.live_timer_label.text(), "00:00:07")
+
+        with patch("ui_qt.main_window.time.perf_counter", return_value=113.0):
+            win.toggle_live_pause()
+
+        self.assertFalse(win._live_paused)
+        self.assertEqual(win._live_audio_source.resume_calls, 1)
+        self.assertEqual(win.pause_live_btn.text(), "Pause")
+        self.assertEqual(win.status_label.text(), "Recording live audio...")
+
+        with patch("ui_qt.main_window.time.perf_counter", return_value=116.0):
+            win._update_live_elapsed_label()
+        self.assertEqual(win.live_timer_label.text(), "00:00:10")
+
+        win._teardown_live_session(shutdown=False)
+        win._live_session = None
+
+    def test_cancel_live_capture_confirmation_decline_preserves_session(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+
+        cancel_session = _FakeLiveSession()
+        win._live_session = cancel_session
+        win._live_capture_active = True
+
+        with patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.No) as question:
+            win.cancel_transcription()
+
+        question.assert_called_once()
+        self.assertIs(win._live_session, cancel_session)
+        self.assertTrue(win._live_capture_active)
+        self.assertEqual(cancel_session.finalize_cancelled_calls, 0)
+        self.assertNotIn("Cancellation requested.", win.terminal_log.toPlainText())
+
+        win._live_capture_active = False
+        win._live_session = None
+
+    def test_cancel_and_force_stop_reset_live_ui_and_log_session_path(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+
+        cancel_session = _FakeLiveSession()
+        win._live_session = cancel_session
+        win._live_capture_active = True
+        win.transcript_text = "partial transcript"
+        with patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.Yes):
+            win.cancel_transcription()
+
+        self.assertIsNone(win._live_session)
+        self.assertEqual(cancel_session.finalize_cancelled_calls, 1)
+        self.assertIn(str(cancel_session.session_dir), win.terminal_log.toPlainText())
+        self.assertEqual(win.status_label.text(), "Cancelled.")
+
+        force_session = _FakeLiveSession()
+        win._live_session = force_session
+        win._live_capture_active = True
+        win.force_stop_transcription()
+
+        self.assertIsNone(win._live_session)
+        self.assertEqual(force_session.finalize_failed_calls, ["Live session force-stopped."])
+        self.assertIn(str(force_session.session_dir), win.terminal_log.toPlainText())
+        self.assertEqual(win.status_label.text(), "Force-stopped.")
+
+    def test_live_final_pass_completion_reenables_controls(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+        session = _FakeLiveSession()
+        win._live_session = session
+        win._live_finalizing = True
+        win.worker_thread = _FakeThread(running=True)
+        win.worker = object()
+        win.transcribe_btn.setEnabled(False)
+        win.input_mode_combo.setEnabled(False)
+
+        win._on_worker_finished(False, "final text", "final text", "", 4.0, 0.0, 0.0)
+
+        self.assertIsNone(win._live_session)
+        self.assertFalse(win._live_finalizing)
+        self.assertEqual(session.finalize_success_calls, ["final text"])
+        self.assertTrue(win.transcribe_btn.isEnabled())
+        self.assertTrue(win.input_mode_combo.isEnabled())
+        self.assertEqual(win.status_label.text(), "Live transcription complete.")
+        self.assertTrue(win.live_card.isVisible())
+        self.assertTrue(win.stop_live_btn.isVisible())
+        self.assertFalse(win.stop_live_btn.isEnabled())
+        self.assertTrue(win.live_title_input.isEnabled())
+
+        next_session = _FakeLiveSession()
+        next_session.session_dir = Path("/tmp/pyscribe-live/session-2")
+        win._live_session = next_session
+        win._live_capture_active = True
+        win._live_finalizing = False
+        win.transcribe_btn.setEnabled(False)
+        win.cancel_btn.setEnabled(True)
+        win.force_stop_btn.setEnabled(True)
+        win._update_live_mode_ui()
+
+        try:
+            self.assertTrue(win.live_card.isVisible())
+            self.assertTrue(win.stop_live_btn.isVisible())
+            self.assertTrue(win.stop_live_btn.isEnabled())
+            self.assertTrue(win.pause_live_btn.isVisible())
+            self.assertTrue(win.pause_live_btn.isEnabled())
+            self.assertFalse(win.live_title_input.isEnabled())
+            self.assertTrue(win.cancel_btn.isEnabled())
+            self.assertEqual(win.transcribe_btn.text(), "Start Live")
+        finally:
+            win._live_capture_active = False
+            win._live_session = None
+            win._update_live_mode_ui()
+
+    def test_live_finalizing_locks_setup_controls_and_keeps_status_visible(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.input_mode_combo.setCurrentIndex(win.input_mode_combo.findData("live"))
+        win._live_session = _FakeLiveSession()
+        win._live_capture_active = False
+        win._live_finalizing = True
+
+        win._update_live_mode_ui()
+
+        self.assertFalse(win.transcribe_btn.isEnabled())
+        self.assertFalse(win.stop_live_btn.isEnabled())
+        self.assertFalse(win.pause_live_btn.isEnabled())
+        self.assertFalse(win.live_source_combo.isEnabled())
+        self.assertFalse(win.live_device_combo.isEnabled())
+        self.assertFalse(win.live_output_dir_input.isEnabled())
+        self.assertFalse(win.live_title_input.isEnabled())
+        self.assertIn("Finalizing", win.live_guidance_label.text())
+
+        win._live_finalizing = False
+        win._live_session = None
+        win._update_live_mode_ui()
+
+    def test_live_vram_preflight_decline_cancels_start(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.runtime = RuntimeInfo(
+            device="cuda",
+            compute_type="float16",
+            gpu_name="Test GPU",
+            vram_gb=12.0,
+            cpu_count=8,
+        )
+        result = LiveVramPreflight(
+            status="low",
+            model_name="large-v3",
+            estimated_required_gb=7.5,
+            model_estimate_gb=6.5,
+            safety_buffer_gb=1.0,
+            free_gb=2.0,
+            total_gb=12.0,
+            used_gb=10.0,
+            message="low vram",
+        )
+
+        with (
+            patch("ui_qt.main_window.assess_live_vram_preflight", return_value=result),
+            patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.No) as question,
+        ):
+            self.assertFalse(win._confirm_live_vram_preflight("large-v3"))
+
+        question.assert_called_once()
+        self.assertEqual(win.status_label.text(), "Live transcription canceled: not enough free GPU memory.")
+        self.assertIn("low VRAM warning", win.terminal_log.toPlainText())
+
+    def test_live_vram_preflight_continue_allows_start(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        result = LiveVramPreflight(
+            status="low",
+            model_name="large-v3",
+            estimated_required_gb=7.5,
+            model_estimate_gb=6.5,
+            safety_buffer_gb=1.0,
+            free_gb=2.0,
+            total_gb=12.0,
+            used_gb=10.0,
+            message="low vram",
+        )
+
+        with (
+            patch("ui_qt.main_window.assess_live_vram_preflight", return_value=result),
+            patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.Yes) as question,
+        ):
+            self.assertTrue(win._confirm_live_vram_preflight("large-v3"))
+
+        question.assert_called_once()
+        self.assertIn("continued live transcription", win.terminal_log.toPlainText())
+
+    def test_live_vram_preflight_unavailable_does_not_prompt(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        result = LiveVramPreflight(
+            status="unavailable",
+            model_name="large-v3",
+            estimated_required_gb=7.5,
+            model_estimate_gb=6.5,
+            safety_buffer_gb=1.0,
+            free_gb=None,
+            total_gb=None,
+            used_gb=None,
+            message="Current GPU memory could not be read.",
+        )
+
+        with (
+            patch("ui_qt.main_window.assess_live_vram_preflight", return_value=result),
+            patch("ui_qt.main_window.QMessageBox.question") as question,
+        ):
+            self.assertTrue(win._confirm_live_vram_preflight("large-v3"))
+
+        question.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

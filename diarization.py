@@ -223,6 +223,14 @@ def _lazy_import_pyannote() -> object:
     return Pipeline
 
 
+def _from_pretrained(Pipeline: object, name: str, token: str | None) -> object:
+    """pyannote.audio 4.x renamed `use_auth_token` to `token`; support both."""
+    try:
+        return Pipeline.from_pretrained(name, token=token)
+    except TypeError:
+        return Pipeline.from_pretrained(name, use_auth_token=token)
+
+
 def _load_pyannote_pipeline(Pipeline: object, token: str | None, requested_device: str) -> tuple[object, str]:
     LOGGER.info(
         "Loading pyannote diarization pipeline preferred=3.1 fallback=3.0 token_present=%s requested_device=%s",
@@ -241,12 +249,12 @@ def _load_pyannote_pipeline(Pipeline: object, token: str | None, requested_devic
     torch.load = permissive_load
     try:
         try:
-            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
+            pipeline = _from_pretrained(Pipeline, "pyannote/speaker-diarization-3.1", token)
             return pipeline, "3.1"
         except Exception as e1:
             LOGGER.warning("Failed to load pyannote pipeline 3.1; trying 3.0. reason=%s", e1, exc_info=True)
             try:
-                pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.0", use_auth_token=token)
+                pipeline = _from_pretrained(Pipeline, "pyannote/speaker-diarization-3.0", token)
                 return pipeline, "3.0"
             except Exception as e2:
                 LOGGER.error(

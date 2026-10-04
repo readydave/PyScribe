@@ -84,7 +84,7 @@ See `CHANGELOG.md` for the full unreleased change list. Notable current updates 
   - Windows: `winget install Gyan.FFmpeg`
   - Ubuntu/Debian: `sudo apt install ffmpeg`
 - NVIDIA GPU is highly recommended. The provided `requirements.txt` pins PyTorch 2.11 with CUDA 12.8 wheels (NVIDIA driver 570 or newer); CPU-only or different-CUDA installs may need a custom Torch install before the rest of the requirements.
-- `torchcodec` (needed by pyannote.audio 4.x) loads FFmpeg 4-8 shared libraries; on systems shipping a newer FFmpeg it prints a warning and PyScribe falls back to its own soundfile-based audio loading for diarization.
+- `torchcodec` (needed by pyannote.audio 4.x) loads FFmpeg 4-8 shared libraries; on systems shipping a newer FFmpeg it prints a warning at startup.
 - Optional OCR runtime:
   - RapidOCR (`rapidocr-onnxruntime`, included in core requirements)
   - `pytesseract` + OS `tesseract` executable

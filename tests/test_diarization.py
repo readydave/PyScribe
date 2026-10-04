@@ -171,5 +171,35 @@ class OutputAndProgressTests(unittest.TestCase):
         self.assertEqual(values, [20.0, 95.0])
 
 
+class PyannoteImportNoiseTests(unittest.TestCase):
+    def _import_with_warning(self, message: str) -> list:
+        import builtins
+        import types
+        import warnings as _warnings
+
+        fake_audio = types.SimpleNamespace(Pipeline=type("Pipeline", (), {}))
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "pyannote.audio":
+                _warnings.warn(message, UserWarning)
+                return fake_audio
+            return real_import(name, *args, **kwargs)
+
+        with _warnings.catch_warnings(record=True) as seen, patch.object(builtins, "__import__", fake_import):
+            _warnings.simplefilter("always")
+            result = diarization._lazy_import_pyannote()
+        self.assertIs(result, fake_audio.Pipeline)
+        return seen
+
+    def test_torchcodec_warning_is_swallowed(self) -> None:
+        seen = self._import_with_warning("torchcodec is not installed correctly so built-in audio decoding will fail.")
+        self.assertEqual([w for w in seen if "torchcodec" in str(w.message)], [])
+
+    def test_other_warnings_still_surface(self) -> None:
+        seen = self._import_with_warning("something unrelated deserves attention")
+        self.assertEqual([str(w.message) for w in seen], ["something unrelated deserves attention"])
+
+
 if __name__ == "__main__":
     unittest.main()

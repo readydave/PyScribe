@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from typing import Callable
 
 import torch
@@ -63,7 +64,17 @@ def _direct_soundfile_load(
 
 def _lazy_import_pyannote() -> object:
     try:
-        from pyannote.audio import Pipeline  # type: ignore
+        # pyannote warns (with a long install guide) when torchcodec cannot load, e.g. when the system
+        # FFmpeg is newer than torchcodec supports. PyScribe hands pyannote already-decoded audio
+        # (see _load_audio_for_pyannote), so the warning is irrelevant; log one short line instead.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.filterwarnings("always", message=r".*torchcodec.*", category=UserWarning)
+            from pyannote.audio import Pipeline  # type: ignore
+        for item in caught:
+            if "torchcodec" in str(item.message):
+                LOGGER.info("torchcodec is unavailable; pyannote will use PyScribe's in-memory audio loading.")
+            else:
+                warnings.warn_explicit(item.message, item.category, item.filename, item.lineno)
     except ImportError as e:
         raise ImportError(
             "pyannote.audio is required for diarization. Install with: pip install pyannote.audio"

@@ -26,6 +26,7 @@ The format is inspired by Keep a Changelog.
 
 ### Changed
 
+- Suppressed pyannote's long torchcodec warning at import (it only matters when pyannote decodes audio itself, which PyScribe avoids); a one-line info log remains.
 - Removed the diarization `Fast` mode, which ran the same pipeline as `Accurate`; saved `fast` settings now map to `Accurate`.
 - Removed obsolete torchaudio/torch.load/NumPy compatibility shims from `diarization.py` (not needed with torch 2.11 and pyannote.audio 4.x).
 - Qt live transcription now uses Silero VAD on each decode window, which removes hallucinated text on silence and noise without dropping short utterances.

@@ -21,6 +21,7 @@ The format is inspired by Keep a Changelog.
 
 ### Changed
 
+- Runtime stack moved to PyTorch 2.11 / torchaudio 2.11 / torchvision 0.26 with CUDA 12.8 wheels, `torchcodec` 0.11, NumPy 2.x, `ctranslate2` 4.8 and `pyannote.audio` 4.x. `soundfile` is now an explicit requirement because pyannote 4 no longer installs it. Previous pins: torch 2.5.1+cu121, numpy 1.26.4, ctranslate2 4.6.1, pyannote.audio 3.1.1.
 - Voice activity detection (`vad_filter`) is now enabled for file transcription to strip dead air and reduce silence hallucinations.
 - File transcription now runs video OCR concurrently with audio transcription instead of sequentially.
 - Qt live audio capture now writes and normalizes PCM on a bounded background worker queue instead of the audio callback thread, with a timeout-bounded shutdown so session teardown cannot hang on a stalled write.

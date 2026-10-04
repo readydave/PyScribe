@@ -119,8 +119,7 @@ In live mode:
 ### Diarization Controls
 
 - **Mode**: backend selector for diarization engine.
-  - `Accurate` (pyannote): default high-quality engine.
-  - `Fast` (pyannote): faster variant.
+  - `Accurate` (pyannote): the diarization engine (the former `Fast` mode was identical and has been removed).
 - **Max Speakers**: optional speaker cap (blank = auto).
 - Pyannote diarization backends run in a separate worker process so GPU speaker ID can stay isolated from CUDA ASR runtime state.
 - If GPU diarization is unavailable, PyScribe retries diarization on CPU before giving up on speaker labels.

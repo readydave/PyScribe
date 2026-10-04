@@ -73,7 +73,7 @@ class DiarBackendsCompatibilityTests(unittest.TestCase):
             status = self.diar_backends.backend_availability()
 
         self.assertTrue(status["accurate"].available)
-        self.assertTrue(status["fast"].available)
+        self.assertNotIn("fast", status)
         self.assertNotIn("sortformer", status)
 
 

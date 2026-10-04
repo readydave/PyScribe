@@ -23,33 +23,12 @@ def _bump(cb: ProgressCB, value: float) -> None:
         cb(min(max(value, 0), 100))
 
 
-def run_pyannote_fast(
-    audio_path: str,
-    device: str,
-    max_speakers: Optional[int],
-    progress_cb: ProgressCB = None,
-    status_cb: StatusCB = None,
-) -> List[Dict]:
-    """
-    A slightly faster variant of the pyannote pipeline.
-    Today this reuses the same pipeline but keeps a hook to tweak settings later.
-    """
-    _bump(progress_cb, 35)
-    return run_pyannote(audio_path, device=device, max_speakers=max_speakers, status_cb=status_cb)
-
-
 BACKENDS = {
     "accurate": {
         "label": "Accurate (pyannote)",
         "runner": run_pyannote,
         "requires": "pyannote.audio",
         "desc": "Highest accuracy; slower on long files."
-    },
-    "fast": {
-        "label": "Fast (approx)",
-        "runner": run_pyannote_fast,
-        "requires": "pyannote.audio",
-        "desc": "Slightly faster settings; good trade-off."
     },
     "off": {
         "label": "Off (no speakers)",

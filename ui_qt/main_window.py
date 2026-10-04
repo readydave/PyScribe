@@ -1768,7 +1768,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _default_diar_backends() -> list[str]:
         # Keep startup fast by deferring expensive capability checks until needed.
-        return ["accurate", "fast"]
+        return ["accurate"]
 
     def _set_window_title_status(self, status: str | None) -> None:
         if status:

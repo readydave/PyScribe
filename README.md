@@ -91,7 +91,7 @@ See `CHANGELOG.md` for the full unreleased change list. Notable current updates 
   - PaddleOCR runtime dependencies
   - Surya OCR runtime dependencies, if installed separately
 - Speaker diarization (optional at runtime):
-  - `pyannote.audio` (pinned in `requirements.txt`) powers the `accurate` and `fast` backends; `off` skips diarization
+  - `pyannote.audio` (pinned in `requirements.txt`) powers the `accurate` backend (the former `fast` mode was identical and has been removed; saved `fast` settings map to `accurate`); `off` skips diarization
 
 ## Installation
 

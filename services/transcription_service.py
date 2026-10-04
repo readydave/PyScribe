@@ -30,7 +30,9 @@ TextCallback = Callable[[str], None]
 ProgressCallback = Callable[[float], None]
 LOGGER = logging.getLogger(__name__)
 STREAM_TEXT_UPDATE_INTERVAL_SECONDS = 0.30
-_PYANNOTE_BACKENDS = {"accurate", "fast"}
+_PYANNOTE_BACKENDS = {"accurate"}
+# The old "fast" pyannote mode was identical to "accurate" and was removed; saved settings still map to it.
+_LEGACY_DIAR_BACKENDS = {"fast": "accurate"}
 
 
 @dataclass
@@ -389,6 +391,7 @@ def transcribe_prepared_audio(
             visual_analysis_seconds=0.0,
         )
 
+    diar_backend = _LEGACY_DIAR_BACKENDS.get(str(diar_backend or "").strip().lower(), diar_backend)
     effective_batch = resolve_batch_size(device, batch_size)
     LOGGER.info("ASR decode batch_size=%d hotwords=%s word_timestamps=%s", effective_batch, bool(hotwords), use_diarization)
     segments_generator = open_segment_stream(

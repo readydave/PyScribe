@@ -26,6 +26,8 @@ The format is inspired by Keep a Changelog.
 
 ### Changed
 
+- Removed the diarization `Fast` mode, which ran the same pipeline as `Accurate`; saved `fast` settings now map to `Accurate`.
+- Removed obsolete torchaudio/torch.load/NumPy compatibility shims from `diarization.py` (not needed with torch 2.11 and pyannote.audio 4.x).
 - Qt live transcription now uses Silero VAD on each decode window, which removes hallucinated text on silence and noise without dropping short utterances.
 - Runtime stack moved to PyTorch 2.11 / torchaudio 2.11 / torchvision 0.26 with CUDA 12.8 wheels, `torchcodec` 0.11, NumPy 2.x, `ctranslate2` 4.8 and `pyannote.audio` 4.x. `soundfile` is now an explicit requirement because pyannote 4 no longer installs it. Previous pins: torch 2.5.1+cu121, numpy 1.26.4, ctranslate2 4.6.1, pyannote.audio 3.1.1.
 - Voice activity detection (`vad_filter`) is now enabled for file transcription to strip dead air and reduce silence hallucinations.

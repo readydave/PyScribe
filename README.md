@@ -15,7 +15,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 ## Highlights
 
 - Local transcription using `faster-whisper`
-- Experimental Granite Speech file transcription
+- Experimental Granite Speech file transcription (`granite-4.0-1b-speech` and `granite-speech-4.1-2b`; 4.1 returns punctuated, capitalized text and honours the Names / terms field)
 - Hardware-aware model recommendations
 - Qt desktop mode and Gradio listener mode
 - Qt unified dashboard layout with left navigation and stacked workspaces

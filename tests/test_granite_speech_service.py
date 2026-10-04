@@ -8,6 +8,8 @@ from services.granite_speech_service import (
     GraniteSpeechModelBundle,
     build_granite_chat_prompt,
     build_granite_prompt,
+    is_granite_41,
+    split_keywords,
     transcribe_granite_audio,
 )
 
@@ -79,6 +81,30 @@ class GraniteSpeechServiceTests(unittest.TestCase):
 
         self.assertIn("<|audio|>", prompt)
         self.assertIn("Keywords: canine, feline", prompt)
+
+    def test_granite_41_default_prompt_requests_punctuation(self) -> None:
+        prompt = build_granite_prompt(model_name="ibm-granite/granite-speech-4.1-2b")
+        self.assertEqual(prompt, "<|audio|>transcribe the speech with proper punctuation and capitalization.")
+
+    def test_granite_41_keywords_keep_the_punctuation_prompt(self) -> None:
+        prompt = build_granite_prompt(keywords=["Okafor", "PyScribe"], model_name="ibm-granite/granite-speech-4.1-2b")
+        self.assertEqual(
+            prompt,
+            "<|audio|>transcribe the speech with proper punctuation and capitalization. Keywords: Okafor, PyScribe",
+        )
+
+    def test_granite_40_prompt_is_unchanged(self) -> None:
+        prompt = build_granite_prompt(model_name="ibm-granite/granite-4.0-1b-speech")
+        self.assertEqual(prompt, "<|audio|>can you transcribe the speech into a written format?")
+
+    def test_is_granite_41(self) -> None:
+        self.assertTrue(is_granite_41("ibm-granite/granite-speech-4.1-2b"))
+        self.assertFalse(is_granite_41("ibm-granite/granite-4.0-1b-speech"))
+        self.assertFalse(is_granite_41(None))
+
+    def test_split_keywords_handles_commas_and_newlines(self) -> None:
+        self.assertEqual(split_keywords(" Okafor, PyScribe\nKubernetes ,, "), ["Okafor", "PyScribe", "Kubernetes"])
+        self.assertEqual(split_keywords(None), [])
 
     def test_build_granite_chat_prompt_uses_chat_template(self) -> None:
         processor = _FakeProcessor()

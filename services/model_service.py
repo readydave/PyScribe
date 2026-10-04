@@ -24,7 +24,7 @@ class RuntimeInfo:
     cpu_count: int
 
 
-GRANITE_SPEECH_REPO_IDS = {"ibm-granite/granite-4.0-1b-speech"}
+GRANITE_SPEECH_REPO_IDS = {"ibm-granite/granite-4.0-1b-speech", "ibm-granite/granite-speech-4.1-2b"}
 
 
 @dataclass(frozen=True)

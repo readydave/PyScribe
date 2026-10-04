@@ -9,6 +9,10 @@ from typing import Sequence
 
 
 GRANITE_TRANSCRIBE_PROMPT = "<|audio|>can you transcribe the speech into a written format?"
+# Granite Speech 4.1: the model card's punctuation/truecasing prompt is the default. The card's
+# keyword prompt ("transcribe the speech to text. Keywords: ...") drops punctuation, so keywords
+# are appended to the punctuation prompt instead (measured in Phase 4: punctuation kept, WER lower).
+GRANITE_41_PUNCTUATION_PROMPT = "<|audio|>transcribe the speech with proper punctuation and capitalization."
 GRANITE_SAMPLE_RATE = 16000
 GRANITE_CHUNK_SECONDS = 30
 _CONTROL_TOKEN_RE = re.compile(r"<\|[^|>]+?\|>")
@@ -22,10 +26,20 @@ class GraniteSpeechModelBundle:
     device: str
 
 
-def build_granite_prompt(*, keywords: Sequence[str] | None = None) -> str:
+def is_granite_41(model_name: str | None) -> bool:
+    """True for Granite Speech 4.1 checkpoints (punctuation/truecasing prompt, keyword biasing)."""
+    return "granite-speech-4.1" in str(model_name or "").lower()
+
+
+def split_keywords(text: str | None) -> list[str]:
+    """Split a comma/newline separated names-and-terms field into keywords."""
+    return [part.strip() for part in re.split(r"[,\n]", str(text or "")) if part.strip()]
+
+
+def build_granite_prompt(*, keywords: Sequence[str] | None = None, model_name: str | None = None) -> str:
     """Build the Granite prompt, optionally biasing toward domain keywords."""
-    prompt = GRANITE_TRANSCRIBE_PROMPT
     cleaned_keywords = [str(keyword).strip() for keyword in (keywords or ()) if str(keyword).strip()]
+    prompt = GRANITE_41_PUNCTUATION_PROMPT if is_granite_41(model_name) else GRANITE_TRANSCRIBE_PROMPT
     if cleaned_keywords:
         prompt = f"{prompt} Keywords: {', '.join(cleaned_keywords)}"
     return prompt
@@ -36,7 +50,7 @@ def build_granite_chat_prompt(bundle: GraniteSpeechModelBundle, *, keywords: Seq
     tokenizer = getattr(bundle.processor, "tokenizer", None)
     if tokenizer is None or not hasattr(tokenizer, "apply_chat_template"):
         raise RuntimeError("Granite processor is missing a tokenizer with apply_chat_template().")
-    chat = [{"role": "user", "content": build_granite_prompt(keywords=keywords)}]
+    chat = [{"role": "user", "content": build_granite_prompt(keywords=keywords, model_name=bundle.model_name)}]
     return str(tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True))
 
 

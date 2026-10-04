@@ -31,5 +31,13 @@ class ModelServiceTests(unittest.TestCase):
         self.assertTrue(model_supports_diarization("owner/custom-ct2-model"))
 
 
+class GraniteRegistryTests(unittest.TestCase):
+    def test_granite_41_resolves_to_transformers_backend(self) -> None:
+        spec = resolve_transcription_model("ibm-granite/granite-speech-4.1-2b")
+        self.assertEqual(spec.backend_kind, "granite_transformers")
+        self.assertFalse(spec.supports_diarization)
+
+
 if __name__ == "__main__":
     unittest.main()
+

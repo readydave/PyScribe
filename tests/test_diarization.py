@@ -149,7 +149,7 @@ class DiarizationRuntimeTests(unittest.TestCase):
                 if self.generation == 0 and device_name == "cuda":
                     raise RuntimeError("cuDNN mismatch")
 
-            def __call__(self, audio_path: str, num_speakers: int | None = None):
+            def __call__(self, audio, num_speakers: int | None = None, hook=None):
                 return _FakeAnnotation()
 
         class _FakePipelineFactory:
@@ -168,6 +168,9 @@ class DiarizationRuntimeTests(unittest.TestCase):
         ), patch(
             "diarization.get_hf_token",
             return_value=None,
+        ), patch(
+            "diarization._load_audio_for_pyannote",
+            return_value={"waveform": None, "sample_rate": 16000},
         ):
             segments = diarization.run_diarization(
                 "clip.wav",
@@ -190,7 +193,7 @@ class DiarizationRuntimeTests(unittest.TestCase):
             def to(self, device) -> None:
                 pass
 
-            def __call__(self, audio_path: str, num_speakers: int | None = None):
+            def __call__(self, audio, num_speakers: int | None = None, hook=None):
                 raise RuntimeError("torchaudio.info missing")
 
         class _FakePipelineFactory:
@@ -207,9 +210,75 @@ class DiarizationRuntimeTests(unittest.TestCase):
         ), patch(
             "diarization.get_hf_token",
             return_value=None,
+        ), patch(
+            "diarization._load_audio_for_pyannote",
+            return_value={"waveform": None, "sample_rate": 16000},
         ):
             with self.assertRaisesRegex(RuntimeError, "torchaudio.info missing"):
                 diarization.run_diarization("clip.wav", device="cpu")
+
+
+class PipelineLoadingTests(unittest.TestCase):
+    def test_community_first_on_pyannote_4_then_legacy(self) -> None:
+        with patch("diarization._pyannote_major_version", return_value=4):
+            labels = [label for label, _ in diarization._pipeline_candidates()]
+        self.assertEqual(labels, ["community-1", "3.1", "3.0"])
+        with patch("diarization._pyannote_major_version", return_value=3):
+            labels = [label for label, _ in diarization._pipeline_candidates()]
+        self.assertEqual(labels, ["3.1", "3.0"])
+
+    def test_falls_back_to_next_candidate(self) -> None:
+        seen: list[str] = []
+
+        class _Factory:
+            @staticmethod
+            def from_pretrained(name: str, token=None):
+                seen.append(name)
+                if name.endswith("community-1"):
+                    raise RuntimeError("403 gated")
+                return object()
+
+        with patch("diarization._pyannote_major_version", return_value=4):
+            _, label = diarization._load_pyannote_pipeline(_Factory, "tok", "cpu")
+        self.assertEqual(label, "3.1")
+        self.assertEqual(len(seen), 2)
+
+    def test_all_candidates_failing_explains_how_to_get_access(self) -> None:
+        class _Factory:
+            @staticmethod
+            def from_pretrained(name: str, token=None):
+                raise RuntimeError("403 gated")
+
+        with patch("diarization._pyannote_major_version", return_value=4):
+            with self.assertRaisesRegex(RuntimeError, "Accept the model terms"):
+                diarization._load_pyannote_pipeline(_Factory, "tok", "cpu")
+
+    def test_legacy_use_auth_token_keyword_still_supported(self) -> None:
+        class _Factory:
+            @staticmethod
+            def from_pretrained(name: str, use_auth_token=None):
+                return ("loaded", use_auth_token)
+
+        self.assertEqual(diarization._from_pretrained(_Factory, "x", "tok"), ("loaded", "tok"))
+
+
+class OutputAndProgressTests(unittest.TestCase):
+    def test_speaker_annotation_prefers_exclusive(self) -> None:
+        class _Out:
+            speaker_diarization = "full"
+            exclusive_speaker_diarization = "exclusive"
+
+        self.assertEqual(diarization._speaker_annotation(_Out()), "exclusive")
+        self.assertEqual(diarization._speaker_annotation("annotation"), "annotation")
+
+    def test_progress_hook_maps_steps_to_overall_range(self) -> None:
+        values: list[float] = []
+        hook = diarization._ProgressHook(values.append)
+        hook("segmentation", None, total=10, completed=5)
+        hook("embeddings", None, total=4, completed=4)
+        hook("speaker_counting", None)
+        hook("embeddings", None, total=None, completed=None)
+        self.assertEqual(values, [20.0, 95.0])
 
 
 if __name__ == "__main__":

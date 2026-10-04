@@ -571,7 +571,7 @@ def transcribe_prepared_audio(
                 if on_diar_progress:
                     on_diar_progress(92)
 
-                from diarization import assign_speakers
+                from services.speaker_assignment import assign_speakers
 
                 final_segments = assign_speakers(all_segments_struct, diar_segments)
                 transcript = _format_speaker_transcript(final_segments)

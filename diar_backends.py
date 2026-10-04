@@ -40,7 +40,7 @@ def run_pyannote_fast(
 
 BACKENDS = {
     "accurate": {
-        "label": "Accurate (pyannote 3.1)",
+        "label": "Accurate (pyannote)",
         "runner": run_pyannote,
         "requires": "pyannote.audio",
         "desc": "Highest accuracy; slower on long files."

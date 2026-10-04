@@ -15,6 +15,7 @@ import torchaudio
 
 from services.hf_auth_service import get_hf_token
 from services.runtime_compat import ensure_platform_sys_version_compat
+from services.speaker_assignment import assign_speakers  # noqa: F401  (re-exported for callers)
 
 LOGGER = logging.getLogger(__name__)
 ProgressCallback = Callable[[float], None]
@@ -231,9 +232,32 @@ def _from_pretrained(Pipeline: object, name: str, token: str | None) -> object:
         return Pipeline.from_pretrained(name, use_auth_token=token)
 
 
+COMMUNITY_PIPELINE = "pyannote/speaker-diarization-community-1"
+_LEGACY_PIPELINES = (("3.1", "pyannote/speaker-diarization-3.1"), ("3.0", "pyannote/speaker-diarization-3.0"))
+
+
+def _pyannote_major_version() -> int:
+    try:
+        from importlib.metadata import version
+
+        return int(version("pyannote.audio").split(".")[0])
+    except Exception:
+        return 3
+
+
+def _pipeline_candidates() -> list[tuple[str, str]]:
+    """Ordered (label, repo id) pairs to try; community-1 needs pyannote.audio 4.x."""
+    candidates = list(_LEGACY_PIPELINES)
+    if _pyannote_major_version() >= 4:
+        candidates.insert(0, ("community-1", COMMUNITY_PIPELINE))
+    return candidates
+
+
 def _load_pyannote_pipeline(Pipeline: object, token: str | None, requested_device: str) -> tuple[object, str]:
+    candidates = _pipeline_candidates()
     LOGGER.info(
-        "Loading pyannote diarization pipeline preferred=3.1 fallback=3.0 token_present=%s requested_device=%s",
+        "Loading pyannote diarization pipeline candidates=%s token_present=%s requested_device=%s",
+        [label for label, _ in candidates],
         bool(token),
         requested_device,
     )
@@ -247,25 +271,74 @@ def _load_pyannote_pipeline(Pipeline: object, token: str | None, requested_devic
         return original_load(*args, **kwargs)
 
     torch.load = permissive_load
+    last_error: Exception | None = None
     try:
-        try:
-            pipeline = _from_pretrained(Pipeline, "pyannote/speaker-diarization-3.1", token)
-            return pipeline, "3.1"
-        except Exception as e1:
-            LOGGER.warning("Failed to load pyannote pipeline 3.1; trying 3.0. reason=%s", e1, exc_info=True)
+        for label, repo_id in candidates:
             try:
-                pipeline = _from_pretrained(Pipeline, "pyannote/speaker-diarization-3.0", token)
-                return pipeline, "3.0"
-            except Exception as e2:
-                LOGGER.error(
-                    "Failed to load pyannote pipeline versions 3.1 and 3.0 requested_device=%s torch_diag=%s",
-                    requested_device,
-                    _torch_cuda_snapshot(),
+                return _from_pretrained(Pipeline, repo_id, token), label
+            except Exception as exc:
+                last_error = exc
+                LOGGER.warning(
+                    "Failed to load pyannote pipeline %s; trying the next candidate. reason=%s",
+                    label,
+                    exc,
                     exc_info=True,
                 )
-                raise RuntimeError(f"Failed to load pyannote pipeline (3.1 then 3.0): {e2}") from e2
+        LOGGER.error(
+            "Failed to load any pyannote pipeline candidates=%s requested_device=%s torch_diag=%s",
+            [label for label, _ in candidates],
+            requested_device,
+            _torch_cuda_snapshot(),
+        )
+        tried = " then ".join(label for label, _ in candidates)
+        hint = (
+            " Accept the model terms for pyannote/speaker-diarization-community-1 on Hugging Face "
+            "and make sure your Hugging Face token is configured."
+            if candidates[0][0] == "community-1"
+            else ""
+        )
+        raise RuntimeError(f"Failed to load pyannote pipeline ({tried}): {last_error}.{hint}") from last_error
     finally:
         torch.load = original_load
+
+
+def _load_audio_for_pyannote(audio_path: str) -> dict[str, object]:
+    """Decode audio with soundfile so pyannote never needs torchcodec/ffmpeg for file IO."""
+    waveform, sample_rate = _direct_soundfile_load(audio_path)
+    return {"waveform": waveform, "sample_rate": sample_rate}
+
+
+class _ProgressHook:
+    """pyannote pipeline hook that reports overall progress (0-100) from step progress."""
+
+    # Share of the overall run attributed to each pyannote step.
+    _STEP_RANGES = {"segmentation": (0.0, 40.0), "embeddings": (40.0, 95.0)}
+
+    def __init__(self, progress_cb: ProgressCallback | None) -> None:
+        self._progress_cb = progress_cb
+
+    def __call__(self, step_name: str, step_artifact: object, file: object = None, total=None, completed=None) -> None:
+        if self._progress_cb is None or step_name not in self._STEP_RANGES or not total:
+            return
+        low, high = self._STEP_RANGES[step_name]
+        fraction = max(0.0, min(1.0, float(completed or 0) / float(total)))
+        try:
+            self._progress_cb(low + (high - low) * fraction)
+        except Exception:
+            LOGGER.debug("Diarization progress callback failed", exc_info=True)
+
+
+def _speaker_annotation(output: object) -> object:
+    """Return the annotation to merge with ASR from a pipeline result.
+
+    pyannote 4.x returns an object; `exclusive_speaker_diarization` (no overlapped speech)
+    is built for ASR merging. 3.x returns the Annotation directly.
+    """
+    for attr in ("exclusive_speaker_diarization", "speaker_diarization"):
+        annotation = getattr(output, attr, None)
+        if annotation is not None:
+            return annotation
+    return output
 
 
 def run_diarization(
@@ -339,7 +412,10 @@ def run_diarization(
         max_speakers,
     )
     try:
-        diarization = pipeline(audio_path, num_speakers=max_speakers)
+        audio_input = _load_audio_for_pyannote(audio_path)
+        diarization = _speaker_annotation(
+            pipeline(audio_input, num_speakers=max_speakers, hook=_ProgressHook(progress_cb))
+        )
     except Exception:
         LOGGER.error(
             "Diarization inference failed backend=accurate model=%s requested_device=%s effective_device=%s max_speakers=%s torch_diag=%s",
@@ -379,23 +455,3 @@ def run_diarization(
         len(segments),
     )
     return segments
-
-
-def assign_speakers(asr_segments: list[Segment], spk_segments: list[Segment]) -> list[Segment]:
-    """
-    Assigns a speaker label to each ASR segment based on maximum overlap.
-    Returns updated ASR segments with 'speaker' key.
-    """
-    def overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
-        return max(0.0, min(a_end, b_end) - max(a_start, b_start))
-
-    for seg in asr_segments:
-        best_spk = None
-        best_ov = 0.0
-        for spk in spk_segments:
-            ov = overlap(seg["start"], seg["end"], spk["start"], spk["end"])
-            if ov > best_ov:
-                best_ov = ov
-                best_spk = spk["speaker"]
-        seg["speaker"] = best_spk or "S?"
-    return asr_segments

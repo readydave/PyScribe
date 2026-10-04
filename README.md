@@ -238,3 +238,5 @@ Commercial use is not permitted under the current project license.
 ## Acknowledgments
 
 Benchmark audio source: [LibriVox](https://librivox.org/).
+
+Speaker diarization uses [pyannote.audio](https://github.com/pyannote/pyannote-audio) and the `pyannote/speaker-diarization-community-1` pipeline (CC-BY-4.0, by pyannoteAI).

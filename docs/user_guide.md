@@ -124,7 +124,8 @@ In live mode:
 - **Max Speakers**: optional speaker cap (blank = auto).
 - Pyannote diarization backends run in a separate worker process so GPU speaker ID can stay isolated from CUDA ASR runtime state.
 - If GPU diarization is unavailable, PyScribe retries diarization on CPU before giving up on speaker labels.
-- On modern Torchaudio releases, PyScribe uses `soundfile` fallbacks for metadata/loading APIs that pyannote expects.
+- On modern Torchaudio releases, PyScribe uses `soundfile` fallbacks for metadata/loading APIs that pyannote expects, and passes decoded audio to pyannote in memory so `torchcodec`/FFmpeg are not needed for file IO.
+- With pyannote.audio 4.x, diarization uses `pyannote/speaker-diarization-community-1` (CC-BY-4.0, gated): accept its terms on Hugging Face with the account that owns your token. When a transcript has word timestamps, speakers are assigned per word, so a speaker change in the middle of a sentence starts a new line.
 - If diarization fails or produces no speaker segments, PyScribe keeps the plain transcript instead of filling the output with `[S?]` speaker labels.
 - Diarization progress bar:
   - Disabled when transcription is off.

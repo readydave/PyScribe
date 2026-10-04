@@ -93,7 +93,7 @@ Run mode is inferred automatically:
 
 - **HF Token...** (`Ctrl+Shift+T`)
   - Save a Hugging Face token for gated/private model access.
-  - If gated diarization still fails, accept terms on the model page in Hugging Face.
+  - If gated diarization still fails, accept terms on the model page in Hugging Face. Diarization with pyannote.audio 4.x uses `pyannote/speaker-diarization-community-1`, which needs its terms accepted with the same account as the token (it falls back to the older 3.1 pipeline only on pyannote.audio 3.x).
 - **Benchmark...** (`Ctrl+B`)
   - Compare selected models using bundled benchmark audio.
   - Supports English and Spanish sample sets.

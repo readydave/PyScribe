@@ -184,3 +184,10 @@ exports/
 output/
 outputs/
 generated/
+
+# --------------------------------------------------------------------
+# Evaluation harness (private recordings, references and results stay local)
+# --------------------------------------------------------------------
+.venv-*/
+eval/
+eval_results/

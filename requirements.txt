@@ -42,3 +42,6 @@ ctranslate2==4.6.1
 typing_extensions==4.15.0
 # Optional: speaker diarization
 pyannote.audio==3.1.1
+
+# Optional: evaluation harness (scripts/evaluate.py)
+jiwer

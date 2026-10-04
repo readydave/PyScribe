@@ -187,9 +187,23 @@ Note: Interactive LAN mode no longer uses a default password. Set
 # Full suite
 python -m pytest -q tests
 
-# Quick smoke test (this is what CI runs)
+# Quick smoke test
 python -m pytest -q tests/smoke_cli.py
 ```
+
+CI runs the CLI smoke checks plus `python -m pytest -q tests` in a light environment; test modules that need torch, Qt, or other heavy packages are skipped when those are not installed.
+
+### Evaluation (WER / DER / speed)
+
+`scripts/evaluate.py` measures transcription accuracy and speed against reference data so upgrades can be compared with a baseline:
+
+```bash
+pip install jiwer
+python scripts/evaluate.py --device cuda --label baseline
+python scripts/evaluate.py --device cpu --compute-type int8 --label baseline
+```
+
+It reports WER/CER (normalized text), real-time factor, and peak RAM/VRAM, and writes JSON to `eval_results/`. The default manifest (`evaluation/manifest.json`) covers the bundled LibriVox benchmark clips. Add your own recordings in a git-ignored `eval/manifest.json` (see the script docstring); an item with `reference_rttm` and `"diarize": true` also reports DER, `[S?]` line counts, and mislabelled segments.
 
 ## CLI / Packaging
 

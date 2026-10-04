@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog.
 
 ### Added
 
+- `scripts/evaluate.py` evaluation harness (WER/CER, DER, real-time factor, peak RAM/VRAM) with a LibriVox benchmark manifest and reference texts in `evaluation/`.
+- CI job running the CPU-safe unit tests (`pytest -q tests`); test modules needing heavy optional dependencies are skipped when those are missing.
 - Qt now shows visual/OCR progress in a dedicated progress bar separate from audio transcription progress.
 - Qt multi-part processing runs now auto-save separate transcript, diarized transcript, and/or OCR output files beside the source media.
 - Qt visual analysis now includes a scope selector for slides-only OCR versus slides-plus-chat OCR.

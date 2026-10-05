@@ -66,7 +66,7 @@ with 44 `[S?]` lines to 2 clean speakers with `max_speakers=2`; the earlier "bye
 - **Parakeet TDT v3** (ONNX): deferred. English 1.47%, Spanish 5.80%; 5.5x faster than Whisper on CPU; needs a tuned
   VAD (library defaults gave 7.5% English). Possible CPU-only backend later.
 - **Nemotron streaming**: conditional go for an English live backend (1.05% WER, ~1.2 s behind speech) but it needs
-  `transformers>=5.13`, which the app's `huggingface-hub==0.36.0` pin blocks. The English model is under the NVIDIA
+  `transformers>=5.13`, which the app's `huggingface-hub==0.36.0` pin blocked (pins now moved, see below). The English model is under the NVIDIA
   Open Model License; the multilingual 3.5 model is OpenMDW-1.1.
 - **PaddleOCR-VL**: no-go. On synthetic slide/chat frames classic PaddleOCR 3.x (word F1 99.6%) beat it (96.2%) and the
   app's RapidOCR (61.7%), with far less VRAM. The synthetic frames are a stand-in; real frames are the better test.
@@ -79,6 +79,20 @@ with 44 `[S?]` lines to 2 clean speakers with `max_speakers=2`; the earlier "bye
   with `--no-deps` and Paddle reuses torch's CUDA 12.8 libraries (torch, ctranslate2 and Paddle ran in one process
   without conflicts). A real 1 h 1080p60 meeting recording ran end to end (ASR + diarization + OCR) in 95 s, with a
   13.2 GB whole-GPU peak (+7.8 GB over other processes) on a 24 GB card.
+
+## Transformers 5 migration
+
+`requirements.txt` now has `transformers>=5.13` (5.18.0 tested) and `huggingface-hub>=1.0` (1.33.0 tested). Verified in a
+fresh venv against the previous environment, same machine:
+
+- Code change: `HfFolder` no longer exists in huggingface-hub 1.x; `services/hf_auth_service.py` uses `get_token()` and
+  `login(token=..., add_to_git_credential=False)` (the latter validates the token online when persisting). One test
+  needed an `httpx.Response` to build `RepositoryNotFoundError`.
+- Granite 4.0 1B: EN 1.05% / ES 4.40% (before 1.01% / 4.44%); Granite 4.1 2B: EN 2.65% / ES 5.12% (before 2.77% / 5.12%).
+- Whisper `large-v3-turbo` defaults: EN 1.98% / ES 4.18%, identical to before. Diarization DER on the 3 AMI meetings is
+  identical on both stacks (26.9% / 38.1% / 24.4%).
+- 212 tests pass; Qt, Listener, live and OCR modules import. Live microphone mode was covered by the unit tests only, not
+  exercised with a real microphone.
 
 ## Setup notes
 

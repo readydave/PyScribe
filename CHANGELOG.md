@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog.
 
 ## [Unreleased]
 
+### Changed
+
+- Moved to Transformers 5 (`transformers>=5.13`, verified on 5.18) and `huggingface-hub>=1.0` (was pinned to 0.36.0). Hugging Face token helpers now use `huggingface_hub.get_token()` / `login()` instead of the removed `HfFolder`; persisting a token now validates it against the Hub. Granite 4.0/4.1, Whisper and diarization results are unchanged. Recreate the virtual environment from `requirements.txt` (and re-run `scripts/install_paddle_gpu.sh` for GPU OCR).
+
 ### Added
 
 - PaddleOCR 3.x GPU support: the `paddleocr` backend now chooses the GPU when Paddle has CUDA and at least 1.5 GB of VRAM is free (otherwise CPU) and retries on CPU if GPU initialization or inference fails. `auto` OCR prefers PaddleOCR only when it will run on the GPU, otherwise RapidOCR. New `scripts/install_paddle_gpu.sh` swaps the CPU `paddlepaddle` wheel for the CUDA build (installed `--no-deps`, sharing torch's CUDA 12.8 libraries). About 0.08 s per frame vs about 5 s on CPU and 0.37 s for RapidOCR, at word F1 about 0.99 vs about 0.62 on the synthetic frame set.

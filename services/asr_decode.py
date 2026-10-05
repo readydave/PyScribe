@@ -13,6 +13,11 @@ LOGGER = logging.getLogger(__name__)
 # 0.25 GB per extra batch item on top of the model; leave headroom for OCR/diarization.
 _BATCH_TIERS = ((8.0, 16), (5.0, 8), (3.5, 4))
 
+# Whisper can fall into repetition loops on long conversational audio (e.g. "uh" x53 replacing 66
+# words of speech in one AMI meeting). Forbidding any 4-gram from repeating caps such runs at four
+# tokens; in the Phase 2 accuracy sweep it fixed that meeting (25.7% -> 21.0% WER) at no speed cost.
+NO_REPEAT_NGRAM_SIZE = 4
+
 
 def resolve_batch_size(device: str, requested: int | None = None, *, batched: bool = False) -> int:
     """Return the decode batch size (1 means sequential).
@@ -54,6 +59,7 @@ def _transcribe(
         "task": "transcribe",
         "language": language,
         "beam_size": 5,
+        "no_repeat_ngram_size": NO_REPEAT_NGRAM_SIZE,
         "hotwords": (hotwords or "").strip() or None,
         "word_timestamps": word_timestamps,
     }

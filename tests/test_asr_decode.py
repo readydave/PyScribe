@@ -50,6 +50,7 @@ class OpenSegmentStreamTests(unittest.TestCase):
         self.assertEqual(calls[0]["hotwords"], "Nemotron")
         self.assertTrue(calls[0]["vad_filter"])
         self.assertTrue(calls[0]["word_timestamps"])
+        self.assertEqual(calls[0]["no_repeat_ngram_size"], asr_decode.NO_REPEAT_NGRAM_SIZE)
 
     def test_empty_hotwords_become_none(self) -> None:
         calls: list[dict] = []

@@ -211,6 +211,8 @@ python scripts/evaluate.py --device cpu --compute-type int8 --label baseline
 
 It reports WER/CER (normalized text), real-time factor, and peak RAM/VRAM, and writes JSON to `eval_results/`. The default manifest (`evaluation/manifest.json`) covers the bundled LibriVox benchmark clips. Add your own recordings in a git-ignored `eval/manifest.json` (see the script docstring); an item with `reference_rttm` and `"diarize": true` also reports DER, `[S?]` line counts, and mislabelled segments.
 
+`scripts/accuracy_sweep.py` compares faster-whisper settings (model, precision, beam size, repetition guards) on any manifest items that have reference text, scoring WER with and without filler words. `scripts/build_ami_refs.py` builds conversational references for public AMI meetings from AMI's manual annotations (CC BY 4.0), a better test than read speech for interviews and calls.
+
 ## CLI / Packaging
 
 ```bash

@@ -26,6 +26,7 @@ The format is inspired by Keep a Changelog.
 
 ### Changed
 
+- File transcription now forbids repeating any 4-gram (`no_repeat_ngram_size=4`) to stop Whisper repetition loops on long conversations (one AMI meeting lost 66 words to "uh" x53; WER 25.7% -> 21.0%, no speed cost; read-speech WER within 0.3 pt).
 - Suppressed pyannote's long torchcodec warning at import (it only matters when pyannote decodes audio itself, which PyScribe avoids); a one-line info log remains.
 - Removed the diarization `Fast` mode, which ran the same pipeline as `Accurate`; saved `fast` settings now map to `Accurate`.
 - Removed obsolete torchaudio/torch.load/NumPy compatibility shims from `diarization.py` (not needed with torch 2.11 and pyannote.audio 4.x).

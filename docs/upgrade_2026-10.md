@@ -116,6 +116,24 @@ Design notes: file mode (and so the live final post-pass) feeds the whole file t
 the final output equals a Whisper-free pipeline plus diarization. Live capture does not produce speaker labels. Names /
 terms are applied as a spelling-correction pass (`services/term_correction.py`) on file output and the live final pass; the decoder is not biased. Not exercised with a real microphone.
 
+## Granite 4.1 `-plus` evaluation (no-go)
+
+`ibm-granite/granite-speech-4.1-2b-plus` (Apache-2.0) adds word timestamps and speaker-attributed ASR to Granite 4.1 by prompt;
+it gives up punctuation and capitalization. Spike: `scripts/spikes/granite_plus_spike.py` (bf16, same machine, Transformers 5.18).
+The model card says timestamps are reliable up to about 3.5 minutes of audio, so audio is chunked.
+
+| Test | Result |
+|---|---|
+| LibriVox English, 15 min, 3 min chunks | WER 1.01% (Whisper 1.98%, Granite 4.0 1.05%); word starts median 60 ms from Whisper's (Nemotron: 170 ms); RTF 0.17 (160 s), 4.7 GB |
+| AMI ES2004a, 3 min chunks | WER 19.4% (Whisper 25.4%), but AMI-IHM is in Granite's timestamp training data, so this is optimistic; word times drift early by about 1 s per 30 s inside a chunk (up to 17 s in one chunk), unusable for speaker assignment |
+| AMI ES2004a, silence-cut chunks of at most 30 s | word times good (median 226 ms, 77% within 640 ms) but WER 33.9% |
+| Speaker-attributed ASR, first 3 min of ES2004a | produced 3 speaker tags in 16 turns; not scored |
+
+Decision: not integrated. Accurate text and good timing did not come from the same chunk length on conversational audio, the model
+is about 20x slower than Whisper (about 10x slower than Nemotron), and it has no punctuation. A backend would need VAD chunking
+plus a timing correction, and Whisper (with `no_repeat_ngram_size=4`) and Nemotron already give word times. Speaker-attributed ASR
+numbering across chunks (the card's incremental `prefix_text` mode) was not tried; our pyannote path already labels words.
+
 ## Setup notes
 
 - **Accept the `community-1` terms** at https://huggingface.co/pyannote/speaker-diarization-community-1 with the

@@ -2250,7 +2250,7 @@ class MainWindow(QMainWindow):
             if self.live_title_input.text().strip():
                 guidance += f" (Title: {self.live_title_input.text().strip()})"
         elif not live_supported:
-            guidance = "Live mode requires a timestamp-capable Whisper backend. Granite remains file-only."
+            guidance = "Live mode requires a timestamp-capable Whisper backend or Nemotron streaming. Granite remains file-only."
         elif not live_devices_available and loopback_selected:
             guidance = "No loopback input was detected. On Linux, expose a monitor/loopback source in PipeWire or PulseAudio."
         elif not live_devices_available:
@@ -2527,7 +2527,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Live mode unavailable",
-                "Live mode requires a timestamp-capable Whisper backend. Granite remains file-only.",
+                "Live mode requires a timestamp-capable Whisper backend or Nemotron streaming. Granite remains file-only.",
             )
             return
         if not self._confirm_live_vram_preflight(model_name):
@@ -2831,7 +2831,10 @@ class MainWindow(QMainWindow):
         if allow_transcription:
             if not self._confirm_model_download(model_name):
                 return
-            forced_language = self._resolve_language_choice(model_name)
+            if resolve_transcription_model(model_name).backend_kind == "nemotron_streaming":
+                forced_language = "en"  # English-only model: nothing to detect
+            else:
+                forced_language = self._resolve_language_choice(model_name)
             if forced_language == "__cancel__":
                 self._hide_download_progress_dialog()
                 return
@@ -3318,7 +3321,11 @@ class MainWindow(QMainWindow):
         recommended = recommend_model(self.runtime)
         if not hasattr(self, "model_hint_label"):
             return
-        if model_name and is_experimental_model(model_name):
+        if model_name and resolve_transcription_model(model_name).backend_kind == "nemotron_streaming":
+            self.model_hint_label.setText(
+                "Experimental: Nemotron streaming (English only). Live and file mode; Names / terms are ignored."
+            )
+        elif model_name and is_experimental_model(model_name):
             self.model_hint_label.setText(
                 "Experimental: Granite Speech via transformers. Speaker identification is unavailable."
             )
@@ -3509,7 +3516,12 @@ class MainWindow(QMainWindow):
         size_text = format_bytes(est_size)
         extra_note = ""
         model_spec = resolve_transcription_model(model_name)
-        if model_spec.is_experimental:
+        if model_spec.backend_kind == "nemotron_streaming":
+            extra_note = (
+                "\n\nThis English-only model runs through the experimental Nemotron streaming backend in PyScribe "
+                "(NVIDIA Open Model License)."
+            )
+        elif model_spec.is_experimental:
             extra_note = (
                 "\n\nThis Granite model runs through the experimental transformers backend in PyScribe. "
                 "Speaker identification is unavailable for this model."

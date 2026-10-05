@@ -43,6 +43,7 @@ ctranslate2>=4.6.1
 typing_extensions==4.15.0
 # Optional: speaker diarization
 pyannote.audio>=4.0.7
+librosa  # required by the Nemotron streaming feature extractor (nvidia/nemotron-speech-streaming-en-0.6b)
 soundfile  # required by diarization.py audio loading (no longer a pyannote 4 dependency)
 
 # Optional: evaluation harness (scripts/evaluate.py)

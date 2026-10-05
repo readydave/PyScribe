@@ -21,6 +21,7 @@ _LIVE_MODEL_VRAM_GB: dict[str, float] = {
     "deepdml/faster-whisper-large-v3-turbo-ct2": 4.0,
     "guillaumekln/whisper-large-v2-ct2": 6.0,
     "guillaumekln/whisper-large-v3-ct2": 6.5,
+    "nvidia/nemotron-speech-streaming-en-0.6b": 2.0,
 }
 
 

@@ -94,6 +94,28 @@ fresh venv against the previous environment, same machine:
 - 212 tests pass; Qt, Listener, live and OCR modules import. Live microphone mode was covered by the unit tests only, not
   exercised with a real microphone.
 
+## Nemotron streaming backend
+
+`nvidia/nemotron-speech-streaming-en-0.6b` is available as an experimental, English-only model for Qt live mode and
+file transcription (`services/nemotron_streaming_service.py`; the live worker has a streaming branch that appends audio
+instead of re-decoding a rolling window). Measurements on the same machine:
+
+- English read speech through the app path: WER 0.97% (CER 0.33%), RTF 0.019, 1.8 GB VRAM.
+- Token timestamps (80 ms frames) vs faster-whisper word times on 3 minutes of read speech: median start offset +130 ms,
+  median absolute difference 170 ms, 92% within 640 ms.
+- 32-minute two-speaker interview (private, not committed), same pyannote turns for both: Nemotron and Whisper words got the
+  same speaker on 99.9% of matched words (4 of 4,085 differ, all within 1 s of a turn change). Nemotron produced 4,346 words
+  vs Whisper's 4,519; Whisper keeps more uh/um/yeah/okay, Nemotron writes numbers as words ("twenty twenty six"). Accuracy
+  on conversational audio has no reference yet, only this disagreement.
+- Whole-file time for that interview: ASR 35 s, diarization 19 s. The per-token text streamer used for live mode makes
+  decoding about 5x slower, so file mode turns it off.
+- Real-time live run (spawned worker, audio fed at 1x from the interview): first text about 2 s after speech began, stop
+  flush 0.2 s.
+
+Design notes: file mode (and so the live final post-pass) feeds the whole file through the same chunked streaming path;
+the final output equals a Whisper-free pipeline plus diarization. Live capture does not produce speaker labels. Names /
+terms (hotwords) are ignored. Not exercised with a real microphone.
+
 ## Setup notes
 
 - **Accept the `community-1` terms** at https://huggingface.co/pyannote/speaker-diarization-community-1 with the

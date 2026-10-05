@@ -16,9 +16,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from threading import Event
-from typing import Callable
+from typing import Any, Callable, Iterator
 
 from services.asr_decode import open_segment_stream, resolve_batch_size, segment_words
+from services.nemotron_streaming_service import transcribe_nemotron_audio
 from services.granite_speech_service import GraniteSpeechModelBundle, split_keywords, transcribe_granite_audio
 from services.model_download_service import ensure_model_cached
 from services.model_service import TranscriptionModelSpec, load_model, resolve_transcription_model
@@ -395,16 +396,26 @@ def transcribe_prepared_audio(
         )
 
     diar_backend = _LEGACY_DIAR_BACKENDS.get(str(diar_backend or "").strip().lower(), diar_backend)
-    effective_batch = resolve_batch_size(device, batch_size, batched=batched)
-    LOGGER.info("ASR decode batch_size=%d hotwords=%s word_timestamps=%s", effective_batch, bool(hotwords), use_diarization)
-    segments_generator = open_segment_stream(
-        model,
-        audio_np,
-        language,
-        batch_size=effective_batch,
-        hotwords=hotwords,
-        word_timestamps=use_diarization,
-    )
+    if spec.backend_kind == "nemotron_streaming":
+        if hotwords:
+            LOGGER.info("Names / terms are ignored by the Nemotron streaming backend.")
+        LOGGER.info("ASR decode backend=nemotron_streaming word_timestamps=True")
+        def _nemotron_segments() -> Iterator[Any]:
+            # No on_text: per-token text streaming makes whole-file decoding about 5x slower.
+            yield from transcribe_nemotron_audio(model, audio_np, cancel_event=cancel_event, on_progress=on_progress)
+
+        segments_generator = _nemotron_segments()
+    else:
+        effective_batch = resolve_batch_size(device, batch_size, batched=batched)
+        LOGGER.info("ASR decode batch_size=%d hotwords=%s word_timestamps=%s", effective_batch, bool(hotwords), use_diarization)
+        segments_generator = open_segment_stream(
+            model,
+            audio_np,
+            language,
+            batch_size=effective_batch,
+            hotwords=hotwords,
+            word_timestamps=use_diarization,
+        )
 
     all_text_segments: list[str] = []
     streamed_text = ""

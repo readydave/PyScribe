@@ -162,16 +162,20 @@ Private recordings, references, and results (`eval/`, `eval_results/`) are never
 
 ## Not merged / future work
 
-Local branches (not pushed, spike scripts only): `phase-6-nemotron-spike` and `phase-7-paddleocr-vl` (scripts under
-`scripts/spikes/`; the OCR comparison scripts are useful for re-testing OCR on real frames). The Parakeet spike branch was dropped (its result is
-recorded above).
+Local branch `phase-7-paddleocr-vl` (not pushed, spike scripts only) keeps the OCR comparison scripts under
+`scripts/spikes/`, useful for re-testing OCR on real frames. The Parakeet and Nemotron spike branches were removed (their
+results are recorded above; spike scripts on `main`: `scripts/spikes/nemotron_timestamps.py`, `scripts/spikes/granite_plus_spike.py`).
 
-Exploratory ideas (none started): Qt GUI changes (to be defined by the maintainer), Transformers 5 migration plus a
-Nemotron live backend, Parakeet as a CPU-only backend, Granite 4.1 `-plus` (word timestamps and speaker attribution).
+Done since the first write-up: Transformers 5 migration, the Nemotron streaming backend, Names / terms for Nemotron
+(`services/term_correction.py`), and the Granite 4.1 `-plus` evaluation (no-go).
+
+Open: Qt GUI changes (to be defined by the maintainer); a diarization over-segmentation check on a long real meeting (13
+speakers were found); a Nemotron vs Whisper accuracy comparison on hand-corrected conversational audio; an OCR re-test on real
+hand-corrected frames; Parakeet as a CPU-only backend (needs an ONNX Runtime dependency policy).
 
 ## Known gaps
 
-- Live microphone mode and Windows were not exercised after the upgrade. The visual/OCR path was exercised on one real
+- Live microphone mode (Whisper and Nemotron) and Windows were not exercised after the upgrade; Nemotron live was only run through a spawned worker fed from a recording. Nemotron term correction was unit-tested only, not run on real audio. The visual/OCR path was exercised on one real
   1-hour meeting recording and on synthetic frames, not scored against real hand-corrected frames. The GPU-to-CPU OCR retry
   was tested with fakes only, and the cu126 Paddle wheel on torch's cu128 libraries was verified on one machine (driver 615).
 - Accuracy conclusions rest on LibriVox plus three AMI meetings and one unreferenced real interview.

@@ -8,6 +8,7 @@ The format is inspired by Keep a Changelog.
 
 ### Added
 
+- Listener text-size control: a fixed "A− 100% A+" widget in the top-right corner changes the Listener text size from 80% to 200% in 10% steps (click the percentage to reset). The choice is remembered per browser in `localStorage` (falls back to 100% if storage is blocked). Client-side only (CSS variables in `app.py`); tested with Gradio 6.17.
 - Granite Speech 4.1 2B (`ibm-granite/granite-speech-4.1-2b`) as an experimental file-transcription model alongside Granite 4.0. It uses the punctuation/truecasing prompt by default and the Names / terms field as keyword biasing. In our LibriVox evaluation it was not more accurate than Granite 4.0 on the English clip (WER 2.8% vs 1.0%; spelling variants such as `gray`/`odor` count against it) and about equal on Spanish, so Whisper remains the default.
 - Word-level speaker assignment: segments with word timestamps are split at speaker changes instead of taking a single label (new `services/speaker_assignment.py`; segment-level labelling remains the fallback).
 - Diarization uses `pyannote/speaker-diarization-community-1` when pyannote.audio 4.x is installed (older 3.1/3.0 pipelines remain fallbacks), passes audio to pyannote in memory via `soundfile`, and reports real progress through a pyannote pipeline hook.

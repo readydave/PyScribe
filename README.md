@@ -65,6 +65,8 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 ![PyScribe Listener web UI](assets/images/2026-02-27-08_23_12.png)
 
+Use the **A− / A+** widget in the top-right corner to change the Listener text size (80%–200%); click the percentage to reset. The size is remembered per browser.
+
 ## Recent Updates (Unreleased)
 
 See `CHANGELOG.md` for the full unreleased change list. Notable current updates include:

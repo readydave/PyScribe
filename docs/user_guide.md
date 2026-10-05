@@ -291,6 +291,14 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 - If preferred port is unavailable, listener tries fallback ports.
 - Queue is enabled with concurrency limit 1 (serialized jobs per host process).
 
+### Listener Text Size
+
+- A small **A− 100% A+** widget is fixed to the top-right corner of the page.
+- **A−** / **A+** change the text size from 80% to 200% in 10% steps; clicking the percentage resets to 100%.
+- The setting applies to labels, inputs, transcript boxes, and descriptive text, and is stored in the browser (`localStorage`), so it is per browser and per device, not per server. If the browser blocks storage, the size resets to 100% on reload.
+- It is separate from the browser's own zoom (Ctrl/Cmd `+` / `-`), which still works and stacks with it.
+- Implementation note: Gradio defines several derived font-size variables as fixed pixel values, so `CUSTOM_CSS` in `app.py` scales those directly. After a Gradio upgrade, re-check that all text still scales.
+
 ### Listener UI Inputs
 
 - **Upload Audio/Video File**

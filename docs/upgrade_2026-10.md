@@ -114,7 +114,7 @@ instead of re-decoding a rolling window). Measurements on the same machine:
 
 Design notes: file mode (and so the live final post-pass) feeds the whole file through the same chunked streaming path;
 the final output equals a Whisper-free pipeline plus diarization. Live capture does not produce speaker labels. Names /
-terms (hotwords) are ignored. Not exercised with a real microphone.
+terms are applied as a spelling-correction pass (`services/term_correction.py`) on file output and the live final pass; the decoder is not biased. Not exercised with a real microphone.
 
 ## Setup notes
 

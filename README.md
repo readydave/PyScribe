@@ -15,7 +15,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 ## Highlights
 
 - Local transcription using `faster-whisper`
-- Experimental Nemotron Speech Streaming (`nvidia/nemotron-speech-streaming-en-0.6b`, English only): punctuated, truecased text from a 0.6B cache-aware streaming model; works for Qt live mode (text appears about 1-2 s behind speech) and for file transcription with speaker identification. The Names / terms field is ignored for it. About 2 GB of VRAM.
+- Experimental Nemotron Speech Streaming (`nvidia/nemotron-speech-streaming-en-0.6b`, English only): punctuated, truecased text from a 0.6B cache-aware streaming model; works for Qt live mode (text appears about 1-2 s behind speech) and for file transcription with speaker identification. The Names / terms field is applied as a spelling-correction pass on the final transcript (no decoder biasing; live text shows raw output until then). About 2 GB of VRAM.
 - Experimental Granite Speech file transcription (`granite-4.0-1b-speech` and `granite-speech-4.1-2b`; 4.1 returns punctuated, capitalized text and honours the Names / terms field)
 - Hardware-aware model recommendations
 - Qt desktop mode and Gradio listener mode

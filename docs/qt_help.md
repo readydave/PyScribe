@@ -72,7 +72,7 @@
   - `YYYY-MM-DD_HHMMSS-live-capture.wav`
   - `session.json`
   - `final_transcript.txt` after a successful stop/finalize cycle
-- Live capture requires a timestamp-capable Whisper model or `nvidia/nemotron-speech-streaming-en-0.6b` (English only; Names / terms are ignored). Granite is unavailable in live mode.
+- Live capture requires a timestamp-capable Whisper model or `nvidia/nemotron-speech-streaming-en-0.6b` (English only; Names / terms are applied as a spelling pass on the final transcript). Granite is unavailable in live mode.
 - Loopback capture depends on the OS exposing a monitor/loopback input. On Linux that usually means a PipeWire/PulseAudio monitor source.
 
 Run mode is inferred automatically:

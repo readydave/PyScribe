@@ -14,9 +14,11 @@ import time
 from dataclasses import dataclass
 from threading import Event, Thread
 from types import SimpleNamespace
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Sequence
 
 import numpy as np
+
+from services.term_correction import apply_terms
 
 LOGGER = logging.getLogger(__name__)
 
@@ -313,8 +315,12 @@ def transcribe_nemotron_audio(
     cancel_event: Event | None = None,
     on_progress: ProgressCallback | None = None,
     on_text: TextCallback | None = None,
+    terms: Sequence[str] | None = None,
 ) -> list[SimpleNamespace]:
-    """Stream a whole 16 kHz mono waveform through Nemotron and return timed segments (empty if cancelled)."""
+    """Stream a whole 16 kHz mono waveform through Nemotron and return timed segments (empty if cancelled).
+
+    `terms` (Names / terms field) are applied as a spelling-correction pass over the words.
+    """
     session = NemotronStreamSession(bundle, stream_text=on_text is not None)
     total = max(1, int(audio_np.size))
     step = NEMOTRON_SAMPLE_RATE  # one second per feed keeps cancel/progress responsive
@@ -343,4 +349,4 @@ def transcribe_nemotron_audio(
         return []
     if on_progress:
         on_progress(100.0)
-    return words_to_segments(words)
+    return words_to_segments(apply_terms(words, terms or ()))

@@ -95,6 +95,59 @@ html.pyscribe-prog-green .progress-bar-wrap > div {
   accent-color: #16a34a !important;
   background-color: #16a34a !important;
 }
+
+html { font-size: calc(16px * var(--pyscribe-text-scale, 1)); }
+.gradio-container {
+  --text-xxs: calc(9px * var(--pyscribe-text-scale, 1)) !important;
+  --text-xs: calc(10px * var(--pyscribe-text-scale, 1)) !important;
+  --text-sm: calc(12px * var(--pyscribe-text-scale, 1)) !important;
+  --text-md: calc(14px * var(--pyscribe-text-scale, 1)) !important;
+  --text-lg: calc(16px * var(--pyscribe-text-scale, 1)) !important;
+  --text-xl: calc(22px * var(--pyscribe-text-scale, 1)) !important;
+  --text-xxl: calc(26px * var(--pyscribe-text-scale, 1)) !important;
+  /* Gradio redefines these derived sizes as fixed px on .gradio-container, so scale them directly. */
+  --body-text-size: calc(14px * var(--pyscribe-text-scale, 1)) !important;
+  --input-text-size: calc(14px * var(--pyscribe-text-scale, 1)) !important;
+  --block-info-text-size: calc(12px * var(--pyscribe-text-scale, 1)) !important;
+  --block-label-text-size: calc(12px * var(--pyscribe-text-scale, 1)) !important;
+  --block-title-text-size: calc(14px * var(--pyscribe-text-scale, 1)) !important;
+  --button-small-text-size: calc(12px * var(--pyscribe-text-scale, 1)) !important;
+  --button-medium-text-size: calc(14px * var(--pyscribe-text-scale, 1)) !important;
+  --button-large-text-size: calc(16px * var(--pyscribe-text-scale, 1)) !important;
+  --section-header-text-size: calc(14px * var(--pyscribe-text-scale, 1)) !important;
+  --checkbox-label-text-size: calc(14px * var(--pyscribe-text-scale, 1)) !important;
+  --prose-text-size: calc(14px * var(--pyscribe-text-scale, 1)) !important;
+  --chatbot-text-size: calc(16px * var(--pyscribe-text-scale, 1)) !important;
+}
+#pyscribe-text-size {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid #8884;
+  border-radius: 6px;
+  background: #8882;
+  backdrop-filter: blur(4px);
+  font: 13px/1 sans-serif;
+  color: inherit;
+}
+#pyscribe-text-size button {
+  min-width: 28px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+#pyscribe-text-size button:hover { background: #8883; }
+#pyscribe-text-size button:disabled { opacity: 0.4; cursor: default; }
+#pyscribe-text-size [data-role="value"] { min-width: 44px; }
 """
 
 CUSTOM_HEAD = """
@@ -142,6 +195,67 @@ CUSTOM_HEAD = """
   }
 
   setInterval(tick, 250);
+})();
+
+(function () {
+  const KEY = "pyscribe.listener.textScalePct";
+  const MIN = 80, MAX = 200, STEP = 10, DEFAULT = 100;
+
+  function clamp(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return DEFAULT;
+    return Math.min(MAX, Math.max(MIN, Math.round(n / STEP) * STEP));
+  }
+
+  function load() {
+    try { return clamp(localStorage.getItem(KEY) ?? DEFAULT); } catch (e) { return DEFAULT; }
+  }
+
+  function save(pct) {
+    try { localStorage.setItem(KEY, String(pct)); } catch (e) { /* storage blocked: not remembered */ }
+  }
+
+  let pct = load();
+  const root = document.documentElement;
+  root.style.setProperty("--pyscribe-text-scale", String(pct / 100));
+
+  function build() {
+    if (document.getElementById("pyscribe-text-size")) return;
+    const box = document.createElement("div");
+    box.id = "pyscribe-text-size";
+    box.setAttribute("role", "group");
+    box.setAttribute("aria-label", "Text size");
+    const make = (label, title) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.title = title;
+      b.setAttribute("aria-label", title);
+      return b;
+    };
+    const minus = make("A\u2212", "Smaller text");
+    const value = make(pct + "%", "Reset text size to 100%");
+    value.dataset.role = "value";
+    const plus = make("A+", "Larger text");
+    function apply(next) {
+      pct = clamp(next);
+      root.style.setProperty("--pyscribe-text-scale", String(pct / 100));
+      value.textContent = pct + "%";
+      minus.disabled = pct <= MIN;
+      plus.disabled = pct >= MAX;
+      save(pct);
+    }
+    minus.addEventListener("click", () => apply(pct - STEP));
+    plus.addEventListener("click", () => apply(pct + STEP));
+    value.addEventListener("click", () => apply(DEFAULT));
+    minus.disabled = pct <= MIN;
+    plus.disabled = pct >= MAX;
+    box.append(minus, value, plus);
+    document.body.appendChild(box);
+  }
+
+  if (document.body) build();
+  else document.addEventListener("DOMContentLoaded", build);
 })();
 </script>
 """

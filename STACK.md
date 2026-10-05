@@ -47,7 +47,7 @@ If `.venv` does not exist, ask the maintainer before creating one.
 ## External Runtime Requirements
 
 - FFmpeg must be available in `PATH`.
-- **NVIDIA GPU with CUDA 12+** is highly recommended for diarization and Whisper acceleration.
+- **NVIDIA GPU** (driver 570+ for the CUDA 12.8 PyTorch wheels pinned in `requirements.txt`) is highly recommended for diarization and Whisper acceleration. Diarization uses `pyannote/speaker-diarization-community-1`, which is gated on Hugging Face (accept its terms with the account that owns your token). See `docs/upgrade_2026-10.md`.
 - **Linux Dynamic Loader**: PyScribe automatically manages `LD_LIBRARY_PATH` to resolve CUDA dependencies (like `libtorch_cuda_linalg.so`) in bleeding-edge Torch environments.
 
 Windows:
@@ -264,7 +264,7 @@ gitleaks detect --source . --redact
 - Environment-variable references for persistent secrets.
 - Spawned subprocess isolation for pyannote diarization.
 - Final transcription completion even when optional diarization fails or produces no speaker segments.
-- Torchaudio 2.9+ / 2.11 diarization compatibility shims backed by `soundfile`.
+- In-memory `soundfile` audio loading for pyannote (torchcodec/FFmpeg are not needed for file IO).
 - Existing Qt and listener workflows unless the maintainer explicitly requests behavior changes.
 
 ### Security-Sensitive Areas

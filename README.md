@@ -7,6 +7,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 - `docs/user_guide.md` - full feature guide for Qt, Listener, CLI, and environment settings.
 - `docs/qt_help.md` - in-app Qt help content.
+- `docs/upgrade_2026-10.md` - October 2026 runtime/accuracy upgrade: results, decisions, setup notes, how to reproduce.
 - `CONTRIBUTING.md` - development and contribution workflow.
 - `SECURITY.md` - vulnerability reporting and security guidance.
 - `CHANGELOG.md` - project change history.

@@ -91,7 +91,7 @@ See `CHANGELOG.md` for the full unreleased change list. Notable current updates 
 - Optional OCR runtime:
   - RapidOCR (`rapidocr-onnxruntime`, included in core requirements)
   - `pytesseract` + OS `tesseract` executable
-  - PaddleOCR runtime dependencies
+  - PaddleOCR 3.x (`paddleocr` + `paddlepaddle`, included in `requirements.txt`). The default CPU `paddlepaddle` build takes about 5 s per frame; run `scripts/install_paddle_gpu.sh` to swap in the CUDA build (about 0.08 s per frame, about 1.2 GB VRAM). `auto` OCR prefers PaddleOCR only when it will run on the GPU, otherwise RapidOCR.
   - Surya OCR runtime dependencies, if installed separately
 - Speaker diarization (optional at runtime):
   - `pyannote.audio` (pinned in `requirements.txt`) powers the `accurate` backend (the former `fast` mode was identical and has been removed; saved `fast` settings map to `accurate`); `off` skips diarization

@@ -534,7 +534,9 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long
         "pytesseract": lambda **_: _build_tesseract_ocr_fn(),
     }
     if requested == "auto":
-        order = ["rapidocr", "paddleocr", "pytesseract", "surya"] if long_video else ["paddleocr", "rapidocr", "surya", "pytesseract"]
+        # Interim (Phase 8): CPU-only PaddleOCR is ~15x slower than RapidOCR, so RapidOCR leads
+        # until the GPU build lands and the order is decided on measurements.
+        order = ["rapidocr", "paddleocr", "pytesseract", "surya"] if long_video else ["rapidocr", "paddleocr", "surya", "pytesseract"]
     elif requested == "rapidocr":
         order = ["rapidocr", "paddleocr", "pytesseract"]
     elif requested == "surya":
@@ -557,7 +559,7 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long
                     f"Requested backend '{requested}' unavailable: {fallback_reason}. "
                     f"Using '{name}' fallback."
                 )
-            elif on_status and requested == "auto" and (name != "paddleocr" or long_video):
+            elif on_status and requested == "auto" and (name != order[0] or long_video):
                 on_status(f"Using '{name}' OCR backend.")
                 fallback_note = (
                     f"Auto mode selected '{name}' for long-video OCR runtime."
@@ -616,6 +618,20 @@ def _resolve_paddle_ocr_model_dir_kwargs(PaddleOCR: type[object]) -> dict[str, s
         "textline_orientation_model_dir": "PP-LCNet_x1_0_textline_ori",
         "text_recognition_model_dir": str(rec_model_name),
     }
+
+
+def _paddle_ocr_model_name_kwargs(model_dir_kwargs: dict[str, str]) -> dict[str, str]:
+    """Pass explicit detection/recognition model names alongside their directories.
+
+    PaddleOCR 3.x otherwise picks its default model name for the directory and rejects
+    a mismatching one (e.g. the English mobile recognizer vs the default server model).
+    """
+    names: dict[str, str] = {}
+    for prefix in ("text_detection", "text_recognition"):
+        model_dir = model_dir_kwargs.get(f"{prefix}_model_dir")
+        if model_dir:
+            names[f"{prefix}_model_name"] = os.path.basename(os.path.normpath(model_dir))
+    return names
 
 
 def _prepare_verified_paddle_ocr_model_dirs(
@@ -698,6 +714,7 @@ def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBacke
                 use_textline_orientation=True,
                 lang="en",
                 **(_PADDLE_OCR_MODEL_DIR_KWARGS or {}),
+                **_paddle_ocr_model_name_kwargs(_PADDLE_OCR_MODEL_DIR_KWARGS or {}),
             )
 
         def _ocr(image: "Image.Image", mode: str = "slide") -> str:

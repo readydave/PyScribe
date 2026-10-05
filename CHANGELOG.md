@@ -50,6 +50,8 @@ The format is inspired by Keep a Changelog.
 
 ### Fixed
 
+- The `paddleocr` OCR backend no longer silently falls back to RapidOCR: `requirements.txt` now pins `paddleocr>=3.0` (the code targets the 3.x API; 2.10 lacked `_get_ocr_model_names`), and explicit detection/recognition model names are passed so PaddleOCR 3.x accepts the downloaded English models. With the default CPU `paddlepaddle` build it is far slower than RapidOCR (about 5 s vs 0.4 s per frame), so `auto` mode temporarily prefers RapidOCR until GPU support lands (masterplan Phase 8).
+
 - Fixed visual-only `Save All` output duplicating the visual-analysis report.
 - Visual OCR output now filters more persistent Zoom/browser UI chrome from webinar recordings.
 - Fixed a bug where the speaker mode dropdown would stay disabled after the hardware probe finished, requiring a manual toggle of the "Identify Speakers" checkbox to re-enable.

@@ -14,6 +14,7 @@ from services.multimodal_service import (
     _is_ui_noise_line,
     _is_low_value_chat_line,
     _is_low_value_slide_line,
+    _paddle_ocr_model_name_kwargs,
     _prepare_verified_paddle_ocr_model_dirs,
     _looks_like_person_name,
     _resolve_effective_sample_seconds,
@@ -21,6 +22,23 @@ from services.multimodal_service import (
 
 
 class MultimodalServiceTests(unittest.TestCase):
+    def test_paddle_ocr_model_name_kwargs_follow_model_dirs(self) -> None:
+        names = _paddle_ocr_model_name_kwargs(
+            {
+                "text_detection_model_dir": "/cache/official_models/PP-OCRv5_server_det",
+                "text_recognition_model_dir": "/cache/official_models/en_PP-OCRv5_mobile_rec/",
+                "doc_unwarping_model_dir": "/cache/official_models/UVDoc",
+            }
+        )
+        self.assertEqual(
+            names,
+            {
+                "text_detection_model_name": "PP-OCRv5_server_det",
+                "text_recognition_model_name": "en_PP-OCRv5_mobile_rec",
+            },
+        )
+        self.assertEqual(_paddle_ocr_model_name_kwargs({}), {})
+
     def test_resolve_effective_sample_seconds_spreads_sampling_across_full_video(self) -> None:
         self.assertEqual(
             _resolve_effective_sample_seconds(

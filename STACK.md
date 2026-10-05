@@ -66,7 +66,7 @@ Optional OCR runtime:
 
 - RapidOCR via `rapidocr-onnxruntime` (included in core requirements)
 - `pytesseract` plus the OS `tesseract` executable
-- PaddleOCR runtime dependencies
+- PaddleOCR 3.x runtime (`paddleocr`, `paddlepaddle`). `requirements.txt` installs the CPU wheel; `scripts/install_paddle_gpu.sh` replaces it with `paddlepaddle-gpu` (installed `--no-deps` so it shares torch's CUDA 12.8 libraries; re-run it after reinstalling requirements)
 - Surya OCR runtime dependencies, if installed separately
 
 Optional model/auth integrations:

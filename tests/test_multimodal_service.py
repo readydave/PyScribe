@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
+from services import multimodal_service as mm
+from services.live_vram_service import GpuMemoryInfo
 from services.multimodal_service import (
     analyze_video_stream,
     _format_visual_report,
@@ -183,6 +187,83 @@ class MultimodalServiceTests(unittest.TestCase):
                 "PaddlePaddle/en_PP-OCRv5_mobile_rec",
             ],
         )
+
+
+def _fake_paddle(*, cuda: bool, devices: int = 1) -> types.ModuleType:
+    module = types.ModuleType("paddle")
+    module.is_compiled_with_cuda = lambda: cuda  # type: ignore[attr-defined]
+    module.device = types.SimpleNamespace(cuda=types.SimpleNamespace(device_count=lambda: devices))  # type: ignore[attr-defined]
+    return module
+
+
+def _vram(free_gb: float) -> GpuMemoryInfo:
+    return GpuMemoryInfo(total_gb=24.0, free_gb=free_gb, used_gb=24.0 - free_gb, source="test")
+
+
+class PaddleDeviceTests(unittest.TestCase):
+    def test_gpu_when_cuda_build_and_enough_vram(self) -> None:
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=True)}), patch.object(mm, "get_gpu_memory_info", return_value=_vram(10.0)):
+            self.assertEqual(mm._choose_paddle_device(), "gpu:0")
+
+    def test_gpu_when_vram_unknown(self) -> None:
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=True)}), patch.object(mm, "get_gpu_memory_info", return_value=None):
+            self.assertEqual(mm._choose_paddle_device(), "gpu:0")
+
+    def test_cpu_when_vram_low(self) -> None:
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=True)}), patch.object(mm, "get_gpu_memory_info", return_value=_vram(1.0)):
+            self.assertEqual(mm._choose_paddle_device(), "cpu")
+
+    def test_cpu_when_cpu_only_build_or_no_device(self) -> None:
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=False)}):
+            self.assertEqual(mm._choose_paddle_device(), "cpu")
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=True, devices=0)}):
+            self.assertEqual(mm._choose_paddle_device(), "cpu")
+
+    def test_init_retries_on_cpu_when_gpu_init_fails(self) -> None:
+        created: list[str] = []
+
+        class FakePaddleOCR:
+            def __init__(self, **kwargs: object) -> None:
+                created.append(str(kwargs["device"]))
+                if str(kwargs["device"]).startswith("gpu"):
+                    raise RuntimeError("CUDA out of memory")
+
+        statuses: list[str] = []
+        with (
+            patch.object(mm, "_choose_paddle_device", return_value="gpu:0"),
+            patch.object(mm, "_PADDLE_OCR", None),
+            patch.object(mm, "_PADDLE_OCR_DEVICE", "cpu"),
+            patch.object(mm, "_PADDLE_OCR_MODEL_DIR_KWARGS", {}),
+        ):
+            mm._init_paddle_ocr(FakePaddleOCR, on_status=statuses.append)
+            self.assertEqual(mm._PADDLE_OCR_DEVICE, "cpu")
+        self.assertEqual(created, ["gpu:0", "cpu"])
+        self.assertTrue(any("retrying on CPU" in text for text in statuses))
+
+    def test_init_raises_when_cpu_init_fails(self) -> None:
+        class BrokenPaddleOCR:
+            def __init__(self, **kwargs: object) -> None:
+                raise RuntimeError("broken")
+
+        with patch.object(mm, "_choose_paddle_device", return_value="cpu"), patch.object(mm, "_PADDLE_OCR_MODEL_DIR_KWARGS", {}):
+            with self.assertRaises(RuntimeError):
+                mm._init_paddle_ocr(BrokenPaddleOCR)
+
+    def test_auto_prefers_paddleocr_only_on_gpu(self) -> None:
+        fake_fn = lambda image, mode="slide": ""  # noqa: E731
+        for gpu, long_video, expected in (
+            (True, False, "paddleocr"),
+            (True, True, "paddleocr"),
+            (False, False, "rapidocr"),
+            (False, True, "rapidocr"),
+        ):
+            with (
+                patch.object(mm, "_paddle_will_use_gpu", return_value=gpu),
+                patch.object(mm, "_build_paddle_ocr_fn", return_value=(fake_fn, None)),
+                patch.object(mm, "_build_rapid_ocr_fn", return_value=(fake_fn, None)),
+            ):
+                _fn, name, _err, _note = mm._build_ocr_fn("auto", long_video=long_video)
+            self.assertEqual(name, expected, f"gpu={gpu} long_video={long_video}")
 
 
 if __name__ == "__main__":

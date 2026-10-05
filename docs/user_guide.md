@@ -141,7 +141,8 @@ In live mode:
   - `paddleocr`
   - `surya`
   - `pytesseract`
-  - `auto` (best available fallback)
+  - `auto` (best available fallback; PaddleOCR leads only when it will run on the GPU, otherwise RapidOCR)
+- **PaddleOCR on GPU**: `requirements.txt` installs the CPU `paddlepaddle` build (about 5 s per frame). Run `scripts/install_paddle_gpu.sh` to install the CUDA build instead (about 0.08 s per frame, about 1.2 GB VRAM); it shares the CUDA libraries that torch already installs. Re-run the script after any `pip install -r requirements.txt`. PaddleOCR uses the GPU only when at least 1.5 GB of VRAM is free and falls back to CPU (at initialization or on a run-time GPU error) otherwise.
 - **Scope**:
   - `Slides only` (default; avoids noisy chat/meeting side panels)
   - `Slides + chat` (captures the right-side chat/panel crop when useful)

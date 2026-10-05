@@ -33,7 +33,7 @@ transformers>=4.52.1
 peft>=0.14.0
 pytesseract>=0.3.10  # Optional multimodal OCR (requires OS package: tesseract-ocr)
 paddleocr>=3.0  # Optional multimodal OCR backend (app code targets the 3.x API)
-paddlepaddle>=3.3.0  # Required runtime for PaddleOCR backend
+paddlepaddle>=3.3.0  # Required runtime for PaddleOCR backend (CPU build; for GPU run scripts/install_paddle_gpu.sh afterwards)
 
 
 # Additional pinned packages added after environment sync

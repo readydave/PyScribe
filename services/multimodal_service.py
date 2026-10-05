@@ -20,6 +20,7 @@ from typing import Callable, Iterable
 
 import ffmpeg
 
+from services.live_vram_service import get_gpu_memory_info
 from services.model_download_service import ensure_hf_repo_local_dir_verified
 from services.runtime_env_service import configure_runtime_environment
 from utils import get_ffmpeg_cmd
@@ -56,6 +57,9 @@ _UI_NOISE_TERMS = (
 )
 _PADDLE_OCR = None
 _PADDLE_OCR_MODEL_DIR_KWARGS = None
+_PADDLE_OCR_DEVICE = "cpu"
+# PaddleOCR 3.x (PP-OCRv5) measured ~1.2 GB of VRAM in Phase 7; keep headroom for ASR/diarization.
+_PADDLE_MIN_FREE_VRAM_GB = 1.5
 _RAPID_OCR = None
 _SURYA_DET_PREDICTOR = None
 _SURYA_REC_PREDICTOR = None
@@ -534,9 +538,12 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long
         "pytesseract": lambda **_: _build_tesseract_ocr_fn(),
     }
     if requested == "auto":
-        # Interim (Phase 8): CPU-only PaddleOCR is ~15x slower than RapidOCR, so RapidOCR leads
-        # until the GPU build lands and the order is decided on measurements.
-        order = ["rapidocr", "paddleocr", "pytesseract", "surya"] if long_video else ["rapidocr", "paddleocr", "surya", "pytesseract"]
+        # PaddleOCR 3.x is ~5x faster than RapidOCR on GPU but ~15x slower on CPU, so it leads
+        # only when it will run on GPU (CUDA build of Paddle plus enough free VRAM).
+        if _paddle_will_use_gpu():
+            order = ["paddleocr", "rapidocr", "pytesseract", "surya"] if long_video else ["paddleocr", "rapidocr", "surya", "pytesseract"]
+        else:
+            order = ["rapidocr", "paddleocr", "pytesseract", "surya"] if long_video else ["rapidocr", "paddleocr", "surya", "pytesseract"]
     elif requested == "rapidocr":
         order = ["rapidocr", "paddleocr", "pytesseract"]
     elif requested == "surya":
@@ -634,6 +641,64 @@ def _paddle_ocr_model_name_kwargs(model_dir_kwargs: dict[str, str]) -> dict[str,
     return names
 
 
+def _choose_paddle_device() -> str:
+    """Return "gpu:0" when Paddle has CUDA and enough free VRAM, otherwise "cpu"."""
+    try:
+        import paddle
+
+        if not paddle.is_compiled_with_cuda() or paddle.device.cuda.device_count() < 1:
+            return "cpu"
+    except Exception:
+        return "cpu"
+    info = get_gpu_memory_info()
+    if info is not None and info.free_gb < _PADDLE_MIN_FREE_VRAM_GB:
+        return "cpu"
+    return "gpu:0"
+
+
+def _paddle_will_use_gpu() -> bool:
+    if importlib.util.find_spec("paddleocr") is None:
+        return False
+    return _choose_paddle_device() != "cpu"
+
+
+def _create_paddle_ocr(PaddleOCR: type[object], device: str, model_dir_kwargs: dict[str, str]) -> object:
+    return PaddleOCR(
+        use_textline_orientation=True,
+        lang="en",
+        device=device,
+        **model_dir_kwargs,
+        **_paddle_ocr_model_name_kwargs(model_dir_kwargs),
+    )
+
+
+def _init_paddle_ocr(PaddleOCR: type[object], *, on_status: StatusCallback | None = None) -> None:
+    """Create the shared PaddleOCR engine on GPU when possible, retrying once on CPU."""
+    global _PADDLE_OCR, _PADDLE_OCR_DEVICE
+    model_dirs = _PADDLE_OCR_MODEL_DIR_KWARGS or {}
+    device = _choose_paddle_device()
+    if on_status:
+        on_status(f"Initializing PaddleOCR ({'GPU' if device != 'cpu' else 'CPU'})...")
+    try:
+        _PADDLE_OCR = _create_paddle_ocr(PaddleOCR, device, model_dirs)
+    except Exception:
+        if device == "cpu":
+            raise
+        if on_status:
+            on_status("PaddleOCR GPU initialization failed; retrying on CPU...")
+        device = "cpu"
+        _PADDLE_OCR = _create_paddle_ocr(PaddleOCR, device, model_dirs)
+    _PADDLE_OCR_DEVICE = device
+
+
+def _fall_back_paddle_to_cpu(PaddleOCR: type[object], *, on_status: StatusCallback | None = None) -> None:
+    global _PADDLE_OCR, _PADDLE_OCR_DEVICE
+    if on_status:
+        on_status("PaddleOCR GPU error; switching to CPU...")
+    _PADDLE_OCR = _create_paddle_ocr(PaddleOCR, "cpu", _PADDLE_OCR_MODEL_DIR_KWARGS or {})
+    _PADDLE_OCR_DEVICE = "cpu"
+
+
 def _prepare_verified_paddle_ocr_model_dirs(
     PaddleOCR: type[object],
     *,
@@ -708,14 +773,7 @@ def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBacke
                 on_status=on_status,
             )
         if _PADDLE_OCR is None:
-            if on_status:
-                on_status("Initializing PaddleOCR...")
-            _PADDLE_OCR = PaddleOCR(
-                use_textline_orientation=True,
-                lang="en",
-                **(_PADDLE_OCR_MODEL_DIR_KWARGS or {}),
-                **_paddle_ocr_model_name_kwargs(_PADDLE_OCR_MODEL_DIR_KWARGS or {}),
-            )
+            _init_paddle_ocr(PaddleOCR, on_status=on_status)
 
         def _ocr(image: "Image.Image", mode: str = "slide") -> str:
             import numpy as np
@@ -732,6 +790,14 @@ def _build_paddle_ocr_fn(*, on_status: StatusCallback | None = None) -> OcrBacke
                     result = _PADDLE_OCR.predict(image_np)
                 except Exception as exc:
                     predict_exc = exc
+                    if _PADDLE_OCR_DEVICE != "cpu":
+                        # GPU failure at run time (e.g. out of memory): rebuild on CPU and retry once.
+                        try:
+                            _fall_back_paddle_to_cpu(PaddleOCR, on_status=on_status)
+                            result = _PADDLE_OCR.predict(image_np)
+                            predict_exc = None
+                        except Exception as retry_exc:
+                            predict_exc = retry_exc
 
             if result is None and hasattr(_PADDLE_OCR, "ocr"):
                 try:

@@ -62,6 +62,7 @@ def get_available_hf_models() -> list[str]:
         "Systran/faster-whisper-medium.en",
         "Systran/faster-whisper-large-v3",
         "ibm-granite/granite-4.0-1b-speech",
+        "ibm-granite/granite-speech-4.1-2b",
         "deepdml/faster-whisper-large-v3-turbo-ct2",
         "distil-whisper/distil-large-v3",
         "guillaumekln/whisper-large-v2-ct2",

@@ -19,7 +19,7 @@ from threading import Event
 from typing import Callable
 
 from services.asr_decode import open_segment_stream, resolve_batch_size, segment_words
-from services.granite_speech_service import GraniteSpeechModelBundle, transcribe_granite_audio
+from services.granite_speech_service import GraniteSpeechModelBundle, split_keywords, transcribe_granite_audio
 from services.model_download_service import ensure_model_cached
 from services.model_service import TranscriptionModelSpec, load_model, resolve_transcription_model
 from utils import convert_to_16k_mono, get_ffmpeg_cmd, load_audio_waveform
@@ -375,6 +375,7 @@ def transcribe_prepared_audio(
         transcript = transcribe_granite_audio(
             model if isinstance(model, GraniteSpeechModelBundle) else model,
             audio_np,
+            keywords=split_keywords(hotwords) or None,
             progress_cb=on_progress,
         )
         transcription_seconds = time.perf_counter() - transcription_started

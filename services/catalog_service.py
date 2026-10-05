@@ -13,6 +13,7 @@ BASE_MODEL_CHOICES = [
     "large-v2",
     "large-v3",
     "ibm-granite/granite-4.0-1b-speech",
+    "ibm-granite/granite-speech-4.1-2b",
 ]
 
 

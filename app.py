@@ -748,7 +748,7 @@ def create_interface() -> gr.Blocks:
             **Model tips:** use built-in choices or a custom Hugging Face repo ID (`owner/repo`).
             If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
             For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
-            Granite 4.0 Speech is available as an experimental backend and does not support speaker identification in PyScribe yet.
+            Granite Speech (4.0 and 4.1) is available as an experimental backend and does not support speaker identification in PyScribe yet.
             Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
             """
         )

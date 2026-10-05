@@ -63,7 +63,7 @@ class HFTokenHardeningTests(unittest.TestCase):
         clear_session_hf_token()
 
     def test_save_hf_token_session_only_does_not_persist_or_set_env(self) -> None:
-        with patch("services.hf_auth_service.HfFolder.save_token") as mock_save, patch.dict(
+        with patch("services.hf_auth_service.login") as mock_save, patch.dict(
             os.environ,
             {},
             clear=True,
@@ -76,10 +76,10 @@ class HFTokenHardeningTests(unittest.TestCase):
         self.assertEqual(token, "hf_secret")
 
     def test_save_hf_token_can_persist_when_requested(self) -> None:
-        with patch("services.hf_auth_service.HfFolder.save_token") as mock_save:
+        with patch("services.hf_auth_service.login") as mock_save:
             save_hf_token("hf_secret", persist=True)
 
-        mock_save.assert_called_once_with("hf_secret")
+        mock_save.assert_called_once_with(token="hf_secret", add_to_git_credential=False)
         self.assertEqual(get_hf_token(), "hf_secret")
 
 

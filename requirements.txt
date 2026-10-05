@@ -29,7 +29,7 @@ tqdm
 PyYAML
 Pillow
 hf_xet  # Optional accelerator for Hugging Face Xet storage; speeds up model downloads
-transformers>=4.52.1
+transformers>=5.13  # Transformers 5 (needed by the planned Nemotron streaming backend; Granite verified on 5.18)
 peft>=0.14.0
 pytesseract>=0.3.10  # Optional multimodal OCR (requires OS package: tesseract-ocr)
 paddleocr>=3.0  # Optional multimodal OCR backend (app code targets the 3.x API)
@@ -38,7 +38,7 @@ paddlepaddle>=3.3.0  # Required runtime for PaddleOCR backend (CPU build; for GP
 
 # Additional pinned packages added after environment sync
 # (these are required by the app at runtime or by faster-whisper/hf tooling)
-huggingface-hub[hf_xet]==0.36.0
+huggingface-hub[hf_xet]>=1.0  # required by transformers 5; services/hf_auth_service.py uses get_token()/login() (HfFolder was removed in 1.0)
 ctranslate2>=4.6.1
 typing_extensions==4.15.0
 # Optional: speaker diarization

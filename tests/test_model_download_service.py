@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import httpx
 from huggingface_hub.utils import RepositoryNotFoundError
 
 from services.model_download_service import (
@@ -335,7 +336,7 @@ class ModelDownloadServiceTests(unittest.TestCase):
 
         with patch("services.model_download_service._find_cached_snapshot_path", return_value=None), patch(
             "services.model_download_service._fetch_verification_manifest",
-            side_effect=RepositoryNotFoundError("missing"),
+            side_effect=RepositoryNotFoundError("missing", response=httpx.Response(404, request=httpx.Request("GET", "https://huggingface.co"))),
         ):
             result = ensure_model_cached("tiny", on_status=statuses.append)
 

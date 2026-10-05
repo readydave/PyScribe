@@ -23,6 +23,7 @@ from PySide6.QtMultimedia import QAudioFormat, QMediaDevices
 
 from services.model_service import load_model, resolve_transcription_model
 from services.model_download_service import ensure_model_cached
+from services.nemotron_streaming_service import NemotronStreamSession
 
 
 LOGGER = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ LIVE_STABILIZATION_TAIL_SECONDS = 2.0
 # Silero VAD for live windows: suppresses hallucinated text on silence/noise while keeping
 # 1 s utterances (verified in Phase 2); tighter silence gap and padding suit short windows.
 LIVE_VAD_PARAMETERS = {"min_silence_duration_ms": 500, "speech_pad_ms": 300}
+# Nemotron streaming live mode: send new audio to the worker at least this often.
+LIVE_STREAM_HOP_SECONDS = 0.5
 LIVE_SESSION_ROOT = Path.home() / "PyScribe Live Sessions"
 _LOOPBACK_MARKERS = ("monitor", "loopback", "stereo mix", "what u hear", "monitor of")
 
@@ -155,7 +158,8 @@ def list_live_audio_inputs() -> list[LiveAudioDevice]:
 
 
 def live_model_supported(model_name: str) -> bool:
-    return resolve_transcription_model(model_name).supports_timestamps
+    spec = resolve_transcription_model(model_name)
+    return spec.supports_timestamps or spec.backend_kind == "nemotron_streaming"
 
 
 def default_live_output_dir() -> str:
@@ -291,6 +295,8 @@ class LiveSessionController:
         
         session_id = dir_name + "_" + uuid.uuid4().hex[:8]
         self.options = options
+        self._streaming = resolve_transcription_model(options.model_name).backend_kind == "nemotron_streaming"
+        self._stream_text = ""
         self.session_timestamp = timestamp
         self.session_dir = output_root / session_id
         self.capture_path = self.session_dir / f"{timestamp}-live-capture.wav"
@@ -348,7 +354,11 @@ class LiveSessionController:
         self._started = True
 
     def snapshot(self) -> LiveSessionSnapshot:
-        segments = [dict(seg) for seg in (self.committed_segments + self.draft_segments)]
+        if self._streaming:
+            text = " ".join(self._stream_text.split())
+            segments = [{"start": 0.0, "end": self.recording_seconds, "text": text}] if text else []
+        else:
+            segments = [dict(seg) for seg in (self.committed_segments + self.draft_segments)]
         return LiveSessionSnapshot(
             transcript=render_live_transcript(segments),
             transcript_only=render_live_transcript(segments),
@@ -404,6 +414,9 @@ class LiveSessionController:
                 self._write_metadata()
                 self._decode_in_flight = False
                 events.append({"type": "error", "value": self.last_error})
+                continue
+            if etype in {"stream_text", "stream_final"}:
+                self._handle_stream_event(evt, events, final=etype == "stream_final")
                 continue
             if etype != "result":
                 continue
@@ -546,7 +559,35 @@ class LiveSessionController:
         if preserve_error and self.last_error and self.metadata.status != "failed":
             self.finalize_failed(self.last_error)
 
+    def _handle_stream_event(self, evt: dict[str, Any], events: list[dict[str, Any]], *, final: bool) -> None:
+        self._stream_text += str(evt.get("text", ""))
+        if final:
+            self._decode_in_flight = False
+            self._awaiting_final_decode = False
+        snapshot = self.snapshot()
+        self._last_emitted_transcript = snapshot.transcript
+        events.append({"type": "transcript", "value": snapshot.transcript, "snapshot": snapshot})
+        if final:
+            events.append({"type": "status", "value": "Live capture finalized. Starting final post-pass..."})
+
+    def _queue_stream_audio(self, *, force: bool, final: bool) -> None:
+        """Nemotron path: send audio not yet sent (no rolling window); `final` also flushes the model."""
+        if self._request_queue is None or self._decode_in_flight:
+            return
+        pending = self._total_samples - self._last_decode_target_sample
+        if pending > 0 and (force or pending >= int(LIVE_STREAM_HOP_SECONDS * LIVE_SAMPLE_RATE)):
+            local_start = max(0, self._last_decode_target_sample - self._buffer_start_sample)
+            audio_np = np.array(self._buffer[local_start:], dtype=np.float32, copy=True)
+            self._last_decode_target_sample = self._total_samples
+            self._request_queue.put({"type": "append", "audio_np": audio_np})
+        if final:
+            self._decode_in_flight = True
+            self._request_queue.put({"type": "finish"})
+
     def _maybe_queue_decode(self, *, force: bool = False, final: bool = False) -> None:
+        if self._streaming:
+            self._queue_stream_audio(force=force, final=final)
+            return
         if self._request_queue is None or self._decode_in_flight:
             return
         total_samples = self._total_samples
@@ -642,6 +683,48 @@ class LiveSessionController:
         return forced
 
 
+def _run_nemotron_live_worker(
+    model_name: str,
+    device: str,
+    compute_type: str,
+    spec: Any,
+    request_queue: mp.Queue,
+    event_queue: mp.Queue,
+) -> None:
+    """Streaming worker loop: `append` audio -> `stream_text` events; `finish` flushes the model -> `stream_final`."""
+    model = load_model(
+        ensure_model_cached(model_name),
+        device=device,
+        compute_type=compute_type,
+        use_cache=False,
+        model_spec=spec,
+    )
+    session = NemotronStreamSession(model)
+    event_queue.put({"type": "ready", "value": f"Live ASR worker ready on {device.upper()}."})
+    try:
+        while True:
+            try:
+                request = request_queue.get(timeout=0.2)
+            except queue.Empty:
+                request = None
+            rtype = str(request.get("type", "")).strip().lower() if isinstance(request, dict) else ""
+            if rtype == "shutdown":
+                break
+            if session.error is not None:
+                raise RuntimeError(f"Nemotron streaming failed: {session.error}")
+            if rtype == "append":
+                session.feed(np.array(request.get("audio_np"), dtype=np.float32, copy=False))
+            text = session.poll_text()
+            if rtype == "finish":
+                session.finish()
+                text += session.poll_text()
+                event_queue.put({"type": "stream_final", "text": text})
+            elif text:
+                event_queue.put({"type": "stream_text", "text": text})
+    finally:
+        session.abort()
+
+
 def _live_asr_process_entry(
     model_name: str,
     device: str,
@@ -651,6 +734,9 @@ def _live_asr_process_entry(
 ) -> None:
     try:
         spec = resolve_transcription_model(model_name)
+        if spec.backend_kind == "nemotron_streaming":
+            _run_nemotron_live_worker(model_name, device, compute_type, spec, request_queue, event_queue)
+            return
         if spec.backend_kind != "faster_whisper" or not spec.supports_timestamps:
             raise RuntimeError(f"Model '{spec.display_name}' does not support live transcription.")
         model = load_model(

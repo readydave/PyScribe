@@ -67,7 +67,7 @@ If you run `python main.py` with no mode, you get an interactive launcher menu. 
   - **Loopback**
 - Loopback requires the OS to expose a monitor/loopback input device. On Linux this is typically a PipeWire/PulseAudio monitor source.
 - Each live session writes into `~/PyScribe Live Sessions` by default unless you choose another output folder.
-- Granite Speech is blocked in live mode because live mode requires timestamp-capable Whisper backends.
+- Live mode accepts timestamp-capable Whisper models and `nvidia/nemotron-speech-streaming-en-0.6b` (English only, streams text as you speak; the final pass re-runs Nemotron on the capture and adds speaker labels). Granite Speech is blocked in live mode.
 
 ### Model Selection
 

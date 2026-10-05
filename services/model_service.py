@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from .granite_speech_service import load_granite_model
+from .nemotron_streaming_service import NEMOTRON_STREAMING_REPO_IDS, load_nemotron_model
 from .model_download_service import normalize_model_name, resolve_repo_id
 
 if TYPE_CHECKING:
@@ -90,6 +91,17 @@ def resolve_transcription_model(model_name: str) -> TranscriptionModelSpec:
     """Resolve a model string to a backend/capability descriptor."""
     normalized = normalize_model_name(model_name)
     repo_id = resolve_repo_id(normalized)
+    if repo_id in NEMOTRON_STREAMING_REPO_IDS:
+        return TranscriptionModelSpec(
+            requested_name=model_name,
+            normalized_name=normalized,
+            backend_kind="nemotron_streaming",
+            repo_id=repo_id,
+            display_name=repo_id,
+            supports_diarization=True,
+            supports_timestamps=False,
+            is_experimental=True,
+        )
     if repo_id in GRANITE_SPEECH_REPO_IDS:
         return TranscriptionModelSpec(
             requested_name=model_name,
@@ -144,6 +156,8 @@ def load_model(
             device=device,
             compute_type=compute_type,
         )
+    elif spec.backend_kind == "nemotron_streaming":
+        model = load_nemotron_model(model_name, device=device, compute_type=compute_type)
     else:
         from faster_whisper import WhisperModel
 

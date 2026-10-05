@@ -7,6 +7,7 @@ import multiprocessing as mp
 import queue
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ from services.live_transcription_service import (
     reconcile_live_transcript,
     normalize_session_title,
     _live_asr_process_entry,
+    _run_nemotron_live_worker,
 )
 
 
@@ -226,6 +228,82 @@ class LiveTranscriptionServiceTests(unittest.TestCase):
     def test_live_model_supported_rejects_granite(self) -> None:
         self.assertTrue(live_model_supported("deepdml/faster-whisper-large-v3-turbo-ct2"))
         self.assertFalse(live_model_supported("ibm-granite/granite-4.0-1b-speech"))
+
+    def test_live_model_supported_accepts_nemotron_streaming(self) -> None:
+        self.assertTrue(live_model_supported("nvidia/nemotron-speech-streaming-en-0.6b"))
+
+    def test_nemotron_session_streams_new_audio_and_flushes_on_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):
+            options = replace(self._options(temp_dir), model_name="nvidia/nemotron-speech-streaming-en-0.6b")
+            controller = LiveSessionController(options)
+            controller.start()
+            controller._request_queue = _FakeRequestQueue()
+            controller._event_queue = queue.Queue()
+
+            first = np.ones(int(LIVE_SAMPLE_RATE * 0.6), dtype=np.float32)
+            controller.append_audio_chunk(first, np.zeros(first.size, dtype=np.int16).tobytes())
+            self.assertEqual([i["type"] for i in controller._request_queue.items], ["append"])
+            self.assertEqual(controller._request_queue.items[0]["audio_np"].size, first.size)
+
+            controller._event_queue.put({"type": "stream_text", "text": "hello "})
+            events = controller.poll_events()
+            self.assertEqual([e["value"] for e in events if e["type"] == "transcript"], ["hello"])
+
+            # less than one hop of new audio is held back until stop
+            tail = np.ones(1000, dtype=np.float32)
+            controller.append_audio_chunk(tail, np.zeros(tail.size, dtype=np.int16).tobytes())
+            self.assertEqual(len(controller._request_queue.items), 1)
+
+            controller.request_final_decode()
+            self.assertEqual([i["type"] for i in controller._request_queue.items], ["append", "append", "finish"])
+            self.assertEqual(controller._request_queue.items[1]["audio_np"].size, tail.size)
+            self.assertFalse(controller.is_idle())
+
+            controller._event_queue.put({"type": "stream_final", "text": "world."})
+            events = controller.poll_events()
+            self.assertEqual([e["value"] for e in events if e["type"] == "transcript"], ["hello world."])
+            self.assertTrue(any(e["type"] == "status" and "finalized" in e["value"] for e in events))
+            self.assertTrue(controller.is_idle())
+            controller.shutdown()
+
+    def test_nemotron_worker_forwards_text_and_final_flush(self) -> None:
+        class FakeSession:
+            error = None
+
+            def __init__(self, model) -> None:
+                self.fed = 0
+                self.pending = ["hi "]
+
+            def feed(self, audio) -> None:
+                self.fed += audio.size
+
+            def poll_text(self) -> str:
+                text, self.pending = "".join(self.pending), []
+                return text
+
+            def finish(self) -> list:
+                self.pending = ["there."]
+                return []
+
+            def abort(self) -> None:
+                pass
+
+        requests: queue.Queue = queue.Queue()
+        events: queue.Queue = queue.Queue()
+        requests.put({"type": "append", "audio_np": np.zeros(800, dtype=np.float32)})
+        requests.put({"type": "finish"})
+        requests.put({"type": "shutdown"})
+        with patch("services.live_transcription_service.load_model", return_value=object()), patch(
+            "services.live_transcription_service.ensure_model_cached", return_value="cached"
+        ), patch("services.live_transcription_service.NemotronStreamSession", FakeSession):
+            _run_nemotron_live_worker("nvidia/nemotron-speech-streaming-en-0.6b", "cpu", "float32", object(), requests, events)
+
+        emitted = []
+        while not events.empty():
+            emitted.append(events.get())
+        self.assertEqual([e["type"] for e in emitted], ["ready", "stream_text", "stream_final"])
+        self.assertEqual(emitted[1]["text"], "hi ")
+        self.assertEqual(emitted[2]["text"], "there.")
 
     def test_live_session_emits_incremental_transcript_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.object(LiveSessionController, "_start_asr_process", return_value=None):

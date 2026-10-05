@@ -179,6 +179,36 @@ class TranscriptionServiceTests(unittest.TestCase):
         self.assertEqual(captured_text, ["granite transcript"])
         self.assertEqual(captured_progress, [])
 
+    def test_transcribe_prepared_audio_nemotron_builds_segments_and_labels_speakers(self) -> None:
+        spec = resolve_transcription_model("nvidia/nemotron-speech-streaming-en-0.6b")
+        words = [SimpleNamespace(word=" Hello.", start=0.0, end=0.4), SimpleNamespace(word=" Hi.", start=3.0, end=3.3)]
+        nemotron_segments = [
+            SimpleNamespace(start=0.0, end=0.4, text="Hello.", words=words[:1]),
+            SimpleNamespace(start=3.0, end=3.3, text="Hi.", words=words[1:]),
+        ]
+        turns = [{"start": 0.0, "end": 1.0, "speaker": "S1"}, {"start": 2.5, "end": 4.0, "speaker": "S2"}]
+
+        with patch("services.transcription_service._probe_duration_seconds", return_value=4.0), patch(
+            "services.transcription_service.load_audio_waveform", return_value=[0.0]
+        ), patch(
+            "services.transcription_service.transcribe_nemotron_audio", return_value=nemotron_segments
+        ) as mock_asr, patch(
+            "services.transcription_service._run_diarization_backend", return_value=turns
+        ):
+            result = transcribe_prepared_audio(
+                wav_path="prepared.wav",
+                model=object(),
+                model_spec=spec,
+                language=None,
+                use_diarization=True,
+                hotwords="Acme",
+            )
+
+        self.assertIsNone(mock_asr.call_args.kwargs.get("on_text"))
+        self.assertEqual(result.transcript_only, "Hello. Hi.")
+        self.assertEqual([seg["speaker"] for seg in result.segments], ["S1", "S2"])
+        self.assertEqual(result.transcript, "[S1] Hello.\n[S2] Hi.")
+
     def test_transcribe_media_file_disables_granite_diarization_and_appends_visual_report(self) -> None:
         statuses: list[str] = []
         spec = resolve_transcription_model("ibm-granite/granite-4.0-1b-speech")

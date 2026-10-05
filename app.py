@@ -863,6 +863,7 @@ def create_interface() -> gr.Blocks:
             If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
             For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
             Granite Speech (4.0 and 4.1) is available as an experimental backend and does not support speaker identification in PyScribe yet.
+            Nemotron Speech Streaming (`nvidia/nemotron-speech-streaming-en-0.6b`) is an experimental English-only backend; Names / terms are ignored for it.
             Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
             """
         )

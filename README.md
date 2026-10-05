@@ -1,6 +1,6 @@
 # PyScribe
 
-PyScribe is a local transcription app for Windows and Linux built primarily on `faster-whisper`, with experimental Granite Speech support for file-based transcription.
+PyScribe is a local transcription app for Windows and Linux built primarily on `faster-whisper`, with experimental Granite Speech (file-based) and Nemotron Speech Streaming (English, live and file) support.
 It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker diarization and optional visual OCR analysis for video files.
 
 ## Documentation
@@ -15,6 +15,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 ## Highlights
 
 - Local transcription using `faster-whisper`
+- Experimental Nemotron Speech Streaming (`nvidia/nemotron-speech-streaming-en-0.6b`, English only): punctuated, truecased text from a 0.6B cache-aware streaming model; works for Qt live mode (text appears about 1-2 s behind speech) and for file transcription with speaker identification. The Names / terms field is ignored for it. About 2 GB of VRAM.
 - Experimental Granite Speech file transcription (`granite-4.0-1b-speech` and `granite-speech-4.1-2b`; 4.1 returns punctuated, capitalized text and honours the Names / terms field)
 - Hardware-aware model recommendations
 - Qt desktop mode and Gradio listener mode
@@ -201,7 +202,7 @@ Note: Interactive LAN mode no longer uses a default password. Set
 
 - **Diarization:** optional; pyannote backends run in an isolated worker process, prefer `soundfile` audio loading, and retry on CPU when GPU diarization is unavailable. Modern Torchaudio compatibility shims provide `soundfile` fallbacks for metadata/loading APIs removed or changed in Torchaudio 2.9+ / 2.11. If diarization fails or produces no speaker segments, transcription completes without speaker labels instead of emitting `[S?]` lines.
 - **File transcription:** applies VAD filtering to skip silence and runs video OCR concurrently with audio transcription when both are enabled.
-- **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` while showing rolling transcript text, supports **Pause / Resume** within the same session, and runs a final file-based cleanup pass when you press **Stop**. Optional Session Title values can name live session outputs, and **Rename with Title** can apply a title after recording. Cancel asks for confirmation and preserves the session folder/audio when accepted. Speaker identification, when enabled, runs only in that final pass. Granite remains file-only.
+- **Qt live mode:** Linux-first desktop feature for microphone or loopback capture. Live mode writes a recoverable timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` while showing rolling transcript text, supports **Pause / Resume** within the same session, and runs a final file-based cleanup pass when you press **Stop**. Optional Session Title values can name live session outputs, and **Rename with Title** can apply a title after recording. Cancel asks for confirmation and preserves the session folder/audio when accepted. Speaker identification, when enabled, runs only in that final pass. With `nvidia/nemotron-speech-streaming-en-0.6b` the live text streams from the model as you speak and the final pass re-runs Nemotron on the saved capture (about 1 minute of ASR per hour of audio on a GPU) before diarization. Granite remains file-only.
 - **Visual analysis:** optional; supports `fast`, `balanced`, `accurate` profiles, slides-only or slides+chat scope, and `auto`, `rapidocr`, `paddleocr`, `surya`, or `pytesseract` OCR backend selection. Long videos use lower frame caps and faster auto backend preference to keep webinar OCR practical.
 - **Qt output save modes:** `Save All`, `Save Transcript Only`, `Save OCR Only`. When multiple processing parts are enabled, Qt also auto-saves separate `<stem>_transcript.txt`, `<stem>_diarized.txt`, and/or `<stem>_ocr.txt` files beside the source media.
 - **Benchmarking:** Qt Tools menu includes benchmark runner for bundled sample media.
@@ -260,5 +261,7 @@ Commercial use is not permitted under the current project license.
 ## Acknowledgments
 
 Benchmark audio source: [LibriVox](https://librivox.org/).
+
+Nemotron Speech Streaming is [NVIDIA nemotron-speech-streaming-en-0.6b](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b), used under the NVIDIA Open Model License (the model is downloaded by the user on first use and is not redistributed with PyScribe).
 
 Speaker diarization uses [pyannote.audio](https://github.com/pyannote/pyannote-audio) and the `pyannote/speaker-diarization-community-1` pipeline (CC-BY-4.0, by pyannoteAI).

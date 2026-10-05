@@ -38,6 +38,15 @@ class GraniteRegistryTests(unittest.TestCase):
         self.assertFalse(spec.supports_diarization)
 
 
+class NemotronRegistryTests(unittest.TestCase):
+    def test_nemotron_resolves_to_streaming_backend(self) -> None:
+        spec = resolve_transcription_model("nvidia/nemotron-speech-streaming-en-0.6b")
+        self.assertEqual(spec.backend_kind, "nemotron_streaming")
+        self.assertTrue(spec.is_experimental)
+        self.assertTrue(spec.supports_diarization)
+        self.assertFalse(spec.supports_timestamps)
+
+
 if __name__ == "__main__":
     unittest.main()
 

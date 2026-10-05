@@ -299,7 +299,7 @@ gitleaks detect --source . --redact
 - Interactive LAN listener mode requires authentication.
 - Public share mode requires authentication.
 - Some diarization backends require CUDA.
-- Granite remains file-only.
+- Granite remains file-only. Nemotron streaming (`nvidia/nemotron-speech-streaming-en-0.6b`) supports Qt live mode and file mode, needs `transformers>=5.13` and `librosa`, and is English-only.
 - Qt live transcription is Linux-first.
 - Windows without Bash may need Git Bash or WSL for `bash -n scripts/run_listener.sh`.
 

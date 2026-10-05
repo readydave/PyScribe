@@ -3323,7 +3323,7 @@ class MainWindow(QMainWindow):
             return
         if model_name and resolve_transcription_model(model_name).backend_kind == "nemotron_streaming":
             self.model_hint_label.setText(
-                "Experimental: Nemotron streaming (English only). Live and file mode; Names / terms are ignored."
+                "Experimental: Nemotron streaming (English only). Live and file mode; Names / terms are applied as a spelling pass on the final transcript."
             )
         elif model_name and is_experimental_model(model_name):
             self.model_hint_label.setText(

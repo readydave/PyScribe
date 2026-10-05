@@ -108,7 +108,7 @@ Private or short-term working items belong in local `TODO.md`.
 - Listener security: `services/listener_security_service.py`, `main.py`, and `scripts/run_listener.sh`.
 - Secret handling: Hugging Face tokens, listener passwords, LLM API keys, environment-variable references, and logs.
 - Long-running worker control: Qt worker cancellation, force-stop, multiprocessing, and subprocess cleanup.
-- CUDA/OCR runtime setup: `services/runtime_env_service.py`, pyannote subprocess isolation, in-memory `soundfile` audio loading for pyannote, the gated `community-1` model, PaddleOCR/Tesseract paths (the `paddleocr` backend currently falls back to RapidOCR), and Linux loader environment changes.
+- CUDA/OCR runtime setup: `services/runtime_env_service.py`, pyannote subprocess isolation, in-memory `soundfile` audio loading for pyannote, the gated `community-1` model, PaddleOCR/Tesseract paths (PaddleOCR 3.x runs on GPU when the CUDA `paddlepaddle-gpu` build from `scripts/install_paddle_gpu.sh` is installed and enough VRAM is free, otherwise on CPU where `auto` prefers RapidOCR), and Linux loader environment changes.
 - File path handling: uploaded media, temporary files, saved transcripts, live capture folders, and user prompt templates.
 - Config compatibility: `services/config_service.py` should preserve older config files and unknown additive behavior where practical.
 - LLM network policy: local vs LAN profile scope, CIDR restrictions, TLS verification behavior, and concurrent local workload checks.

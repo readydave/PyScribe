@@ -25,6 +25,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+With `uv`, use `uv pip install --python .venv/bin/python --index-strategy unsafe-best-match -r requirements.txt`. For GPU OCR (optional) run `scripts/install_paddle_gpu.sh` afterwards and re-run it after any reinstall of `requirements.txt`; see `README.md`.
+
 Do not install project dependencies into the global or user Python environment.
 
 ## Run Locally

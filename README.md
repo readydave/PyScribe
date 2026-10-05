@@ -118,6 +118,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+With `uv` instead of `pip` (the requirements use several package indexes):
+
+```bash
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python --index-strategy unsafe-best-match -r requirements.txt
+```
+
+### Optional: PaddleOCR on the GPU
+
+`requirements.txt` installs the CPU `paddlepaddle` wheel. On an NVIDIA GPU, swap in the CUDA build afterwards (Linux):
+
+```bash
+scripts/install_paddle_gpu.sh            # uses .venv/bin/python; pass another Python path as the first argument
+```
+
+Re-run it after any `pip install -r requirements.txt`, which reinstalls the CPU wheel. It installs `paddlepaddle-gpu` without its pinned NVIDIA packages so it shares the CUDA libraries torch already installed. `pytest` is not in `requirements.txt`; install it separately to run the tests (`CONTRIBUTING.md`).
+
 ## Quick Start
 
 ```bash

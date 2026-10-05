@@ -19,6 +19,8 @@
 pip install -r requirements.txt
 ```
 
+- With `uv`: `uv pip install --python .venv/bin/python --index-strategy unsafe-best-match -r requirements.txt` (the requirements use multiple package indexes).
+- Optional GPU OCR: after installing requirements run `scripts/install_paddle_gpu.sh` (installs `paddlepaddle-gpu` with `--no-deps` so it shares torch's CUDA 12.8 libraries); re-run it after any reinstall of `requirements.txt`. `pytest` is installed separately (see Testing).
 - Do not install project dependencies into the global or user Python environment.
 - Do not change dependency management tools unless the maintainer explicitly asks.
 

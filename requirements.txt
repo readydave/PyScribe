@@ -23,6 +23,7 @@ psutil
 nvidia-ml-py
 
 gradio
+mcp>=2.3,<3  # `python main.py mcp` (MCP server for Claude Code, Codex, ...)
 PySide6>=6.7
 requests
 tqdm

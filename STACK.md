@@ -95,6 +95,11 @@ python main.py serve --port 7860
 ```
 
 ```bash
+# MCP server on stdio (needs the `mcp` package; see docs/mcp.md)
+python main.py mcp
+```
+
+```bash
 # CLI/package entry point, if installed
 pyscribe --help
 ```

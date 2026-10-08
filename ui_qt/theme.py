@@ -493,6 +493,10 @@ def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = No
             color: {p.accent_text};
             border-color: {p.accent};
         }}
+        QListWidget::item:selected, QListView::item:selected {{
+            background: {p.accent};
+            color: {p.accent_text};
+        }}
         QScrollBar:vertical {{
             background: transparent;
             width: 12px;

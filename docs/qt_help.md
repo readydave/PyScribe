@@ -34,6 +34,20 @@
 - **Responsive cards**:
   - General/More options cards show in two columns when the Setup panel is wide and collapse to one column when it is narrow.
 
+## AI Connections (Tools > LLM Connections)
+
+- **Providers**: Ollama, LM Studio, any OpenAI-compatible server, and Anthropic (native Claude API).
+- **Scope** controls where a connection may point:
+  - `local`: this machine only.
+  - `lan`: private-network addresses only.
+  - `cloud`: a hosted provider over `https://`. Transcripts and images leave your network, so each cloud profile needs the confirmation box ticked, an API key, and keeps TLS verification on.
+- **Add Cloud Profile** adds a starting point for Claude, OpenAI, Gemini, or OpenRouter. Press **Test Connection** to list the models your key can use, then type or paste the one you want as the default model. Any model your provider offers works; nothing is hard-coded.
+- **API keys** are never saved as plain text. Enter an environment variable name such as `env:ANTHROPIC_API_KEY` (saved), or paste a key to use for this session only.
+- **Context tokens** is how much the model can read at once (automatic by default: 16k for Ollama, 8k for LM Studio and other local servers, large for hosted models). Transcripts longer than this are split into parts, summarised, and merged automatically; the status line shows progress. For LM Studio, set this to the context length you loaded the model with.
+- **Max output tokens** caps the length of the reply; PyScribe tells you if a reply was cut off.
+- **Temperature**: empty uses the provider's default (some hosted models reject a custom value).
+- The Listener does not offer cloud profiles unless `llm_allow_cloud_in_listener` is set to `true` in `~/.pyscribe_config.json`, because anyone who can open the Listener could otherwise use your key.
+
 ## Settings and Start-up Defaults
 
 - **Settings > Start-up defaults** sets what PyScribe starts with:

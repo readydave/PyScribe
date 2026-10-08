@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import os
+from urllib.parse import urlparse
 from pathlib import Path, PureWindowsPath
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
@@ -185,6 +186,7 @@ class PromptTemplateEditorDialog(QDialog):
 
 class LLMPostprocessWorker(QObject):
     output_chunk: Signal = Signal(str)
+    status: Signal = Signal(str)
     finished: Signal = Signal(object)
     failed: Signal = Signal(str)
 
@@ -214,6 +216,7 @@ class LLMPostprocessWorker(QObject):
                 prepared_payload=self._prepared_payload,
                 on_output_chunk=self.output_chunk.emit,
                 run_control=self._run_control,
+                on_status=self.status.emit,
             )
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -660,7 +663,14 @@ class LLMPostprocessDialog(QDialog):
         if profile is None:
             return
         self._connection_test_state = "not_run"
-        self.connection_status.setText("Connection test optional. Click 'Refresh Connection + Models' to validate.")
+        if profile.scope == "cloud":
+            host = urlparse(profile.base_url).hostname or profile.base_url
+            self.connection_status.setText(
+                f"Cloud profile: the transcript (and any images) will be sent to {host}. "
+                "Click 'Refresh Connection + Models' to validate."
+            )
+        else:
+            self.connection_status.setText("Connection test optional. Click 'Refresh Connection + Models' to validate.")
         if profile.default_model:
             self.model_combo.addItem(profile.default_model)
             self.model_combo.setCurrentText(profile.default_model)
@@ -985,7 +995,7 @@ class LLMPostprocessDialog(QDialog):
                     ),
                 )
                 return
-            if not profile.allow_concurrent_with_local_transcription:
+            if profile.scope != "cloud" and not profile.allow_concurrent_with_local_transcription:
                 QMessageBox.warning(
                     self,
                     "Post-process blocked",
@@ -1039,6 +1049,7 @@ class LLMPostprocessDialog(QDialog):
         self._postprocess_worker.moveToThread(self._postprocess_thread)
         self._postprocess_thread.started.connect(self._postprocess_worker.run)
         self._postprocess_worker.output_chunk.connect(self._on_postprocess_output_chunk)
+        self._postprocess_worker.status.connect(self.connection_status.setText)
         self._postprocess_worker.finished.connect(self._on_postprocess_finished)
         self._postprocess_worker.failed.connect(self._on_postprocess_failed)
         self._postprocess_worker.finished.connect(self._postprocess_thread.quit)

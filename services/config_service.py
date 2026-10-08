@@ -42,6 +42,12 @@ class AppConfig:
     dock_layout: str | None = None
     dock_locked: bool = False
     setup_advanced_expanded: bool = False
+    default_model: str | None = None
+    default_input_mode: str = "file"
+    default_hotwords: str = ""
+    default_batched: bool = False
+    sidebar_collapsed: bool = False
+    window_geometry: str | None = None
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".pyscribe_config.json"
@@ -89,6 +95,12 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         dock_layout=_as_optional_str(data.get("dock_layout")),
         dock_locked=_as_bool(data.get("dock_locked"), default=False),
         setup_advanced_expanded=_as_bool(data.get("setup_advanced_expanded"), default=False),
+        default_model=_as_optional_str(data.get("default_model")),
+        default_input_mode="live" if data.get("default_input_mode") == "live" else "file",
+        default_hotwords=_as_short_text(data.get("default_hotwords"), 500),
+        default_batched=_as_bool(data.get("default_batched"), default=False),
+        sidebar_collapsed=_as_bool(data.get("sidebar_collapsed"), default=False),
+        window_geometry=_as_optional_str(data.get("window_geometry")),
     )
 
 
@@ -117,6 +129,10 @@ def _as_theme_id(value: object, custom_themes: object) -> str:
     if any(item.get("id") == theme_id for item in sanitize_custom_themes(custom_themes)):
         return theme_id
     return DEFAULT_THEME_ID
+
+
+def _as_short_text(value: object, limit: int) -> str:
+    return value.strip()[:limit] if isinstance(value, str) else ""
 
 
 def _as_optional_int(value: object) -> int | None:

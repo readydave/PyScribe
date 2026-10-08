@@ -34,6 +34,16 @@
 - **Responsive cards**:
   - General/More options cards show in two columns when the Setup panel is wide and collapse to one column when it is narrow.
 
+## Settings and Start-up Defaults
+
+- **Settings > Start-up defaults** sets what PyScribe starts with:
+  - **Model**: leave empty to start with the last model you used, or enter a model name or Hugging Face repo ID to always start with it.
+  - **Start in**: File or Live.
+  - **Names / terms** and **Faster GPU decoding**: pre-filled on the Transcription page.
+  - **Open files from**: the folder file dialogs open in.
+  - **Use current settings as defaults** copies the Transcription page's current model, File/Live choice, names/terms, and decoding option.
+- Remembered automatically: run mode, speaker and visual options (saved when you start a job), live capture source/device/folder/keep-audio, colour theme and mode, panel layout, window size, and whether the left sidebar is collapsed.
+
 ## Colour Themes
 
 - **View > Theme** chooses System, Light, or Dark. **View > Colour theme** chooses the colours: Iron-gall, Verdigris, Ochre, Graphite, or one of your own. Every theme has a light and a dark version.

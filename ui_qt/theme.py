@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QFontDatabase, QPalette
+from pathlib import Path
+
+from PySide6.QtCore import QPointF, QStandardPaths, Qt
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter, QPalette, QPen, QPolygonF
 from PySide6.QtWidgets import QApplication
 
 from services.ui_themes import DEFAULT_THEME_ID, Palette, ResolvedTheme, resolve
@@ -133,9 +135,35 @@ def apply_theme(
     return effective
 
 
+def _check_icon(color: str) -> str:
+    """Render a tick mark in ``color`` to a cached PNG and return its path ("" if it can't be written).
+
+    QSS cannot draw a check mark, and styling the indicator hides the native one.
+    """
+    try:
+        directory = Path(QStandardPaths.writableLocation(QStandardPaths.CacheLocation)) / "pyscribe-theme"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"check-{color.lstrip('#').lower()}.png"
+        if not path.exists():
+            image = QImage(32, 32, QImage.Format_ARGB32)
+            image.fill(Qt.transparent)
+            painter = QPainter(image)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(QPen(QColor(color), 4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPolyline(QPolygonF([QPointF(8, 17), QPointF(14, 23), QPointF(24, 9)]))
+            painter.end()
+            image.save(str(path), "PNG")
+        return path.as_posix() if path.exists() else ""
+    except OSError:
+        LOGGER.warning("Could not write the check-mark icon.", exc_info=True)
+        return ""
+
+
 def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = None) -> str:
     """Build the application stylesheet for ``mode`` (``light`` or ``dark``)."""
     p = palette or PALETTES["dark" if mode == "dark" else "light"]
+    check = _check_icon(p.accent_text)
+    check_image = f'image: url("{check}");' if check else ""
     return f"""
         QWidget {{
             background: {p.page};
@@ -147,6 +175,28 @@ def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = No
         }}
         QLabel, QCheckBox, QRadioButton {{
             background: transparent;
+        }}
+        QCheckBox {{
+            spacing: 8px;
+        }}
+        QCheckBox::indicator {{
+            width: 16px;
+            height: 16px;
+            border: 2px solid {p.muted};
+            border-radius: 4px;
+            background: {p.input_bg};
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: {p.ink};
+        }}
+        QCheckBox::indicator:checked {{
+            background: {p.accent};
+            border-color: {p.accent};
+            {check_image}
+        }}
+        QCheckBox::indicator:disabled {{
+            border-color: {p.disabled_bg};
+            background: {p.surface};
         }}
         #Sidebar {{
             background: {p.sidebar};

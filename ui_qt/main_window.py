@@ -665,6 +665,7 @@ class DiarBackendProbeWorker(QObject):
 
 
 DOCK_LAYOUT_VERSION = 1
+NARROW_WINDOW_WIDTH = 1500
 
 
 class MainWindow(QMainWindow):
@@ -735,9 +736,10 @@ class MainWindow(QMainWindow):
         self._batch_active: bool = False
         self._current_batch_index: int = -1
 
+        self._fit_to_available_screen()  # first, so the default dock layout sees the real window width
         self._build_ui()
         self._build_menus()
-        self._fit_to_available_screen()
+        self._restore_window_geometry()
         self._apply_tab_order()
         self._restore_dock_layout()
         self._apply_theme()
@@ -750,7 +752,9 @@ class MainWindow(QMainWindow):
         self._update_service_visibility()
         self._refresh_live_device_choices()
         self._update_live_mode_ui()
+        self._apply_startup_defaults()
         QTimer.singleShot(0, self._apply_responsive_layout_state)
+        self._ui_ready = True
         LOGGER.info("Qt MainWindow initialized runtime=%s compute=%s", self.runtime.device, self.runtime.compute_type)
 
     def _fit_to_available_screen(self) -> None:
@@ -829,6 +833,7 @@ class MainWindow(QMainWindow):
 
         main_surface = QFrame()
         main_surface.setObjectName("MainSurface")
+        main_surface.setMinimumWidth(560)
         main_layout = QVBoxLayout(main_surface)
         main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(12)
@@ -952,9 +957,13 @@ class MainWindow(QMainWindow):
         self.model_combo.addItems(all_models)
         recommended = recommend_model(self.runtime)
         initial_model = self.config.last_model if self.config.last_model in all_models else recommended
+        if self.config.default_model:
+            initial_model = self.config.default_model  # may be a custom Hugging Face repo ID
         idx = self.model_combo.findText(initial_model)
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
+        else:
+            self.model_combo.setEditText(initial_model)
         general_layout.addWidget(self.model_combo)
         self.model_hint_label = QLabel(f"Recommended: {recommended} ({self.runtime.device.upper()})")
         self.model_hint_label.setObjectName("hint")
@@ -1030,6 +1039,7 @@ class MainWindow(QMainWindow):
         self.hotwords_input.setToolTip(
             "Comma-separated names and jargon to bias recognition toward. Keep it short and relevant."
         )
+        self.hotwords_input.setText(self.config.default_hotwords or "")
         advanced_layout.addWidget(self.hotwords_input)
 
         self.batched_checkbox = QCheckBox("Faster GPU decoding (may drop short utterances)")
@@ -1037,6 +1047,7 @@ class MainWindow(QMainWindow):
             "Batched decoding is about 2.5x faster on GPU but can drop filler words and brief replies. "
             "Leave off for interviews and conversations; it has no effect on CPU."
         )
+        self.batched_checkbox.setChecked(bool(self.config.default_batched))
         advanced_layout.addWidget(self.batched_checkbox)
 
         divider = QFrame()
@@ -1133,17 +1144,22 @@ class MainWindow(QMainWindow):
         self.copy_btn = QPushButton("Copy")
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self.copy_transcript)
+        # Two rows keep the buttons readable when the transcript area is narrow:
+        # job controls on top, output actions below.
         actions.addWidget(self.transcribe_btn)
         actions.addWidget(self.stop_live_btn)
         actions.addWidget(self.pause_live_btn)
         actions.addWidget(self.cancel_btn)
         actions.addWidget(self.force_stop_btn)
-        actions.addWidget(self.save_btn)
-        actions.addWidget(self.rename_with_title_btn)
-        actions.addWidget(self.open_btn)
-        actions.addWidget(self.copy_btn)
         actions.addStretch(1)
+        output_actions = QHBoxLayout()
+        output_actions.addWidget(self.save_btn)
+        output_actions.addWidget(self.rename_with_title_btn)
+        output_actions.addWidget(self.open_btn)
+        output_actions.addWidget(self.copy_btn)
+        output_actions.addStretch(1)
         main_layout.addLayout(actions)
+        main_layout.addLayout(output_actions)
 
         self.job_timeline = JobTimeline()
         self.job_tracker = JobTracker()
@@ -1334,9 +1350,13 @@ class MainWindow(QMainWindow):
             dock.setFloating(False)
         host.addDockWidget(Qt.LeftDockWidgetArea, self.setup_dock)
         host.addDockWidget(Qt.TopDockWidgetArea, self.progress_dock)
-        host.addDockWidget(Qt.RightDockWidgetArea, self.hardware_dock)
+        # On narrow windows the Hardware panel joins the left tabs so the transcript keeps its width.
+        narrow = self.width() < NARROW_WINDOW_WIDTH
+        host.addDockWidget(Qt.LeftDockWidgetArea if narrow else Qt.RightDockWidgetArea, self.hardware_dock)
         host.addDockWidget(Qt.LeftDockWidgetArea, self.queue_dock)
         host.tabifyDockWidget(self.setup_dock, self.queue_dock)
+        if narrow:
+            host.tabifyDockWidget(self.queue_dock, self.hardware_dock)
         for dock in self.docks:
             dock.show()
         self.setup_dock.raise_()
@@ -1344,7 +1364,10 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_default_dock_sizes)
 
     def _apply_default_dock_sizes(self) -> None:
-        self.dock_host.resizeDocks([self.setup_dock, self.hardware_dock], [400, 340], Qt.Horizontal)
+        if self.hardware_dock.isVisible() and self.dock_host.dockWidgetArea(self.hardware_dock) == Qt.RightDockWidgetArea:
+            self.dock_host.resizeDocks([self.setup_dock, self.hardware_dock], [400, 340], Qt.Horizontal)
+        else:
+            self.dock_host.resizeDocks([self.setup_dock], [380], Qt.Horizontal)
         self.dock_host.resizeDocks([self.progress_dock], [160], Qt.Vertical)
 
     def _apply_tab_order(self) -> None:
@@ -1525,18 +1548,108 @@ class MainWindow(QMainWindow):
         defaults_layout.setContentsMargins(14, 14, 14, 14)
         defaults_layout.setHorizontalSpacing(8)
         defaults_layout.setVerticalSpacing(8)
-        defaults_layout.addWidget(QLabel("Transcription Defaults"), 0, 0, 1, 2)
-        defaults_layout.addWidget(QLabel("Default model"), 1, 0)
-        self.default_model_input = QLineEdit(self.config.last_model or "")
+        defaults_layout.addWidget(QLabel("Start-up defaults"), 0, 0, 1, 2)
+        defaults_layout.addWidget(QLabel("Model"), 1, 0)
+        self.default_model_input = QLineEdit(self.config.default_model or "")
+        self.default_model_input.setPlaceholderText("Leave empty to start with the last model you used")
+        self.default_model_input.editingFinished.connect(self._on_default_model_edited)
         defaults_layout.addWidget(self.default_model_input, 1, 1)
-        defaults_layout.addWidget(QLabel("Last open folder"), 2, 0)
+        defaults_layout.addWidget(QLabel("Start in"), 2, 0)
+        self.default_input_combo = QComboBox()
+        self.default_input_combo.addItem("File", "file")
+        self.default_input_combo.addItem("Live", "live")
+        self.default_input_combo.setCurrentIndex(1 if self.config.default_input_mode == "live" else 0)
+        self.default_input_combo.currentIndexChanged.connect(self._on_default_input_changed)
+        defaults_layout.addWidget(self.default_input_combo, 2, 1)
+        defaults_layout.addWidget(QLabel("Names / terms"), 3, 0)
+        self.default_hotwords_input = QLineEdit(self.config.default_hotwords or "")
+        self.default_hotwords_input.setPlaceholderText("e.g. Kubernetes, Dr. Okafor, PyScribe")
+        self.default_hotwords_input.editingFinished.connect(self._on_default_hotwords_edited)
+        defaults_layout.addWidget(self.default_hotwords_input, 3, 1)
+        self.default_batched_checkbox = QCheckBox("Faster GPU decoding")
+        self.default_batched_checkbox.setChecked(bool(self.config.default_batched))
+        self.default_batched_checkbox.toggled.connect(self._on_default_batched_toggled)
+        defaults_layout.addWidget(self.default_batched_checkbox, 4, 1)
+        defaults_layout.addWidget(QLabel("Open files from"), 5, 0)
         self.default_path_input = QLineEdit(self.last_open_dir or "")
-        defaults_layout.addWidget(self.default_path_input, 2, 1)
+        self.default_path_input.editingFinished.connect(self._on_default_path_edited)
+        defaults_layout.addWidget(self.default_path_input, 5, 1)
+        use_current_btn = QPushButton("Use current settings as defaults")
+        use_current_btn.clicked.connect(self._use_current_as_defaults)
+        defaults_layout.addWidget(use_current_btn, 6, 1)
+        remember_hint = QLabel(
+            "Run mode, speaker and visual options, and live capture choices are remembered automatically."
+        )
+        remember_hint.setObjectName("hint")
+        remember_hint.setWordWrap(True)
+        defaults_layout.addWidget(remember_hint, 7, 0, 1, 2)
 
         content_layout.addWidget(api_card)
         content_layout.addWidget(defaults_card)
         content_layout.addStretch(1)
         return page
+
+    @Slot()
+    def _on_default_model_edited(self) -> None:
+        self._save_config(default_model=self.default_model_input.text().strip())
+
+    @Slot(int)
+    def _on_default_input_changed(self, _index: int) -> None:
+        self._save_config(default_input_mode=str(self.default_input_combo.currentData()))
+
+    @Slot()
+    def _on_default_hotwords_edited(self) -> None:
+        self._save_config(default_hotwords=self.default_hotwords_input.text())
+
+    @Slot(bool)
+    def _on_default_batched_toggled(self, checked: bool) -> None:
+        self._save_config(default_batched=checked)
+
+    @Slot()
+    def _on_default_path_edited(self) -> None:
+        path = self.default_path_input.text().strip()
+        if path and os.path.isdir(path):
+            self.last_open_dir = path
+            self._save_config()
+        else:
+            self.default_path_input.setText(self.last_open_dir or "")
+
+    @Slot()
+    def _use_current_as_defaults(self) -> None:
+        """Copy the Transcription page's current model, start mode, names/terms and decoding choice."""
+        model = self._selected_model_name() or ""
+        mode = "live" if self._is_live_mode() else "file"
+        hotwords = self.hotwords_input.text()
+        batched = self.batched_checkbox.isChecked()
+        self._save_config(default_model=model, default_input_mode=mode, default_hotwords=hotwords, default_batched=batched)
+        self.default_model_input.setText(model)
+        self.default_input_combo.setCurrentIndex(1 if mode == "live" else 0)
+        self.default_hotwords_input.setText(hotwords.strip()[:500])
+        self.default_batched_checkbox.setChecked(batched)
+        self.status_label.setText("Saved the current settings as start-up defaults.")
+
+    def _apply_startup_defaults(self) -> None:
+        if self.config.sidebar_collapsed and not self._sidebar_collapsed:
+            self._toggle_sidebar_collapsed()
+        if self.config.default_input_mode == "live" and self.input_mode_combo.isEnabled():
+            self.input_mode_combo.setCurrentIndex(1)
+
+    def _restore_window_geometry(self) -> None:
+        raw = self.config.window_geometry
+        if not raw:
+            return
+        try:
+            self.restoreGeometry(QByteArray.fromBase64(raw.encode("ascii", errors="ignore")))
+        except Exception:
+            LOGGER.warning("Could not restore the saved window geometry.", exc_info=True)
+
+    def _save_window_geometry(self) -> None:
+        try:
+            geometry = bytes(self.saveGeometry().toBase64().data()).decode("ascii")
+        except Exception:
+            LOGGER.warning("Could not serialize the window geometry.", exc_info=True)
+            return
+        self._save_config(window_geometry=geometry)
 
     @Slot(int)
     def _on_nav_item_changed(self, index: int) -> None:
@@ -1551,6 +1664,8 @@ class MainWindow(QMainWindow):
     @Slot()
     def _toggle_sidebar_collapsed(self) -> None:
         self._sidebar_collapsed = not self._sidebar_collapsed
+        if getattr(self, "_ui_ready", False):
+            self._save_config(sidebar_collapsed=self._sidebar_collapsed)
         if self._sidebar_collapsed:
             self.sidebar_frame.setFixedWidth(52)
             self.sidebar_brand_label.setText("PS")
@@ -3516,6 +3631,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._save_dock_layout()
+        self._save_window_geometry()
         self._set_window_title_status(None)
         LOGGER.info("Qt close accepted")
         self.stop_hw_monitor()
@@ -4095,6 +4211,12 @@ class MainWindow(QMainWindow):
         custom_themes: list[dict] | object = _UNSET,
         dock_locked: bool | object = _UNSET,
         setup_advanced_expanded: bool | object = _UNSET,
+        default_model: str | None | object = _UNSET,
+        default_input_mode: str | object = _UNSET,
+        default_hotwords: str | object = _UNSET,
+        default_batched: bool | object = _UNSET,
+        sidebar_collapsed: bool | object = _UNSET,
+        window_geometry: str | None | object = _UNSET,
     ) -> None:
         try:
             if last_model is not _UNSET:
@@ -4137,6 +4259,18 @@ class MainWindow(QMainWindow):
                 self.config.dock_locked = bool(dock_locked)
             if setup_advanced_expanded is not _UNSET:
                 self.config.setup_advanced_expanded = bool(setup_advanced_expanded)
+            if default_model is not _UNSET:
+                self.config.default_model = str(default_model).strip() or None if default_model else None
+            if default_input_mode is not _UNSET:
+                self.config.default_input_mode = "live" if default_input_mode == "live" else "file"
+            if default_hotwords is not _UNSET:
+                self.config.default_hotwords = str(default_hotwords).strip()[:500]
+            if default_batched is not _UNSET:
+                self.config.default_batched = bool(default_batched)
+            if sidebar_collapsed is not _UNSET:
+                self.config.sidebar_collapsed = bool(sidebar_collapsed)
+            if window_geometry is not _UNSET:
+                self.config.window_geometry = window_geometry
             self.config.confirmed_visual_backends = sorted(self._confirmed_visual_backend_downloads)
             self.config.last_open_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
             self.config.last_save_dir = self.last_save_dir if self.last_save_dir and os.path.isdir(self.last_save_dir) else self.config.last_save_dir

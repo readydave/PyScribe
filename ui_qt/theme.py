@@ -8,7 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
-from services.ui_tokens import FONT_DIR, FONT_FAMILY, PALETTES, STAGE_COLORS, Palette
+from services.ui_themes import DEFAULT_THEME_ID, Palette, ResolvedTheme, resolve
+from services.ui_tokens import FONT_DIR, FONT_FAMILY, PALETTES
 
 LOGGER = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ FONT_FALLBACKS = '"Segoe UI", "Roboto", "Helvetica", sans-serif'
 THEME_MODES = ("system", "light", "dark")
 
 _active_mode = "light"
+_resolved: ResolvedTheme | None = None
 
 # Progress/stage states understood by the `state` dynamic property in the QSS.
 STAGE_STATES = ("pending", "active", "done", "failed", "disabled")
@@ -23,13 +25,36 @@ STAGE_STATES = ("pending", "active", "done", "failed", "disabled")
 
 def active_palette() -> Palette:
     """Palette of the theme most recently applied (used by custom-painted widgets)."""
+    if _resolved is not None:
+        return _resolved.palette
     return PALETTES[_active_mode]
+
+
+def active_mode() -> str:
+    """The effective mode (``light`` or ``dark``) most recently applied."""
+    return _active_mode
+
+
+def active_theme() -> ResolvedTheme | None:
+    """The resolved theme most recently applied, or None before the first ``apply_theme``."""
+    return _resolved
 
 
 def stage_color(stage: str | None) -> str:
     """Trace colour for a job stage; the neutral bar colour when no stage is running."""
-    light, dark = STAGE_COLORS.get(stage or "", (PALETTES["light"].bar_active, PALETTES["dark"].bar_active))
-    return dark if _active_mode == "dark" else light
+    palette = active_palette()
+    if _resolved is None:
+        return palette.bar_active
+    return _resolved.stage_colors.get(stage or "", palette.bar_active)
+
+
+def speaker_color(label: str) -> str:
+    """Colour for a speaker label such as ``S1`` in the active theme; unknown speakers use muted text."""
+    palette = active_palette()
+    digits = "".join(ch for ch in str(label) if ch.isdigit())
+    if not digits or _resolved is None or not _resolved.speaker_colors:
+        return palette.muted
+    return _resolved.speaker_colors[(int(digits) - 1) % len(_resolved.speaker_colors)]
 
 
 def sanitize_mode(value: object) -> str:
@@ -83,23 +108,34 @@ def _sync_color_scheme(app: QApplication, mode: str) -> None:
     hints.setColorScheme(schemes.get(mode, Qt.ColorScheme.Unknown))
 
 
-def apply_theme(app: QApplication, mode: str) -> str:
-    """Apply the Fusion style, bundled font, and QSS. Returns the effective mode."""
-    global _active_mode
+def apply_theme(
+    app: QApplication,
+    mode: str,
+    theme_id: str = DEFAULT_THEME_ID,
+    custom_themes: list[dict] | None = None,
+) -> str:
+    """Apply the Fusion style, bundled font, and the QSS for a theme. Returns the effective mode."""
+    global _active_mode, _resolved
     _sync_color_scheme(app, mode)
     effective = resolve_mode(mode)
     _active_mode = effective
+    _resolved = resolve(theme_id, custom_themes, effective)
     family = load_fonts()
     if app.style().objectName().lower() != "fusion":
         app.setStyle("Fusion")
-    app.setFont(QFont(family, 10))
-    app.setStyleSheet(build_qss(effective, family))
+    font = QFont(family, 10)
+    if app.font() != font:
+        app.setFont(font)
+    qss = build_qss(effective, family, _resolved.palette)
+    # Re-applying an identical stylesheet still re-polishes every widget, so skip no-ops.
+    if app.styleSheet() != qss:
+        app.setStyleSheet(qss)
     return effective
 
 
-def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
+def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = None) -> str:
     """Build the application stylesheet for ``mode`` (``light`` or ``dark``)."""
-    p = PALETTES["dark" if mode == "dark" else "light"]
+    p = palette or PALETTES["dark" if mode == "dark" else "light"]
     return f"""
         QWidget {{
             background: {p.page};
@@ -234,7 +270,7 @@ def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
         QPushButton[role="primary"] {{
             background: {p.rubric};
             border-color: {p.rubric};
-            color: #FFFFFF;
+            color: {p.rubric_text};
         }}
         QPushButton[role="primary"]:hover {{
             background: {p.rubric_hover};
@@ -277,7 +313,7 @@ def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
         QPushButton#exitButton:hover {{
             background: {p.rubric};
             border-color: {p.rubric};
-            color: #FFFFFF;
+            color: {p.rubric_text};
         }}
         QLineEdit, QComboBox, QPlainTextEdit, QTextEdit {{
             background: {p.input_bg};
@@ -312,6 +348,10 @@ def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
         }}
         QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{
             border: 1px solid {p.ink};
+        }}
+        #metricsLabel[state="recording"] {{
+            color: {p.failed_text};
+            font-weight: 700;
         }}
         #hint, #metricsLabel {{
             color: {p.muted};

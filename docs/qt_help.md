@@ -34,6 +34,16 @@
 - **Responsive cards**:
   - General/More options cards show in two columns when the Setup panel is wide and collapse to one column when it is narrow.
 
+## Colour Themes
+
+- **View > Theme** chooses System, Light, or Dark. **View > Colour theme** chooses the colours: Iron-gall, Verdigris, Ochre, Graphite, or one of your own. Every theme has a light and a dark version.
+- **View > Colour theme > Edit themes...** opens the editor:
+  - Pick a theme on the left; presets can't be changed, so editing one saves a copy.
+  - Click any swatch to change a colour. Changes preview immediately; **Cancel** undoes them, **Save** keeps them.
+  - Text colours that would be hard to read are adjusted automatically, and the editor tells you what moved. If a background makes text unreadable, it points that out.
+  - **Duplicate**, **Rename...**, **Delete**, and **Import...** / **Export...** (a small `.json` file) work on custom themes.
+- The Listener uses the same colour theme. It applies when the Listener starts, so restart it after changing the theme.
+
 ## Processing Options
 
 - **Transcribe audio**:

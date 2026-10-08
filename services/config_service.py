@@ -6,12 +6,16 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from services.ui_themes import DEFAULT_THEME_ID, PRESET_BY_ID, sanitize_custom_themes
+
 
 @dataclass
 class AppConfig:
     last_model: str | None = None
     run_mode: str = "full"
     theme_mode: str = "system"
+    theme_id: str = DEFAULT_THEME_ID
+    custom_themes: list[dict[str, object]] = field(default_factory=list)
     use_diarization: bool = False
     max_speakers: int | None = None
     diar_backend: str = "accurate"
@@ -54,6 +58,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         last_model=data.get("last_model"),
         run_mode=_as_run_mode(data.get("run_mode")),
         theme_mode=_as_theme_mode(data.get("theme_mode")),
+        theme_id=_as_theme_id(data.get("theme_id"), data.get("custom_themes")),
+        custom_themes=sanitize_custom_themes(data.get("custom_themes")),
         use_diarization=bool(data.get("use_diarization", False)),
         max_speakers=_as_optional_int(data.get("max_speakers")),
         diar_backend=str(data.get("diar_backend", "accurate")),
@@ -99,7 +105,18 @@ def save_config(config: AppConfig, path: Path = DEFAULT_CONFIG_PATH) -> None:
     if not payload.get("last_save_dir"):
         payload["last_save_dir"] = existing.get("last_save_dir")
     payload["llm_profiles"] = _sanitize_llm_profiles_for_storage(payload.get("llm_profiles"))
+    payload["custom_themes"] = sanitize_custom_themes(payload.get("custom_themes"))
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _as_theme_id(value: object, custom_themes: object) -> str:
+    """A known preset id or the id of a valid custom theme; anything else falls back to the default."""
+    theme_id = str(value or DEFAULT_THEME_ID)
+    if theme_id in PRESET_BY_ID:
+        return theme_id
+    if any(item.get("id") == theme_id for item in sanitize_custom_themes(custom_themes)):
+        return theme_id
+    return DEFAULT_THEME_ID
 
 
 def _as_optional_int(value: object) -> int | None:

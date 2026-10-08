@@ -97,6 +97,70 @@ class DockLayoutTests(unittest.TestCase):
         QApplication.processEvents()
         self.assertEqual(win.hw_panel.stage_label.text(), "Idle")
 
+    def test_colour_theme_menu_switches_theme_and_persists_choice(self) -> None:
+        from ui_qt import theme
+
+        win, saved = self._build_window()
+        self.addCleanup(theme.apply_theme, self._app, "system")
+        labels = [action.text() for action in win.colour_theme_group.actions()]
+        self.assertEqual(labels, ["Iron-gall", "Verdigris", "Ochre", "Graphite"])
+        before = theme.active_palette().page
+        ochre = next(a for a in win.colour_theme_group.actions() if a.text() == "Ochre")
+        ochre.trigger()
+        self.assertEqual(saved[-1].theme_id, "ochre")
+        self.assertEqual(theme.active_theme().id, "ochre")
+        self.assertNotEqual(theme.active_palette().page, before)
+        self.assertIn(theme.active_palette().page, self._app.styleSheet())
+
+    def test_theme_editor_save_persists_and_cancel_restores(self) -> None:
+        from unittest.mock import MagicMock
+
+        from PySide6.QtWidgets import QDialog
+
+        from ui_qt import theme
+
+        win, saved = self._build_window()
+        self.addCleanup(theme.apply_theme, self._app, "system")
+
+        class FakeDialog:
+            previewApplied = MagicMock()
+            selected_theme_id = "graphite"
+            custom_themes: list[dict] = []
+
+            def __init__(self, *args: object) -> None:
+                pass
+
+            def exec(self) -> int:
+                theme.apply_theme(self_app, "light", "graphite", [])  # unsaved preview
+                return self.result_code
+
+        self_app = self._app
+        FakeDialog.result_code = QDialog.Rejected
+        with patch("ui_qt.main_window.ThemeEditorDialog", FakeDialog):
+            win.open_theme_editor()
+        self.assertEqual(theme.active_theme().id, "iron-gall")  # preview undone
+        self.assertFalse(saved)
+
+        FakeDialog.result_code = QDialog.Accepted
+        with patch("ui_qt.main_window.ThemeEditorDialog", FakeDialog):
+            win.open_theme_editor()
+        self.assertEqual(saved[-1].theme_id, "graphite")
+        self.assertEqual(theme.active_theme().id, "graphite")
+
+    def test_recording_accent_follows_live_capture_state(self) -> None:
+        win, _ = self._build_window()
+        win._update_live_mode_ui()
+        self.assertEqual(win.live_timer_label.property("state"), "idle")
+        win._live_capture_active = True
+        self.addCleanup(setattr, win, "_live_capture_active", False)
+        win._update_live_mode_ui()
+        self.assertEqual(win.live_timer_label.property("state"), "recording")
+        self.assertEqual(win.stop_live_btn.property("role"), "primary")
+        win._live_paused = True
+        self.addCleanup(setattr, win, "_live_paused", False)
+        win._update_live_mode_ui()
+        self.assertEqual(win.live_timer_label.property("state"), "idle")
+
     def test_forced_theme_sets_native_color_scheme(self) -> None:
         from PySide6.QtCore import Qt
 

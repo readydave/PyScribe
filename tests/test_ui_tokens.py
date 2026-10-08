@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from services.ui_tokens import PALETTES
+from services.ui_tokens import PALETTES, SPEAKER_COLORS, speaker_color
 
 AA = 4.5
 
@@ -49,6 +49,18 @@ class PaletteContrastTests(unittest.TestCase):
                 fg_hex = fg if fg.startswith("#") else getattr(palette, fg)
                 ratio = contrast(fg_hex, getattr(palette, bg))
                 self.assertGreaterEqual(ratio, AA, f"{mode}: {fg} on {bg} is {ratio:.2f}")
+
+    def test_speaker_colours_meet_aa_on_text_backgrounds(self) -> None:
+        for index, (light, dark) in enumerate(SPEAKER_COLORS, start=1):
+            for mode, color in (("light", light), ("dark", dark)):
+                palette = PALETTES[mode]
+                for bg in (palette.input_bg, palette.card, palette.page if mode == "light" else palette.surface):
+                    self.assertGreaterEqual(contrast(color, bg), AA, f"{mode} S{index} on {bg}")
+
+    def test_speaker_color_cycles_and_handles_unknown(self) -> None:
+        self.assertEqual(speaker_color("S1", "light"), SPEAKER_COLORS[0][0])
+        self.assertEqual(speaker_color("S9", "dark"), SPEAKER_COLORS[0][1])
+        self.assertEqual(speaker_color("S?", "dark"), PALETTES["dark"].muted)
 
 
 if __name__ == "__main__":

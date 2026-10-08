@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import functools
 from collections.abc import Iterator
 import datetime
 import logging
@@ -22,7 +23,8 @@ from services.listener_security_service import (
 )
 import services as pyscribe_services
 from services.runtime_compat import ensure_platform_sys_version_compat
-from services.ui_tokens import FONT_DIR, FONT_FAMILY, FONT_FILES, PALETTES
+from services.ui_themes import DEFAULT_THEME_ID, Palette, resolve
+from services.ui_tokens import FONT_DIR, FONT_FAMILY, FONT_FILES
 from services.runtime_env_service import (
     configure_runtime_environment,
     reexec_if_loader_env_changed,
@@ -62,6 +64,7 @@ def _ensure_listener_runtime() -> None:
     _LISTENER_RUNTIME_READY = True
 
 
+@functools.lru_cache(maxsize=1)
 def _font_face_css() -> str:
     """@font-face rules with the bundled font inlined as data URIs.
 
@@ -83,8 +86,13 @@ def _font_face_css() -> str:
     return "\n".join(rules)
 
 
-def _token_css() -> str:
-    light, dark = PALETTES["light"], PALETTES["dark"]
+def _theme_palettes(theme_id: str | None = None, custom_themes: list[dict] | None = None) -> tuple[Palette, Palette]:
+    """Light and dark palettes for the chosen theme (Gradio switches between them in the browser)."""
+    chosen = theme_id or DEFAULT_THEME_ID
+    return resolve(chosen, custom_themes, "light").palette, resolve(chosen, custom_themes, "dark").palette
+
+
+def _token_css(light: Palette, dark: Palette) -> str:
     return f"""
 :root {{ --pyscribe-bar-active: {light.bar_active}; --pyscribe-bar-done: {light.done}; --pyscribe-rule: {light.rule}; --pyscribe-ink: {light.ink}; }}
 body.dark, .dark {{ --pyscribe-bar-active: {dark.bar_active}; --pyscribe-bar-done: {dark.done}; --pyscribe-rule: {dark.rule}; --pyscribe-ink: {dark.ink}; }}
@@ -108,9 +116,9 @@ def _progress_css() -> str:
     return active + rule("pyscribe-prog-green", "--pyscribe-bar-done")
 
 
-def build_theme() -> "gr.themes.Base":
-    """Gradio theme built from the shared PyScribe palette (light and dark)."""
-    light, dark = PALETTES["light"], PALETTES["dark"]
+def build_theme(theme_id: str | None = None, custom_themes: list[dict] | None = None) -> "gr.themes.Base":
+    """Gradio theme built from the chosen PyScribe colour theme (light and dark)."""
+    light, dark = _theme_palettes(theme_id, custom_themes)
     return gr.themes.Base(
         font=(gr.themes.Font(FONT_FAMILY), gr.themes.Font("ui-sans-serif"), gr.themes.Font("system-ui"), gr.themes.Font("sans-serif")),
         radius_size=gr.themes.sizes.radius_md,
@@ -136,8 +144,8 @@ def build_theme() -> "gr.themes.Base":
         button_primary_background_fill_dark=dark.rubric,
         button_primary_background_fill_hover=light.rubric_hover,
         button_primary_background_fill_hover_dark=dark.rubric_hover,
-        button_primary_text_color="#FFFFFF",
-        button_primary_text_color_dark="#FFFFFF",
+        button_primary_text_color=light.rubric_text,
+        button_primary_text_color_dark=dark.rubric_text,
         button_secondary_background_fill=light.accent,
         button_secondary_background_fill_dark=dark.accent,
         button_secondary_background_fill_hover=light.accent_hover,
@@ -153,7 +161,7 @@ def build_theme() -> "gr.themes.Base":
     )
 
 
-CUSTOM_CSS = _font_face_css() + _token_css() + _progress_css() + """
+_BASE_CSS = """
 html { font-size: calc(16px * var(--pyscribe-text-scale, 1)); }
 .gradio-container {
   --text-xxs: calc(9px * var(--pyscribe-text-scale, 1)) !important;
@@ -207,6 +215,15 @@ html { font-size: calc(16px * var(--pyscribe-text-scale, 1)); }
 #pyscribe-text-size button:disabled { opacity: 0.4; cursor: default; }
 #pyscribe-text-size [data-role="value"] { min-width: 44px; }
 """
+
+
+def build_css(theme_id: str | None = None, custom_themes: list[dict] | None = None) -> str:
+    """Listener stylesheet for the chosen colour theme."""
+    light, dark = _theme_palettes(theme_id, custom_themes)
+    return _font_face_css() + _token_css(light, dark) + _progress_css() + _BASE_CSS
+
+
+CUSTOM_CSS = build_css()
 
 CUSTOM_HEAD = """
 <script>
@@ -1266,9 +1283,9 @@ def launch_listener(
         share=share,
         show_error=True,
         auth=auth,
-        css=CUSTOM_CSS,
+        css=build_css(APP_CONFIG.theme_id, APP_CONFIG.custom_themes),
         head=CUSTOM_HEAD,
-        theme=build_theme(),
+        theme=build_theme(APP_CONFIG.theme_id, APP_CONFIG.custom_themes),
     )
     return chosen_port
 

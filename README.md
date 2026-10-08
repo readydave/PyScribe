@@ -20,16 +20,20 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Hardware-aware model recommendations
 - Qt desktop mode and Gradio listener mode
 - Qt unified dashboard layout with left navigation and stacked workspaces
+- Qt Transcription page built from movable panels (Setup, Progress, Hardware, Batch queue): drag, tab, float, resize, close, lock, or reset them from View > Panels; the layout is remembered
+- Light and dark themes that follow the system colour scheme, with a bundled font so Linux and Windows look the same
+- One job timeline showing each stage (Transcribe, Speakers, Visuals) with its state and elapsed time
+- Hardware panel with 60-second CPU, memory, GPU, and VRAM traces coloured by the running stage
 - Qt live transcription mode for microphone or loopback capture (Linux-first)
 - Qt batch transcription queue for sequential processing of multiple files or entire folders
 - Batch queue support for same-named files from different folders
 - Live pause/resume during Qt capture without breaking the current session folder
-- Responsive transcription cards (two-column on wide windows, single-column on narrow windows)
-- Hide/show controls for the left navigation panel and right status panel
+- Responsive setup cards (two columns when the Setup panel is wide, one when narrow)
+- Hide/show control for the left navigation panel
 - Optional speaker diarization with selectable backend
 - Optional visual analysis (OCR on sampled video frames)
 - Live status, progress, and transcript updates
-- Real-time terminal-style pipeline log in Qt transcription view
+- Pipeline log in Qt under the Progress panel's Details toggle
 - Qt controls for pause, cancel, and force stop
 - Save modes: combined output, transcript-only, OCR-only
 - Optional Hugging Face token support for gated/private model access
@@ -44,11 +48,13 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 ## Screenshots
 
-> **Note:** New screenshots are coming soon.
+> **Note:** The main window and Listener screenshots show the October 2026 redesign. The dialog and theme-menu screenshots below predate it.
 
 ### Qt Desktop Main Window
 
-![PyScribe Qt main window](assets/images/2026-02-27_08-59-56.png)
+![PyScribe Qt main window, light theme](assets/images/2026-10-08-qt-main-light.png)
+
+![PyScribe Qt main window, dark theme](assets/images/2026-10-08-qt-main-dark.png)
 
 ### Qt Tools: Hugging Face Token
 
@@ -64,7 +70,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 ### Listener (Gradio Web UI)
 
-![PyScribe Listener web UI](assets/images/2026-02-27-08_23_12.png)
+![PyScribe Listener web UI](assets/images/2026-10-08-listener-light.png)
 
 Use the **A− / A+** widget in the top-right corner to change the Listener text size (80%–200%); click the percentage to reset. The size is remembered per browser.
 

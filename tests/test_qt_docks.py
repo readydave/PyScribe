@@ -97,6 +97,22 @@ class DockLayoutTests(unittest.TestCase):
         QApplication.processEvents()
         self.assertEqual(win.hw_panel.stage_label.text(), "Idle")
 
+    def test_forced_theme_sets_native_color_scheme(self) -> None:
+        from PySide6.QtCore import Qt
+
+        from ui_qt import theme
+
+        hints = self._app.styleHints()
+        self.addCleanup(theme.apply_theme, self._app, "system")
+        self.assertEqual(theme.apply_theme(self._app, "dark"), "dark")
+        self.assertEqual(theme.apply_theme(self._app, "light"), "light")
+        # Headless platforms ignore colour-scheme overrides; real ones apply them asynchronously.
+        if not hasattr(hints, "setColorScheme") or self._app.platformName() in {"offscreen", "minimal"}:
+            return
+        theme.apply_theme(self._app, "dark")
+        QApplication.processEvents()
+        self.assertEqual(hints.colorScheme(), Qt.ColorScheme.Dark)
+
     def test_advanced_options_collapsed_by_default_and_remembered(self) -> None:
         win, saved = self._build_window()
         self.assertFalse(win.advanced_body.isVisibleTo(win.advanced_options_card))

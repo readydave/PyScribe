@@ -13,25 +13,26 @@
 
 - **Navigation sidebar**: switch between **Transcription**, **LLM**, and **Settings** screens.
 - **Sidebar toggle**: collapse/expand the left navigation area.
-- **Status panel toggle**: hide/show the right status rail on the transcription page.
+- **Panels**: the Transcription page is made of movable panels (Setup, Progress, Hardware, Batch queue). Drag a panel by its title bar to move, tab, or float it; drag the gaps between panels to resize; use the title-bar buttons to float or close. **View > Panels** re-opens closed panels, **Lock layout** stops accidental moves, and **Reset layout** restores the default. Your layout is saved when you close the app.
 - **Drop zone**: choose a local media file via drag/drop or **Browse Files**.
 - **Model**: supports built-in model names and custom Hugging Face repo IDs.
-- **Input**:
+- **File / Live switch** (top of the Setup panel):
   - `File`: normal file transcription flow.
   - `Live`: Linux-first microphone/loopback capture flow.
+- **More options** (Setup panel): speaker identification, names/terms, faster GPU decoding, and visual analysis. It starts collapsed and remembers whether you opened it.
 - **Recommended model label**: shows the hardware-based recommendation.
-- **Status + metrics**:
-  - Run status messages
-  - HF token status (`configured` / `not configured`)
-  - CPU/RAM and GPU/VRAM telemetry when available
-- **Progress + timing**:
-  - Transcription progress bar and elapsed time
-  - Diarization progress bar with staged determinate progress and elapsed time (when enabled)
-  - Visual analysis progress bar and elapsed time (when enabled)
-- **Live pipeline log**:
-  - Terminal-style read-only event feed for real-time stage updates.
+- **Status**:
+  - Run status messages appear at the top of the Progress panel.
+  - HF token status (`configured` / `not configured`) is in the status bar at the bottom of the window.
+- **Hardware panel**: 60-second traces for CPU, memory, GPU, and VRAM while a job runs (GPU rows appear only when a GPU is detected). Trace colour shows which stage was running. Narrow the panel to switch to compact bars.
+- **Job timeline** (Progress panel): one row per enabled stage with its progress bar and elapsed time.
+  - Transcribe
+  - Speakers (staged determinate progress, when enabled)
+  - Visuals (when enabled)
+  - Finished stages turn green; a stage that fails turns red.
+- **Details** (Progress panel): click to show the read-only event log for real-time stage updates.
 - **Responsive cards**:
-  - General/Advanced settings show in two columns on wide windows and collapse to one column on narrow windows.
+  - General/More options cards show in two columns when the Setup panel is wide and collapse to one column when it is narrow.
 
 ## Processing Options
 

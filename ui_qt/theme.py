@@ -71,9 +71,22 @@ def load_fonts() -> str:
     return FONT_FAMILY
 
 
+def _sync_color_scheme(app: QApplication, mode: str) -> None:
+    """Make native pieces (title bars, message boxes, file dialogs) follow a forced light/dark choice.
+
+    ``system`` hands control back to the OS. Needs Qt 6.8+; older Qt keeps the OS scheme.
+    """
+    hints = app.styleHints()
+    if not hasattr(hints, "setColorScheme"):
+        return
+    schemes = {"light": Qt.ColorScheme.Light, "dark": Qt.ColorScheme.Dark}
+    hints.setColorScheme(schemes.get(mode, Qt.ColorScheme.Unknown))
+
+
 def apply_theme(app: QApplication, mode: str) -> str:
     """Apply the Fusion style, bundled font, and QSS. Returns the effective mode."""
     global _active_mode
+    _sync_color_scheme(app, mode)
     effective = resolve_mode(mode)
     _active_mode = effective
     family = load_fonts()
@@ -235,6 +248,26 @@ def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
         QPushButton:focus, QToolButton:focus {{
             outline: none;
             border: 2px solid {p.ink};
+            padding: 9px 13px;
+        }}
+        QToolButton#detailsToggle:focus {{
+            border: 1px solid {p.ink};
+            border-radius: 4px;
+            padding: 1px 3px;
+        }}
+        QToolButton#sidebarToggleButton:focus, QToolButton#statusToggleButton:focus {{
+            padding: 1px;
+        }}
+        #dropBrowseButton:focus {{
+            border: 2px solid {p.ink};
+            padding: 1px 17px;
+        }}
+        QComboBox:focus {{
+            border: 1px solid {p.ink};
+        }}
+        QCheckBox:focus {{
+            border: 1px solid {p.ink};
+            border-radius: 4px;
         }}
         QPushButton#exitButton {{
             background: transparent;
@@ -370,6 +403,38 @@ def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
             color: {p.accent_text};
             border-color: {p.accent};
         }}
+        QScrollBar:vertical {{
+            background: transparent;
+            width: 12px;
+            margin: 0;
+        }}
+        QScrollBar:horizontal {{
+            background: transparent;
+            height: 12px;
+            margin: 0;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {p.rule};
+            border-radius: 5px;
+            min-height: 28px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:horizontal {{
+            background: {p.rule};
+            border-radius: 5px;
+            min-width: 28px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:hover {{
+            background: {p.muted};
+        }}
+        QScrollBar::add-line, QScrollBar::sub-line {{
+            width: 0;
+            height: 0;
+        }}
+        QScrollBar::add-page, QScrollBar::sub-page {{
+            background: transparent;
+        }}
         #StageName {{
             font-weight: 600;
         }}
@@ -378,7 +443,7 @@ def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
             font-weight: 500;
         }}
         #StageName[state="failed"] {{
-            color: {p.rubric};
+            color: {p.failed_text};
         }}
         #StageDetail {{
             color: {p.muted};

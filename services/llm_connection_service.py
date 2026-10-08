@@ -19,8 +19,16 @@ from urllib import request as urlrequest
 LOGGER = logging.getLogger(__name__)
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_SUPPORTED_PROVIDERS = {"ollama", "openai_compatible", "lm_studio"}
-_SUPPORTED_SCOPES = {"local", "lan"}
+_SUPPORTED_PROVIDERS = {"ollama", "openai_compatible", "lm_studio", "anthropic"}
+_SUPPORTED_SCOPES = {"local", "lan", "cloud"}
+ANTHROPIC_API_VERSION = "2023-06-01"
+CLOUD_PROVIDERS = {"anthropic"}
+# Context sizes (tokens) assumed when a profile doesn't set one.
+DEFAULT_CONTEXT_TOKENS = {"ollama": 16384, "lm_studio": 8192, "openai_compatible": 8192, "anthropic": 180000}
+CLOUD_DEFAULT_CONTEXT_TOKENS = 120000
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
+CLOUD_DEFAULT_MAX_OUTPUT_TOKENS = 8192
+MAX_TIMEOUT_SECONDS = 600.0
 _DEFAULT_ALLOWED_CIDRS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 _SCAN_MAX_HOSTS_DEFAULT = 256
 
@@ -60,6 +68,13 @@ class LLMConnectionProfile:
     allowed_cidrs: tuple[str, ...]
     enabled: bool
     allow_concurrent_with_local_transcription: bool
+    # 0 = automatic (see DEFAULT_CONTEXT_TOKENS / DEFAULT_MAX_OUTPUT_TOKENS).
+    context_tokens: int = 0
+    max_output_tokens: int = 0
+    # None = let the provider choose (frontier models often reject a custom temperature).
+    temperature: float | None = None
+    # Cloud profiles send transcripts off this network; the user must confirm that once.
+    cloud_acknowledged: bool = False
 
 
 @dataclass(frozen=True)
@@ -266,6 +281,8 @@ def run_connection_test(profile: LLMConnectionProfile) -> ConnectionTestResult:
 
     if profile.provider == "ollama":
         return _test_ollama(profile=profile, stages=stages)
+    if profile.provider == "anthropic":
+        return _test_anthropic(profile=profile, stages=stages)
     if profile.provider == "lm_studio":
         return _test_openai_compatible(profile=profile, stages=stages)
     return _test_openai_compatible(profile=profile, stages=stages)
@@ -332,6 +349,24 @@ def get_failure_suggestions(code: str) -> tuple[str, ...]:
             "Try a smaller model or reduce server load.",
             "Check server logs for model runtime errors.",
         ),
+        "policy_cloud_not_acknowledged": (
+            "Tick the box confirming that transcripts and images will be sent to this provider.",
+        ),
+        "policy_cloud_requires_https": ("Cloud profiles must use an https:// address.",),
+        "policy_cloud_not_remote": (
+            "Cloud scope is for hosted providers. Use local or LAN scope for endpoints on your own network.",
+        ),
+        "policy_cloud_requires_key": (
+            "Enter env:YOUR_KEY_NAME (recommended) or an API key for this session.",
+        ),
+        "rate_limited": (
+            "Wait a moment and try again, or check your plan's rate limits and credit balance.",
+        ),
+        "context_exceeded": (
+            "Lower 'Context tokens' in this profile so long transcripts are split into smaller parts.",
+            "Or choose a model with a larger context window.",
+        ),
+        "server_busy": ("The provider is overloaded. Try again shortly.",),
     }
     return mapping.get(code, ("Check endpoint settings and server logs.",))
 
@@ -450,8 +485,8 @@ def _test_ollama(profile: LLMConnectionProfile, stages: list[ConnectionStageResu
 
 
 def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[ConnectionStageResult]) -> ConnectionTestResult:
-    models_url = _join_url(profile.base_url, "/v1/models")
-    headers = _auth_headers(profile.api_key)
+    models_url = openai_endpoint_url(profile.base_url, "/models", profile.scope)
+    headers = provider_auth_headers(profile.provider, profile.api_key)
     try:
         models_payload = _http_json_get(
             models_url,
@@ -492,13 +527,18 @@ def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[Connecti
             detected_models=tuple(models),
         )
 
-    completions_url = _join_url(profile.base_url, "/v1/chat/completions")
+    completions_url = openai_endpoint_url(profile.base_url, "/chat/completions", profile.scope)
     payload = {
         "model": selected_model,
         "messages": [{"role": "user", "content": "Connection test. Reply with: OK"}],
         "temperature": 0,
         "max_tokens": 8,
     }
+    if profile.scope == "cloud":
+        # Hosted frontier models may reject a custom temperature or the legacy max_tokens name.
+        payload.pop("temperature")
+        payload.pop("max_tokens")
+        payload[openai_max_tokens_field(profile.base_url)] = 16
     try:
         smoke_payload = _http_json_post(
             completions_url,
@@ -555,6 +595,106 @@ def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[Connecti
         selected_model,
     )
     return result
+
+
+def _test_anthropic(profile: LLMConnectionProfile, stages: list[ConnectionStageResult]) -> ConnectionTestResult:
+    headers = provider_auth_headers("anthropic", profile.api_key)
+    if not profile.api_key:
+        return _fail_result(
+            profile=profile,
+            stages=stages,
+            stage="credentials",
+            code="auth_failed",
+            detail="No API key is available. Use env:ANTHROPIC_API_KEY or enter a key for this session.",
+        )
+    try:
+        models_payload = _http_json_get(
+            anthropic_endpoint_url(profile.base_url, "/models?limit=100"),
+            timeout_seconds=profile.timeout_seconds,
+            headers=headers,
+            verify_tls=profile.verify_tls,
+        )
+    except _ConnectionException as exc:
+        return _fail_result(profile=profile, stages=stages, stage="reachability", code=exc.code, detail=str(exc))
+    stages.append(ConnectionStageResult(stage="reachability", status="pass", code=None, detail="Endpoint reachable."))
+    models = _extract_openai_models(models_payload)  # Anthropic also returns {"data": [{"id": ...}]}
+    stages.append(
+        ConnectionStageResult(
+            stage="model_discovery",
+            status="pass",
+            code=None,
+            detail=f"Detected {len(models)} model(s)." if models else "No model list returned; using the configured model.",
+        )
+    )
+    selected_model = profile.default_model or (models[0] if models else None)
+    if not selected_model:
+        return _fail_result(
+            profile=profile,
+            stages=stages,
+            stage="model_selection",
+            code="no_models_available",
+            detail="Choose a model name for this profile.",
+        )
+    if models and selected_model not in models:
+        return _fail_result(
+            profile=profile,
+            stages=stages,
+            stage="model_selection",
+            code="model_not_found",
+            detail=f"Configured model '{selected_model}' was not found on endpoint.",
+            detected_models=tuple(models),
+        )
+    try:
+        smoke = _http_json_post(
+            anthropic_endpoint_url(profile.base_url, "/messages"),
+            payload={
+                "model": selected_model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "Connection test. Reply with: OK"}],
+            },
+            timeout_seconds=profile.timeout_seconds,
+            headers=headers,
+            verify_tls=profile.verify_tls,
+        )
+    except _ConnectionException as exc:
+        return _fail_result(
+            profile=profile,
+            stages=stages,
+            stage="inference_smoke",
+            code=exc.code,
+            detail=str(exc),
+            selected_model=selected_model,
+            detected_models=tuple(models),
+        )
+    if not isinstance(smoke, dict) or "content" not in smoke:
+        return _fail_result(
+            profile=profile,
+            stages=stages,
+            stage="inference_smoke",
+            code="api_mismatch",
+            detail="Unexpected response shape for /v1/messages.",
+            selected_model=selected_model,
+            detected_models=tuple(models),
+        )
+    stages.append(
+        ConnectionStageResult(
+            stage="inference_smoke",
+            status="pass",
+            code=None,
+            detail=f"Smoke inference succeeded using model '{selected_model}'.",
+        )
+    )
+    return ConnectionTestResult(
+        status="pass",
+        provider=profile.provider,
+        base_url=profile.base_url,
+        selected_model=selected_model,
+        detected_models=tuple(models),
+        loaded_model=None,
+        failure_code=None,
+        failure_detail=None,
+        stages=tuple(stages),
+    )
 
 
 def _get_ollama_loaded_model(profile: LLMConnectionProfile) -> str | None:
@@ -635,7 +775,17 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
         LOGGER.warning("Skipping profile '%s' with empty base_url", name)
         return None
     base_url = _normalize_base_url_for_profile(provider, base_url)
-    timeout_seconds = _as_float(raw.get("timeout_seconds"), default=8.0, min_value=1.0, max_value=120.0)
+    is_cloud = scope == "cloud"
+    timeout_seconds = _as_float(
+        raw.get("timeout_seconds"),
+        default=120.0 if is_cloud else 8.0,
+        min_value=1.0,
+        max_value=MAX_TIMEOUT_SECONDS,
+    )
+    if "temperature" in raw:
+        temperature = _as_optional_temperature(raw.get("temperature"))
+    else:
+        temperature = None if is_cloud else 0.2  # local default keeps the previous behaviour
     return LLMConnectionProfile(
         name=name,
         provider=provider,
@@ -644,13 +794,17 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
         api_key=_resolve_profile_api_key(raw),
         default_model=_as_optional_str(raw.get("default_model")),
         timeout_seconds=timeout_seconds,
-        verify_tls=_as_bool(raw.get("verify_tls"), default=True),
+        verify_tls=True if is_cloud else _as_bool(raw.get("verify_tls"), default=True),
         allowed_cidrs=_as_cidr_tuple(raw.get("allowed_cidrs"), default=_DEFAULT_ALLOWED_CIDRS),
         enabled=_as_bool(raw.get("enabled"), default=True),
         allow_concurrent_with_local_transcription=_as_bool(
             raw.get("allow_concurrent_with_local_transcription"),
             default=(scope == "lan"),
         ),
+        context_tokens=_as_int(raw.get("context_tokens"), default=0, min_value=0, max_value=2_000_000),
+        max_output_tokens=_as_int(raw.get("max_output_tokens"), default=0, min_value=0, max_value=200_000),
+        temperature=temperature,
+        cloud_acknowledged=_as_bool(raw.get("cloud_acknowledged"), default=False),
     )
 
 
@@ -703,6 +857,17 @@ def _check_scope_policy(*, profile: LLMConnectionProfile, parsed_url: urlparse.P
         ip_obj = ipaddress.ip_address(host)
     except ValueError:
         ip_obj = None
+
+    if profile.scope == "cloud":
+        if parsed_url.scheme.lower() != "https":
+            return "policy_cloud_requires_https"
+        if host in _LOCAL_HOSTS or (ip_obj is not None and (ip_obj.is_loopback or ip_obj.is_private)):
+            return "policy_cloud_not_remote"
+        if not profile.cloud_acknowledged:
+            return "policy_cloud_not_acknowledged"
+        if not profile.api_key:
+            return "policy_cloud_requires_key"
+        return None
 
     if profile.scope == "local":
         if host in _LOCAL_HOSTS:
@@ -891,10 +1056,47 @@ def _normalize_base_url(provider: str, base_url: str) -> str:
     parsed = _parse_base_url(text)
     if parsed is None:
         return text
-    if provider in {"openai_compatible", "lm_studio"} and parsed.path.rstrip("/") == "/v1":
+    if provider in {"openai_compatible", "lm_studio", "anthropic"} and parsed.path.rstrip("/") == "/v1":
         rebuilt = urlparse.urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
         return rebuilt
     return text
+
+
+def openai_endpoint_url(base_url: str, suffix: str, scope: str = "local") -> str:
+    """URL for an OpenAI-style endpoint such as ``/chat/completions`` or ``/models``.
+
+    Local and LAN profiles always get ``/v1`` appended (the long-standing behaviour). Cloud profiles
+    that already carry a path, such as ``.../v1beta/openai`` or ``.../api/v1``, use it as given.
+    """
+    parsed = urlparse.urlparse(base_url)
+    has_prefix = bool(parsed.path.strip("/"))
+    prefix = "" if (scope == "cloud" and has_prefix) else "/v1"
+    return _join_url(base_url, f"{prefix}{suffix if suffix.startswith('/') else '/' + suffix}")
+
+
+def anthropic_endpoint_url(base_url: str, suffix: str) -> str:
+    """URL for an Anthropic API endpoint such as ``/messages`` (always under ``/v1``)."""
+    return _join_url(base_url, f"/v1{suffix if suffix.startswith('/') else '/' + suffix}")
+
+
+def openai_max_tokens_field(base_url: str) -> str:
+    """OpenAI's own API wants ``max_completion_tokens``; other OpenAI-style servers use ``max_tokens``."""
+    host = (urlparse.urlparse(base_url).hostname or "").lower()
+    return "max_completion_tokens" if host == "api.openai.com" else "max_tokens"
+
+
+def effective_context_tokens(profile: LLMConnectionProfile) -> int:
+    if profile.context_tokens > 0:
+        return profile.context_tokens
+    if profile.scope == "cloud" and profile.provider != "anthropic":
+        return CLOUD_DEFAULT_CONTEXT_TOKENS
+    return DEFAULT_CONTEXT_TOKENS.get(profile.provider, 8192)
+
+
+def effective_max_output_tokens(profile: LLMConnectionProfile) -> int:
+    if profile.max_output_tokens > 0:
+        return profile.max_output_tokens
+    return CLOUD_DEFAULT_MAX_OUTPUT_TOKENS if profile.scope == "cloud" else DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def _join_url(base_url: str, path: str) -> str:
@@ -939,9 +1141,9 @@ def _http_json_request(*, request: urlrequest.Request, timeout_seconds: float, v
             context = ssl._create_unverified_context()
     try:
         if context is None:
-            response_handle = urlrequest.urlopen(request, timeout=timeout_seconds)
+            response_handle = open_url(request, timeout=timeout_seconds)
         else:
-            response_handle = urlrequest.urlopen(request, timeout=timeout_seconds, context=context)
+            response_handle = open_url(request, timeout=timeout_seconds, context=context)
         with response_handle as response:
             body = response.read().decode("utf-8", errors="replace")
     except urlerror.HTTPError as exc:
@@ -970,6 +1172,27 @@ def _http_json_request(*, request: urlrequest.Request, timeout_seconds: float, v
         return json.loads(body)
     except json.JSONDecodeError as exc:
         raise _ConnectionException("api_mismatch", "Endpoint did not return valid JSON.") from exc
+
+
+class _RefuseRedirects(urlrequest.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def _carries_credentials(request: urlrequest.Request) -> bool:
+    return any(name.lower() in {"authorization", "x-api-key"} for name, _value in request.header_items())
+
+
+def open_url(request: urlrequest.Request, *, timeout: float, context: ssl.SSLContext | None = None):
+    """Open a request, refusing redirects when it carries credentials so API keys can't be forwarded elsewhere."""
+    if not _carries_credentials(request):
+        if context is None:
+            return urlrequest.urlopen(request, timeout=timeout)
+        return urlrequest.urlopen(request, timeout=timeout, context=context)
+    handlers: list[Any] = [_RefuseRedirects()]
+    if context is not None:
+        handlers.append(urlrequest.HTTPSHandler(context=context))
+    return urlrequest.build_opener(*handlers).open(request, timeout=timeout)
 
 
 def _extract_ollama_models(payload: Any) -> list[str]:
@@ -1011,6 +1234,16 @@ def _auth_headers(api_key: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def provider_auth_headers(provider: str, api_key: str | None) -> dict[str, str]:
+    """Authentication headers for a provider (Anthropic uses x-api-key plus a version header)."""
+    if provider == "anthropic":
+        headers = {"anthropic-version": ANTHROPIC_API_VERSION}
+        if api_key:
+            headers["x-api-key"] = api_key
+        return headers
+    return _auth_headers(api_key)
+
+
 def _resolve_profile_api_key(raw: dict[str, object]) -> str | None:
     runtime_key = _as_optional_str(raw.get("api_key_runtime"))
     if runtime_key:
@@ -1035,6 +1268,12 @@ def _failure_detail(code: str) -> str:
         "policy_blocked_non_local": "Local scope allows only localhost/loopback endpoints.",
         "policy_blocked_non_lan": "LAN scope allows only private network endpoints in allowed CIDRs.",
         "policy_loopback_with_lan": "LAN scope cannot use localhost/loopback endpoints. Use local scope instead.",
+        "policy_cloud_requires_https": "Cloud profiles must use an https:// address.",
+        "policy_cloud_not_remote": "Cloud scope is for hosted providers, not localhost or private-network addresses.",
+        "policy_cloud_not_acknowledged": (
+            "Confirm that transcripts and images will be sent to this provider before using a cloud profile."
+        ),
+        "policy_cloud_requires_key": "Cloud profiles need an API key (env:NAME or a session key).",
         "policy_tls_verification_required": (
             "HTTPS certificate verification can only be bypassed for localhost/loopback development endpoints."
         ),
@@ -1072,6 +1311,23 @@ def _as_float(value: object, *, default: float, min_value: float, max_value: flo
     except (TypeError, ValueError):
         return default
     return max(min_value, min(max_value, parsed))
+
+
+def _as_int(value: object, *, default: int, min_value: int, max_value: int) -> int:
+    try:
+        parsed = int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(max_value, parsed))
+
+
+def _as_optional_temperature(value: object) -> float | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        return max(0.0, min(2.0, float(value)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _as_cidr_tuple(value: object, *, default: tuple[str, ...]) -> tuple[str, ...]:

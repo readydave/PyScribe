@@ -24,6 +24,44 @@ from PySide6.QtWidgets import (
 from services import AppConfig, discover_local_networks, load_llm_profiles, scan_lan_for_llm_instances, run_connection_test
 
 
+# Hosted providers offered as one-click starting points. Model names are left empty (except Anthropic)
+# because each provider's own model list changes; "Test Connection" lists what the key can use.
+CLOUD_PRESETS: tuple[dict[str, object], ...] = (
+    {
+        "label": "Anthropic (Claude)",
+        "name": "anthropic",
+        "provider": "anthropic",
+        "base_url": "https://api.anthropic.com",
+        "api_key": "env:ANTHROPIC_API_KEY",
+        "default_model": "claude-sonnet-5-5",
+    },
+    {
+        "label": "OpenAI",
+        "name": "openai",
+        "provider": "openai_compatible",
+        "base_url": "https://api.openai.com",
+        "api_key": "env:OPENAI_API_KEY",
+        "default_model": "",
+    },
+    {
+        "label": "Google Gemini",
+        "name": "gemini",
+        "provider": "openai_compatible",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "api_key": "env:GEMINI_API_KEY",
+        "default_model": "",
+    },
+    {
+        "label": "OpenRouter (many models)",
+        "name": "openrouter",
+        "provider": "openai_compatible",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": "env:OPENROUTER_API_KEY",
+        "default_model": "",
+    },
+)
+
+
 class LLMConnectionsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -66,14 +104,16 @@ class LLMConnectionsDialog(QDialog):
 
         self.name_input = QLineEdit()
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["ollama", "lm_studio", "openai_compatible"])
+        self.provider_combo.addItems(["ollama", "lm_studio", "openai_compatible", "anthropic"])
         self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
         self.scope_combo = QComboBox()
-        self.scope_combo.addItems(["local", "lan"])
+        self.scope_combo.addItems(["local", "lan", "cloud"])
+        self.scope_combo.currentTextChanged.connect(self._on_scope_changed)
         self.base_url_input = QLineEdit()
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.Password)
-        self.api_key_input.setPlaceholderText("env:MY_API_KEY (recommended)")
+        self.api_key_input.setPlaceholderText("env:MY_API_KEY (recommended), or a key kept for this session only")
+        self.api_key_input.textChanged.connect(self._on_api_key_text_changed)
         self.default_model_input = QLineEdit()
         self.timeout_input = QLineEdit()
         self.timeout_input.setPlaceholderText("8.0")
@@ -84,6 +124,23 @@ class LLMConnectionsDialog(QDialog):
             "Required for HTTPS LAN endpoints. Only disable certificate verification for "
             "localhost/loopback development endpoints."
         )
+        self.context_tokens_input = QLineEdit()
+        self.context_tokens_input.setPlaceholderText("Automatic")
+        self.context_tokens_input.setToolTip(
+            "How many tokens the model can read at once. Transcripts longer than this are split into parts "
+            "and merged automatically. For LM Studio, set this to the context length you loaded the model with."
+        )
+        self.max_output_input = QLineEdit()
+        self.max_output_input.setPlaceholderText("Automatic")
+        self.max_output_input.setToolTip("The longest reply to allow, in tokens.")
+        self.temperature_input = QLineEdit()
+        self.temperature_input.setPlaceholderText("Provider default")
+        self.temperature_input.setToolTip(
+            "0 = most literal, higher = more varied. Leave empty to use the provider's default "
+            "(some frontier models reject a custom value)."
+        )
+        self.cloud_ack_check = QCheckBox("I understand transcripts and images will be sent to this provider")
+        self.cloud_ack_check.setToolTip("Required for cloud profiles. Meeting transcripts may contain sensitive information.")
         self.enabled_check = QCheckBox("Profile enabled")
         self.concurrent_check = QCheckBox("Allow concurrent run with local transcription")
 
@@ -94,7 +151,11 @@ class LLMConnectionsDialog(QDialog):
         form.addRow("API Key", self.api_key_input)
         form.addRow("Default Model", self.default_model_input)
         form.addRow("Timeout (seconds)", self.timeout_input)
+        form.addRow("Context tokens", self.context_tokens_input)
+        form.addRow("Max output tokens", self.max_output_input)
+        form.addRow("Temperature", self.temperature_input)
         form.addRow("Allowed CIDRs", self.allowed_cidrs_input)
+        form.addRow("", self.cloud_ack_check)
         form.addRow("", self.verify_tls_check)
         form.addRow("", self.enabled_check)
         form.addRow("", self.concurrent_check)
@@ -113,7 +174,15 @@ class LLMConnectionsDialog(QDialog):
         self.delete_btn.clicked.connect(self._on_delete_profile)
         self.apply_btn.clicked.connect(self._on_apply_profile)
         self.test_btn.clicked.connect(self._on_test_connection)
+        self.preset_combo = QComboBox()
+        for preset in CLOUD_PRESETS:
+            self.preset_combo.addItem(str(preset["label"]), preset)
+        self.add_preset_btn = QPushButton("Add Cloud Profile")
+        self.add_preset_btn.setToolTip("Add a hosted provider such as Claude, OpenAI, Gemini, or OpenRouter.")
+        self.add_preset_btn.clicked.connect(self._on_add_cloud_preset)
         row_buttons.addWidget(self.add_btn)
+        row_buttons.addWidget(self.preset_combo)
+        row_buttons.addWidget(self.add_preset_btn)
         row_buttons.addWidget(self.rename_btn)
         row_buttons.addWidget(self.delete_btn)
         row_buttons.addWidget(self.apply_btn)
@@ -176,8 +245,12 @@ class LLMConnectionsDialog(QDialog):
             self.api_key_input,
             self.default_model_input,
             self.timeout_input,
+            self.context_tokens_input,
+            self.max_output_input,
+            self.temperature_input,
             self.allowed_cidrs_input,
             self.verify_tls_check,
+            self.cloud_ack_check,
             self.enabled_check,
             self.concurrent_check,
             self.rename_btn,
@@ -263,11 +336,69 @@ class LLMConnectionsDialog(QDialog):
         self._result_box.setPlainText(f"Applied scan result: {item.provider} at {item.base_url}")
 
     @Slot(str)
+    def _on_api_key_text_changed(self, text: str) -> None:
+        # An env:NAME reference is not a secret, so show it; anything else stays masked.
+        mode = QLineEdit.Normal if (text or "").strip().lower().startswith("env:") else QLineEdit.Password
+        if self.api_key_input.echoMode() != mode:
+            self.api_key_input.setEchoMode(mode)
+
+    @Slot(str)
+    def _on_scope_changed(self, value: str) -> None:
+        is_cloud = (value or "").strip().lower() == "cloud"
+        self.cloud_ack_check.setVisible(is_cloud)
+        self.allowed_cidrs_input.setEnabled(not is_cloud)
+        self.concurrent_check.setEnabled(not is_cloud)
+        if is_cloud:
+            self.verify_tls_check.setChecked(True)
+        self.verify_tls_check.setEnabled(not is_cloud)
+
+    @Slot()
+    def _on_add_cloud_preset(self) -> None:
+        preset = self.preset_combo.currentData()
+        if not isinstance(preset, dict):
+            return
+        name = str(preset["name"])
+        candidate, counter = name, 2
+        while self._is_profile_name_in_use(candidate):
+            candidate = f"{name}-{counter}"
+            counter += 1
+        self._profiles.append(
+            {
+                "name": candidate,
+                "provider": preset["provider"],
+                "scope": "cloud",
+                "base_url": preset["base_url"],
+                "api_key": preset["api_key"],
+                "api_key_runtime": "",
+                "default_model": preset["default_model"],
+                "timeout_seconds": 120.0,
+                "verify_tls": True,
+                "enabled": True,
+                "allow_concurrent_with_local_transcription": False,
+                "allowed_cidrs": [],
+                "cloud_acknowledged": False,
+                "temperature": None,
+            }
+        )
+        self._refresh_profile_list()
+        self.profile_list.setCurrentRow(len(self._profiles) - 1)
+        self._refresh_default_profile_combo()
+        self._result_box.setPlainText(
+            f"Added '{candidate}'. Set the {preset['api_key']} environment variable (or paste a key for this "
+            "session), tick the confirmation box, then press Test Connection to list the models your key can use."
+        )
+
+    @Slot(str)
     def _on_provider_changed(self, value: str) -> None:
         if self._suspend_field_events:
             return
         provider = (value or "").strip().lower()
         current_url = (self.base_url_input.text() or "").strip()
+        if provider == "anthropic":
+            if not current_url or "127.0.0.1" in current_url or "localhost" in current_url:
+                self.base_url_input.setText("https://api.anthropic.com")
+            self.scope_combo.setCurrentText("cloud")
+            return
         if provider == "ollama":
             if not current_url or current_url in {"http://127.0.0.1:1234", "http://localhost:1234"}:
                 self.base_url_input.setText("http://127.0.0.1:11434")
@@ -298,6 +429,10 @@ class LLMConnectionsDialog(QDialog):
             "enabled": True,
             "allow_concurrent_with_local_transcription": False,
             "allowed_cidrs": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+            "context_tokens": 0,
+            "max_output_tokens": 0,
+            "temperature": 0.2,
+            "cloud_acknowledged": False,
         }
         self._profiles.append(profile)
         self._refresh_profile_list()
@@ -389,6 +524,12 @@ class LLMConnectionsDialog(QDialog):
             self.verify_tls_check.setChecked(bool(profile.get("verify_tls", True)))
             self.enabled_check.setChecked(bool(profile.get("enabled", True)))
             self.concurrent_check.setChecked(bool(profile.get("allow_concurrent_with_local_transcription", False)))
+            self.context_tokens_input.setText(self._number_text(profile.get("context_tokens")))
+            self.max_output_input.setText(self._number_text(profile.get("max_output_tokens")))
+            temperature = profile.get("temperature", 0.2 if str(profile.get("scope", "local")) != "cloud" else None)
+            self.temperature_input.setText("" if temperature is None else str(temperature))
+            self.cloud_ack_check.setChecked(bool(profile.get("cloud_acknowledged", False)))
+            self._on_scope_changed(str(profile.get("scope", "local")))
         finally:
             self._suspend_field_events = False
 
@@ -408,8 +549,26 @@ class LLMConnectionsDialog(QDialog):
             for part in (self.allowed_cidrs_input.text() or "").split(",")
             if part.strip()
         ]
+        try:
+            context_tokens = self._parse_optional_int(self.context_tokens_input.text(), 1000, 2_000_000)
+            max_output_tokens = self._parse_optional_int(self.max_output_input.text(), 16, 200_000)
+            temperature = self._parse_optional_temperature(self.temperature_input.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid value", str(exc))
+            return
         scope_value = self.scope_combo.currentText().strip()
         base_url_value = (self.base_url_input.text() or "").strip()
+        if scope_value == "cloud":
+            if not base_url_value.lower().startswith("https://"):
+                QMessageBox.warning(self, "Cloud profile", "Cloud profiles must use an https:// address.")
+                return
+            if not self.cloud_ack_check.isChecked():
+                QMessageBox.warning(
+                    self,
+                    "Confirm cloud use",
+                    "Tick the confirmation box: transcripts (and any images you attach) are sent to this provider.",
+                )
+                return
         if scope_value == "lan" and ("127.0.0.1" in base_url_value or "localhost" in base_url_value):
             scope_value = "local"
             self.scope_combo.setCurrentText("local")
@@ -446,6 +605,10 @@ class LLMConnectionsDialog(QDialog):
             "enabled": self.enabled_check.isChecked(),
             "allow_concurrent_with_local_transcription": self.concurrent_check.isChecked(),
             "allowed_cidrs": cidr_values,
+            "context_tokens": context_tokens,
+            "max_output_tokens": max_output_tokens,
+            "temperature": temperature,
+            "cloud_acknowledged": bool(self.cloud_ack_check.isChecked() and scope_value == "cloud"),
         }
         self._profiles[row] = profile
         if self._default_profile and self._default_profile.strip().lower() == old_name.strip().lower():
@@ -564,6 +727,40 @@ class LLMConnectionsDialog(QDialog):
             if existing and existing == target:
                 return True
         return False
+
+    @staticmethod
+    def _number_text(value: object) -> str:
+        try:
+            number = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return ""
+        return str(number) if number > 0 else ""
+
+    @staticmethod
+    def _parse_optional_int(text: str, minimum: int, maximum: int) -> int:
+        cleaned = (text or "").strip().replace(",", "")
+        if not cleaned:
+            return 0
+        try:
+            value = int(cleaned)
+        except ValueError:
+            raise ValueError("Token limits must be whole numbers, or empty for automatic.") from None
+        if not minimum <= value <= maximum:
+            raise ValueError(f"Token limits must be between {minimum:,} and {maximum:,}.")
+        return value
+
+    @staticmethod
+    def _parse_optional_temperature(text: str) -> float | None:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return None
+        try:
+            value = float(cleaned)
+        except ValueError:
+            raise ValueError("Temperature must be a number between 0 and 2, or empty.") from None
+        if not 0.0 <= value <= 2.0:
+            raise ValueError("Temperature must be a number between 0 and 2, or empty.")
+        return value
 
     def _next_profile_name(self) -> str:
         idx = len(self._profiles) + 1

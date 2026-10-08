@@ -1512,35 +1512,19 @@ class MainWindow(QMainWindow):
         api_layout.setContentsMargins(14, 14, 14, 14)
         api_layout.setHorizontalSpacing(8)
         api_layout.setVerticalSpacing(8)
-        api_layout.addWidget(QLabel("API Keys"), 0, 0, 1, 4)
-
-        openai_label = QLabel("OpenAI Key")
-        self.openai_key_input = QLineEdit()
-        self.openai_key_input.setPlaceholderText("sk-...")
-        self.openai_key_input.setEchoMode(QLineEdit.Password)
-        openai_show_btn = QPushButton("Show")
-        openai_show_btn.clicked.connect(lambda: self._toggle_secret_field_visibility(self.openai_key_input, openai_show_btn))
-        openai_test_btn = QPushButton("Test")
-        openai_test_btn.clicked.connect(self.open_llm_connections_dialog)
-        api_layout.addWidget(openai_label, 1, 0)
-        api_layout.addWidget(self.openai_key_input, 1, 1)
-        api_layout.addWidget(openai_show_btn, 1, 2)
-        api_layout.addWidget(openai_test_btn, 1, 3)
-
-        anthropic_label = QLabel("Anthropic Key")
-        self.anthropic_key_input = QLineEdit()
-        self.anthropic_key_input.setPlaceholderText("sk-ant-...")
-        self.anthropic_key_input.setEchoMode(QLineEdit.Password)
-        anthropic_show_btn = QPushButton("Show")
-        anthropic_show_btn.clicked.connect(
-            lambda: self._toggle_secret_field_visibility(self.anthropic_key_input, anthropic_show_btn)
+        api_layout.addWidget(QLabel("AI connections"), 0, 0, 1, 2)
+        ai_hint = QLabel(
+            "Models for summaries and action items: local (Ollama, LM Studio), on your network, or hosted "
+            "(Claude, OpenAI, Gemini, OpenRouter). API keys are set per connection and are never saved in "
+            "plain text: use an environment variable name like env:ANTHROPIC_API_KEY, or paste a key for one session."
         )
-        anthropic_test_btn = QPushButton("Test")
-        anthropic_test_btn.clicked.connect(self.open_llm_connections_dialog)
-        api_layout.addWidget(anthropic_label, 2, 0)
-        api_layout.addWidget(self.anthropic_key_input, 2, 1)
-        api_layout.addWidget(anthropic_show_btn, 2, 2)
-        api_layout.addWidget(anthropic_test_btn, 2, 3)
+        ai_hint.setObjectName("hint")
+        ai_hint.setWordWrap(True)
+        api_layout.addWidget(ai_hint, 1, 0, 1, 2)
+        manage_ai_btn = QPushButton("Manage AI connections...")
+        manage_ai_btn.clicked.connect(self.open_llm_connections_dialog)
+        api_layout.addWidget(manage_ai_btn, 2, 0)
+        api_layout.setColumnStretch(1, 1)
 
         defaults_card = QFrame()
         defaults_card.setObjectName("Card")
@@ -1684,14 +1668,6 @@ class MainWindow(QMainWindow):
         self.sidebar_toggle_btn.setText("◀")
         self.sidebar_toggle_btn.setToolTip("Hide left panel")
         self._update_transcription_card_columns()
-
-    def _toggle_secret_field_visibility(self, field: QLineEdit, button: QPushButton) -> None:
-        if field.echoMode() == QLineEdit.Password:
-            field.setEchoMode(QLineEdit.Normal)
-            button.setText("Hide")
-            return
-        field.setEchoMode(QLineEdit.Password)
-        button.setText("Show")
 
     def _append_terminal_log(self, text: str) -> None:
         if not hasattr(self, "terminal_log"):

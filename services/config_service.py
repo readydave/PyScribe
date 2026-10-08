@@ -35,6 +35,7 @@ class AppConfig:
     llm_ocr_fallback_for_images_default: bool = True
     llm_payload_preview_required: bool = False
     llm_allow_remote_lan: bool = False
+    llm_allow_cloud_in_listener: bool = False
     live_source_mode: str = "microphone"
     live_input_device_id: str | None = None
     live_output_dir: str | None = None
@@ -88,6 +89,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         ),
         llm_payload_preview_required=_as_bool(data.get("llm_payload_preview_required"), default=False),
         llm_allow_remote_lan=_as_bool(data.get("llm_allow_remote_lan"), default=False),
+        llm_allow_cloud_in_listener=_as_bool(data.get("llm_allow_cloud_in_listener"), default=False),
         live_source_mode=_as_live_source_mode(data.get("live_source_mode")),
         live_input_device_id=_as_optional_str(data.get("live_input_device_id")),
         live_output_dir=_as_optional_str(data.get("live_output_dir")),

@@ -368,7 +368,12 @@ def _reload_listener_config() -> None:
 
 def _enabled_llm_profiles() -> list[pyscribe_services.LLMConnectionProfile]:
     _reload_listener_config()
-    return pyscribe_services.get_enabled_llm_profiles(APP_CONFIG.llm_profiles)
+    profiles = pyscribe_services.get_enabled_llm_profiles(APP_CONFIG.llm_profiles)
+    if APP_CONFIG.llm_allow_cloud_in_listener:
+        return profiles
+    # Anyone who can open the Listener could otherwise send transcripts to a hosted provider using this
+    # machine's API key, so cloud profiles stay out of the Listener unless explicitly allowed in the config.
+    return [profile for profile in profiles if profile.scope != "cloud"]
 
 
 def _find_enabled_llm_profile(profile_name: str) -> pyscribe_services.LLMConnectionProfile | None:

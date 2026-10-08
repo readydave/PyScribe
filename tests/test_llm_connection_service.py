@@ -83,7 +83,7 @@ class LLMConnectionServiceTests(unittest.TestCase):
                 return _MockHTTPResponse({"response": "OK", "done": True})
             raise AssertionError(f"Unexpected URL: {url}")
 
-        with patch("services.llm_connection_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+        with patch("services.llm_connection_service.open_url", side_effect=_mock_urlopen):
             result = run_connection_test(profile)
 
         self.assertEqual(result.status, "pass")
@@ -105,7 +105,7 @@ class LLMConnectionServiceTests(unittest.TestCase):
         def _raise_401(request, timeout=8):  # noqa: ANN001, ARG001
             raise HTTPError(request.full_url, 401, "Unauthorized", hdrs=None, fp=BytesIO(b"{}"))
 
-        with patch("services.llm_connection_service.urlrequest.urlopen", side_effect=_raise_401):
+        with patch("services.llm_connection_service.open_url", side_effect=_raise_401):
             result = run_connection_test(profile)
 
         self.assertEqual(result.status, "fail")
@@ -128,7 +128,7 @@ class LLMConnectionServiceTests(unittest.TestCase):
                 return _MockHTTPResponse({"data": []})
             raise AssertionError(f"Unexpected URL: {request.full_url}")
 
-        with patch("services.llm_connection_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+        with patch("services.llm_connection_service.open_url", side_effect=_mock_urlopen):
             result = run_connection_test(profile)
 
         self.assertEqual(result.status, "fail")

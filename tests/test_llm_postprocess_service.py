@@ -151,7 +151,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
             captured_prompt["value"] = str(payload.get("prompt", ""))
             return _MockHTTPResponse({"response": "Summary output", "done": True})
 
-        with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+        with patch("services.llm_postprocess_service.open_url", side_effect=_mock_urlopen):
             result = run_llm_postprocess(
                 _profile(),
                 _template(),
@@ -175,7 +175,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
             self.assertTrue(request.full_url.endswith("/v1/chat/completions"))
             return _MockHTTPResponse({"choices": [{"message": {"content": "Action items..."}}]})
 
-        with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+        with patch("services.llm_postprocess_service.open_url", side_effect=_mock_urlopen):
             result = run_llm_postprocess(
                 _profile(
                     provider="openai_compatible",
@@ -210,7 +210,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
                 ]
             )
 
-        with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+        with patch("services.llm_postprocess_service.open_url", side_effect=_mock_urlopen):
             result = run_llm_postprocess(
                 _profile(
                     provider="openai_compatible",
@@ -269,7 +269,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
                 ]
             )
 
-        with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+        with patch("services.llm_postprocess_service.open_url", side_effect=_mock_urlopen):
             result = run_llm_postprocess(
                 _profile(
                     provider="openai_compatible",
@@ -297,7 +297,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
         def _raise_401(request, timeout=8):  # noqa: ANN001, ARG001
             raise HTTPError(request.full_url, 401, "Unauthorized", hdrs=None, fp=BytesIO(b"{}"))
 
-        with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_raise_401):
+        with patch("services.llm_postprocess_service.open_url", side_effect=_raise_401):
             result = run_llm_postprocess(
                 _profile(),
                 _template(),
@@ -322,7 +322,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
             self.assertGreaterEqual(float(timeout), 30.0)
             return _MockHTTPResponse({"response": "Summary after retry", "done": True})
 
-        with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+        with patch("services.llm_postprocess_service.open_url", side_effect=_mock_urlopen):
             result = run_llm_postprocess(
                 _profile(),
                 _template(),
@@ -342,7 +342,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
         def _invalid_json(request, timeout=8):  # noqa: ANN001, ARG001
             return _RawHTTPResponse(b"not-json")
 
-        with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_invalid_json):
+        with patch("services.llm_postprocess_service.open_url", side_effect=_invalid_json):
             result = run_llm_postprocess(
                 _profile(),
                 _template(),
@@ -418,7 +418,7 @@ class LLMPostprocessServiceTests(unittest.TestCase):
                 self.assertGreaterEqual(len(image_parts), 1)
                 return _MockHTTPResponse({"choices": [{"message": {"content": "Vision summary"}}]})
 
-            with patch("services.llm_postprocess_service.urlrequest.urlopen", side_effect=_mock_urlopen):
+            with patch("services.llm_postprocess_service.open_url", side_effect=_mock_urlopen):
                 result = run_llm_postprocess(
                     _profile(
                         provider="openai_compatible",

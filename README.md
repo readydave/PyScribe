@@ -22,6 +22,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt unified dashboard layout with left navigation and stacked workspaces
 - Qt Transcription page built from movable panels (Setup, Progress, Hardware, Batch queue): drag, tab, float, resize, close, lock, or reset them from View > Panels; the layout is remembered
 - Light and dark themes that follow the system colour scheme, with a bundled font so Linux and Windows look the same
+- Start-up defaults you control from the Settings page (model, File/Live, names/terms, faster decoding, open-files folder); window size, sidebar, panel layout, theme, and last-used run options are remembered
 - Colour themes: four presets (Iron-gall, Verdigris, Ochre, Graphite) plus your own, with a palette editor, live preview, automatic contrast fixes, and import/export; the Listener uses the same choice
 - One job timeline showing each stage (Transcribe, Speakers, Visuals) with its state and elapsed time
 - Hardware panel with 60-second CPU, memory, GPU, and VRAM traces coloured by the running stage

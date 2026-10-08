@@ -90,11 +90,14 @@ from services import (
     transcribe_media_file,
 )
 from services.logging_service import configure_logging, get_log_path
+from services.ui_themes import all_themes
 from ui_qt import theme
 from ui_qt.benchmark_dialog import BenchmarkDialog
 from ui_qt.hw_panel import HardwarePanel
 from ui_qt.job_stages import Stage, JobTracker
 from ui_qt.job_timeline import JobTimeline, set_state
+from ui_qt.speaker_highlight import SpeakerHighlighter
+from ui_qt.theme_dialog import ThemeEditorDialog
 from ui_qt.llm_connection_dialog import LLMConnectionsDialog
 from ui_qt.llm_postprocess_dialog import LLMPostprocessDialog
 from utils import load_audio_waveform
@@ -1171,6 +1174,7 @@ class MainWindow(QMainWindow):
         transcript_layout.addWidget(QLabel("Transcript Output"))
         self.text_area = QPlainTextEdit()
         self.text_area.setPlaceholderText("Transcript appears here...")
+        self.speaker_highlighter = SpeakerHighlighter(self.text_area.document())
         self.text_area.setMinimumHeight(110)
         self.text_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         transcript_layout.addWidget(self.text_area, 1)
@@ -1667,6 +1671,11 @@ class MainWindow(QMainWindow):
             self.theme_actions[mode] = action
         self.theme_actions[self.theme_mode].setChecked(True)
 
+        self.colour_theme_menu = view_menu.addMenu("Colour theme")
+        self.colour_theme_group = QActionGroup(self)
+        self.colour_theme_group.setExclusive(True)
+        self._rebuild_colour_theme_menu()
+
         app_help_action = QAction("PyScribe Help", self)
         app_help_action.setShortcut(QKeySequence.HelpContents)
         app_help_action.triggered.connect(self.show_app_help)
@@ -1684,8 +1693,51 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(about_action)
 
+    def _rebuild_colour_theme_menu(self) -> None:
+        """List the preset and custom colour themes under View > Colour theme."""
+        self.colour_theme_menu.clear()
+        for action in list(self.colour_theme_group.actions()):
+            self.colour_theme_group.removeAction(action)
+        for item in all_themes(self.config.custom_themes):
+            action = QAction(item.name, self)
+            action.setCheckable(True)
+            action.setChecked(item.id == self.config.theme_id)
+            action.triggered.connect(lambda checked=False, tid=item.id: self._set_theme_id(tid))
+            self.colour_theme_group.addAction(action)
+            self.colour_theme_menu.addAction(action)
+        self.colour_theme_menu.addSeparator()
+        edit_action = QAction("Edit themes...", self)
+        edit_action.triggered.connect(self.open_theme_editor)
+        self.colour_theme_menu.addAction(edit_action)
+
+    @Slot()
+    def open_theme_editor(self) -> None:
+        dialog = ThemeEditorDialog(self, self.config.custom_themes, self.config.theme_id, self.theme_mode)
+        dialog.previewApplied.connect(self._after_theme_applied)
+        if dialog.exec() == QDialog.Accepted:
+            self._save_config(theme_id=dialog.selected_theme_id, custom_themes=dialog.custom_themes)
+        # Saved or cancelled, re-apply what the config now says (this undoes any unsaved preview).
+        self._rebuild_colour_theme_menu()
+        self._apply_theme()
+
+    def _after_theme_applied(self) -> None:
+        if hasattr(self, "speaker_highlighter"):
+            self.speaker_highlighter.rehighlight()
+        if hasattr(self, "hw_panel"):
+            self.hw_panel.update()
+
+    def _set_theme_id(self, theme_id: str) -> None:
+        self._save_config(theme_id=theme_id)
+        self._apply_theme()
+
     def _apply_theme(self) -> None:
-        theme.apply_theme(QApplication.instance(), self.theme_mode)
+        theme.apply_theme(
+            QApplication.instance(),
+            self.theme_mode,
+            self.config.theme_id,
+            self.config.custom_themes,
+        )
+        self._after_theme_applied()
 
     @staticmethod
     def _sanitize_theme_mode(value: str) -> str:
@@ -2138,6 +2190,11 @@ class MainWindow(QMainWindow):
         self.stop_live_btn.setVisible(live_mode)
         self.pause_live_btn.setVisible(live_mode)
         self.transcribe_btn.setText("Start Live" if live_mode else "Process File")
+        recording = bool(self._live_capture_active and not self._live_paused)
+        set_state(self.live_timer_label, "recording" if recording else "idle")
+        self.stop_live_btn.setProperty("role", "primary" if self._live_capture_active else "")
+        self.stop_live_btn.style().unpolish(self.stop_live_btn)
+        self.stop_live_btn.style().polish(self.stop_live_btn)
         self.pause_live_btn.setText("Resume" if self._live_paused else "Pause")
         
         # Rename button is only for live mode when a session just ended
@@ -4034,6 +4091,8 @@ class MainWindow(QMainWindow):
         live_output_dir: str | object = _UNSET,
         live_keep_audio_on_success: bool | object = _UNSET,
         dock_layout: str | None | object = _UNSET,
+        theme_id: str | object = _UNSET,
+        custom_themes: list[dict] | object = _UNSET,
         dock_locked: bool | object = _UNSET,
         setup_advanced_expanded: bool | object = _UNSET,
     ) -> None:
@@ -4068,6 +4127,10 @@ class MainWindow(QMainWindow):
                 self.config.live_output_dir = str(live_output_dir)
             if live_keep_audio_on_success is not _UNSET:
                 self.config.live_keep_audio_on_success = bool(live_keep_audio_on_success)
+            if theme_id is not _UNSET:
+                self.config.theme_id = str(theme_id)
+            if custom_themes is not _UNSET:
+                self.config.custom_themes = list(custom_themes)  # type: ignore[arg-type]
             if dock_layout is not _UNSET:
                 self.config.dock_layout = dock_layout
             if dock_locked is not _UNSET:

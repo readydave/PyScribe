@@ -9,7 +9,13 @@ import pytest
 pytest.importorskip("gradio")
 
 import app  # noqa: E402
+from services.ui_themes import DEFAULT_SPEAKERS, resolve  # noqa: E402
 from services.ui_tokens import FONT_FAMILY, PALETTES  # noqa: E402
+
+LIGHT = dict(page="#ABCDEF", card="#FFFFFF", ink="#26304A", muted="#566079", rule="#D3D9E3", accent="#26304A",
+             primary="#C2412D", done="#286B5B", stage_transcribe="#3D5A99", stage_speakers="#7A5BA8",
+             stage_visuals="#A8741F")
+DARK = dict(LIGHT, page="#141821", card="#1D2230", ink="#E3E7F0", muted="#98A2B8", rule="#2E3546")
 
 
 class ListenerThemeTests(unittest.TestCase):
@@ -33,6 +39,28 @@ class ListenerThemeTests(unittest.TestCase):
         self.assertIn("var(--pyscribe-bar-done)", css)
         for legacy in ("#dc2626", "#f97316", "#facc15", "#2563eb", "#16a34a"):
             self.assertNotIn(legacy, css)
+
+    def test_chosen_preset_reaches_theme_and_css(self) -> None:
+        light, dark = resolve("ochre", None, "light").palette, resolve("ochre", None, "dark").palette
+        theme = app.build_theme("ochre")
+        self.assertEqual(theme.body_background_fill, light.page)
+        self.assertEqual(theme.body_background_fill_dark, dark.page)
+        self.assertEqual(theme.button_primary_text_color, light.rubric_text)
+        css = app.build_css("ochre")
+        self.assertIn(f"--pyscribe-bar-done: {light.done}", css)
+        self.assertIn(f"--pyscribe-bar-active: {dark.bar_active}", css)
+
+    def test_custom_theme_is_used_and_unsafe_ones_are_ignored(self) -> None:
+        custom = {"name": "Mine", "light": dict(LIGHT), "dark": dict(DARK),
+                  "speakers": [list(p) for p in DEFAULT_SPEAKERS]}
+        self.assertEqual(app.build_theme("mine", [custom]).body_background_fill, LIGHT["page"])
+        evil = {**custom, "light": {**LIGHT, "page": "#FFF; } body { display:none"}}
+        css = app.build_css("mine", [evil])
+        self.assertNotIn("display:none", css)
+        self.assertEqual(app.build_theme("mine", [evil]).body_background_fill, resolve(None, None, "light").palette.page)
+
+    def test_default_css_constant_matches_default_theme(self) -> None:
+        self.assertEqual(app.CUSTOM_CSS, app.build_css())
 
 
 if __name__ == "__main__":

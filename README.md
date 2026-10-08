@@ -22,6 +22,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt unified dashboard layout with left navigation and stacked workspaces
 - Qt Transcription page built from movable panels (Setup, Progress, Hardware, Batch queue): drag, tab, float, resize, close, lock, or reset them from View > Panels; the layout is remembered
 - Light and dark themes that follow the system colour scheme, with a bundled font so Linux and Windows look the same
+- Colour themes: four presets (Iron-gall, Verdigris, Ochre, Graphite) plus your own, with a palette editor, live preview, automatic contrast fixes, and import/export; the Listener uses the same choice
 - One job timeline showing each stage (Transcribe, Speakers, Visuals) with its state and elapsed time
 - Hardware panel with 60-second CPU, memory, GPU, and VRAM traces coloured by the running stage
 - Qt live transcription mode for microphone or loopback capture (Linux-first)
@@ -55,6 +56,14 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 ![PyScribe Qt main window, light theme](assets/images/2026-10-08-qt-main-light.png)
 
 ![PyScribe Qt main window, dark theme](assets/images/2026-10-08-qt-main-dark.png)
+
+### Qt Colour Themes
+
+Pick a theme under **View > Colour theme**; **Edit themes...** opens the editor.
+
+![PyScribe Qt, Ochre theme (light)](assets/images/2026-10-08-qt-theme-ochre-light.png)
+
+![PyScribe Qt, Graphite theme (dark)](assets/images/2026-10-08-qt-theme-graphite-dark.png)
 
 ### Qt Tools: Hugging Face Token
 

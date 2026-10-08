@@ -88,7 +88,10 @@ from services import (
     transcribe_media_file,
 )
 from services.logging_service import configure_logging, get_log_path
+from ui_qt import theme
 from ui_qt.benchmark_dialog import BenchmarkDialog
+from ui_qt.job_stages import Stage, JobTracker
+from ui_qt.job_timeline import JobTimeline, set_state
 from ui_qt.llm_connection_dialog import LLMConnectionsDialog
 from ui_qt.llm_postprocess_dialog import LLMPostprocessDialog
 from utils import load_audio_waveform
@@ -726,9 +729,7 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._fit_to_available_screen()
         self._apply_theme()
-        self._set_bar_color(self.progress_bar, "#dc2626")
-        self._set_bar_color(self.diar_progress_bar, "#dc2626")
-        self._set_bar_color(self.visual_progress_bar, "#dc2626")
+        QApplication.styleHints().colorSchemeChanged.connect(self._on_system_scheme_changed)
         self.hw_metrics.connect(self.hw_metrics_label.setText)
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
         self._update_visual_ui_state(self.visual_checkbox.isChecked())
@@ -1060,6 +1061,7 @@ class MainWindow(QMainWindow):
 
         actions = QHBoxLayout()
         self.transcribe_btn = QPushButton("Process File")
+        self.transcribe_btn.setProperty("role", "primary")
         self.transcribe_btn.clicked.connect(self.start_transcription)
         self.stop_live_btn = QPushButton("Stop")
         self.stop_live_btn.setEnabled(False)
@@ -1113,36 +1115,19 @@ class MainWindow(QMainWindow):
         actions.addStretch(1)
         main_layout.addLayout(actions)
 
-        progress_card = QFrame()
-        progress_card.setObjectName("Card")
-        progress_layout = QVBoxLayout(progress_card)
-        progress_layout.setContentsMargins(12, 12, 12, 12)
-        progress_layout.setSpacing(8)
-        progress_layout.addWidget(QLabel("Transcription Progress"))
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setMinimumHeight(26)
-        self.progress_bar.setFormat("Transcription %p%")
-        progress_layout.addWidget(self.progress_bar)
-        self.diar_progress_bar = QProgressBar()
-        self.diar_progress_bar.setRange(0, 100)
-        self.diar_progress_bar.setValue(0)
-        self.diar_progress_bar.setFormat("Diarization %p%")
-        progress_layout.addWidget(self.diar_progress_bar)
-        self.visual_progress_bar = QProgressBar()
-        self.visual_progress_bar.setRange(0, 100)
-        self.visual_progress_bar.setValue(0)
-        self.visual_progress_bar.setFormat("Visual analysis %p%")
-        progress_layout.addWidget(self.visual_progress_bar)
-
-        self.terminal_log = QPlainTextEdit()
-        self.terminal_log.setObjectName("TerminalLog")
-        self.terminal_log.setReadOnly(True)
-        self.terminal_log.setPlaceholderText("Live pipeline events...")
-        self.terminal_log.setMinimumHeight(96)
-        progress_layout.addWidget(self.terminal_log)
-        main_layout.addWidget(progress_card)
+        self.job_timeline = JobTimeline()
+        self.job_tracker = JobTracker()
+        self.progress_bar = self.job_timeline.bar(Stage.TRANSCRIBE)
+        self.progress_bar.setFormat("%p%")
+        self.diar_progress_bar = self.job_timeline.bar(Stage.SPEAKERS)
+        self.diar_progress_bar.setFormat("%p%")
+        self.visual_progress_bar = self.job_timeline.bar(Stage.VISUALS)
+        self.visual_progress_bar.setFormat("%p%")
+        self.transcription_time_label = self.job_timeline.detail_label(Stage.TRANSCRIBE)
+        self.diar_time_label = self.job_timeline.detail_label(Stage.SPEAKERS)
+        self.visual_time_label = self.job_timeline.detail_label(Stage.VISUALS)
+        self.terminal_log = self.job_timeline.log
+        main_layout.addWidget(self.job_timeline)
 
         transcript_card = QFrame()
         transcript_card.setObjectName("Card")
@@ -1173,21 +1158,6 @@ class MainWindow(QMainWindow):
         self.hw_metrics_label = QLabel("CPU: -- | RAM: -- | GPU: -- | VRAM: --")
         self.hw_metrics_label.setObjectName("metricsLabel")
         status_layout.addWidget(self.hw_metrics_label)
-        metrics_card = QFrame()
-        metrics_card.setObjectName("Card")
-        metrics_layout = QVBoxLayout(metrics_card)
-        metrics_layout.setContentsMargins(10, 10, 10, 10)
-        metrics_layout.setSpacing(6)
-        self.transcription_time_label = QLabel("Transcription time: --")
-        self.transcription_time_label.setObjectName("metricsLabel")
-        self.diar_time_label = QLabel("Diarization time: --")
-        self.diar_time_label.setObjectName("metricsLabel")
-        self.visual_time_label = QLabel("Visual analysis time: --")
-        self.visual_time_label.setObjectName("metricsLabel")
-        metrics_layout.addWidget(self.transcription_time_label)
-        metrics_layout.addWidget(self.diar_time_label)
-        metrics_layout.addWidget(self.visual_time_label)
-        status_layout.addWidget(metrics_card)
 
         # Batch Queue section
         status_layout.addWidget(QLabel("Batch Queue"))
@@ -1544,228 +1514,14 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _apply_theme(self) -> None:
-        applied = self._effective_theme_mode()
-        self.setFont(QFont("Segoe UI", 10))
-        if applied == "dark":
-            window_bg = "#1e1e1e"
-            surface_bg = "#242424"
-            sidebar_bg = "#171717"
-            card_bg = "#232323"
-            border = "#3a3a3a"
-            text = "#e6e6e6"
-            muted = "#9aa4ad"
-            input_bg = "#202020"
-            accent = "#00a3a3"
-            accent_hover = "#008080"
-        else:
-            window_bg = "#f7f9fb"
-            surface_bg = "#f9fbfc"
-            sidebar_bg = "#eef2f4"
-            card_bg = "#ffffff"
-            border = "#d7dfe5"
-            text = "#1f2937"
-            muted = "#5f6d7a"
-            input_bg = "#ffffff"
-            accent = "#008080"
-            accent_hover = "#006b6b"
-
-        self.setStyleSheet(
-            f"""
-            QWidget {{
-                background: {window_bg};
-                color: {text};
-                font-family: "Segoe UI", "Roboto", "Helvetica", sans-serif;
-            }}
-            QPushButton, QFrame, QLineEdit {{
-                border-radius: 8px;
-            }}
-            #Sidebar {{
-                background: {sidebar_bg};
-                border-right: 1px solid {border};
-                padding: 12px;
-            }}
-            #SidebarBrand {{
-                font-weight: 700;
-                padding: 6px 2px;
-                color: {text};
-            }}
-            #SidebarNav {{
-                border: 1px solid {border};
-                background: {sidebar_bg};
-                outline: none;
-                padding: 10px;
-            }}
-            #SidebarNav::item {{
-                padding: 10px 12px;
-                margin: 3px 0;
-                border-radius: 8px;
-            }}
-            #SidebarNav::item:selected {{
-                background: {accent};
-                color: white;
-                font-weight: 600;
-            }}
-            #MainStack {{
-                background: {surface_bg};
-                padding: 12px;
-            }}
-            #MainSurface, #StatusPanel {{
-                background: {surface_bg};
-                border: 1px solid {border};
-                padding: 12px;
-            }}
-            #Card {{
-                background: {card_bg};
-                border: 1px solid {border};
-                padding: 12px;
-            }}
-            #PageTitle {{
-                font-weight: 700;
-                padding-bottom: 2px;
-            }}
-            #PageSubtitle {{
-                color: {muted};
-                padding-bottom: 6px;
-            }}
-            #pathLabel {{
-                background: {input_bg};
-                border: 1px solid {border};
-                padding: 10px 12px;
-            }}
-            #dropZone {{
-                border: 2px dashed {accent};
-                background: {surface_bg};
-                padding: 15px;
-            }}
-            #dropZone[activeDrop="true"] {{
-                border-color: {accent_hover};
-                background: {card_bg};
-            }}
-            #dropBrowseButton {{
-                background: {accent};
-                color: white;
-                padding: 2px 24px;
-                font-weight: 700;
-                font-size: 11pt;
-                min-width: 180px;
-                min-height: 44px;
-                border-radius: 22px;
-                outline: none;
-                border: none;
-            }}
-            #dropBrowseButton:hover {{
-                background: {accent_hover};
-            }}
-            #dropTitle {{
-
-                color: {accent};
-                font-weight: 700;
-                background: transparent;
-            }}
-            #dropSubtitle {{
-                color: {muted};
-                background: transparent;
-            }}
-            QPushButton, QToolButton {{
-                background: {accent};
-                color: white;
-                border: 1px solid {accent};
-                padding: 10px 14px;
-                font-weight: 600;
-            }}
-            QToolButton#sidebarToggleButton, QToolButton#statusToggleButton {{
-                min-width: 24px;
-                max-width: 24px;
-                min-height: 24px;
-                max-height: 24px;
-                padding: 2px;
-                font-weight: 700;
-            }}
-            QPushButton:hover, QToolButton:hover {{
-                background: {accent_hover};
-                border-color: {accent_hover};
-            }}
-            QPushButton:disabled, QToolButton:disabled {{
-                background: #95a5a6;
-                border-color: #95a5a6;
-                color: #f1f5f9;
-            }}
-            QPushButton#exitButton {{
-                background: #b42318;
-                border-color: #b42318;
-            }}
-            QPushButton#exitButton:hover {{
-                background: #991b1b;
-                border-color: #991b1b;
-            }}
-            QLineEdit, QComboBox, QPlainTextEdit, QTextEdit {{
-                background: {input_bg};
-                border: 1px solid {border};
-                padding: 10px 12px;
-                selection-background-color: {accent};
-            }}
-            QComboBox::item:disabled {{
-                color: #94a3b8;
-                background: transparent;
-            }}
-            QGroupBox {{
-                background: {card_bg};
-                border: 1px solid {border};
-                border-radius: 8px;
-                margin-top: 8px;
-                padding: 12px;
-                font-weight: 600;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
-                color: {muted};
-            }}
-            QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{
-                border: 1px solid {accent};
-            }}
-            #hint, #metricsLabel {{
-                color: {muted};
-            }}
-            #tokenLabel {{
-                color: {accent};
-                font-weight: 600;
-            }}
-            QProgressBar {{
-                border: 1px solid {border};
-                border-radius: 10px;
-                background: {input_bg};
-                text-align: center;
-                min-height: 20px;
-            }}
-            QProgressBar::chunk {{
-                background: {accent};
-                border-radius: 8px;
-                margin: 1px;
-            }}
-            QPlainTextEdit#TerminalLog {{
-                background: #000000;
-                color: #9df2a7;
-                border: 1px solid #111111;
-                font-family: "Consolas", "Courier New", monospace;
-                padding: 10px;
-            }}
-            """
-        )
+        theme.apply_theme(QApplication.instance(), self.theme_mode)
 
     @staticmethod
     def _sanitize_theme_mode(value: str) -> str:
-        mode = str(value or "system").strip().lower()
-        if mode in {"system", "light", "dark"}:
-            return mode
-        return "system"
+        return theme.sanitize_mode(value)
 
     def _effective_theme_mode(self) -> str:
-        if self.theme_mode in {"light", "dark"}:
-            return self.theme_mode
-        lightness = QApplication.palette().color(QPalette.Window).lightness()
-        return "dark" if lightness < 128 else "light"
+        return theme.resolve_mode(self.theme_mode)
 
     def _set_theme_mode(self, mode: str) -> None:
         self.theme_mode = self._sanitize_theme_mode(mode)
@@ -1773,8 +1529,6 @@ class MainWindow(QMainWindow):
             self.theme_actions[self.theme_mode].setChecked(True)
         self._save_config(theme_mode=self.theme_mode)
         self._apply_theme()
-        self._set_bar_color(self.progress_bar, self._progress_color(self.progress_bar.value()))
-        self._set_bar_color(self.diar_progress_bar, self._progress_color(self.diar_progress_bar.value()))
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
 
     @staticmethod
@@ -2609,9 +2363,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 0)
         self.diar_progress_bar.setRange(0, 100)
         self.diar_progress_bar.setValue(0)
-        self.transcription_time_label.setText("Transcription time: live session running...")
-        self.diar_time_label.setText("Diarization time: pending final post-pass")
-        self.visual_time_label.setText("Visual analysis time: n/a (live mode)")
+        live_stages = {Stage.TRANSCRIBE}
+        if use_diarization:
+            live_stages.add(Stage.SPEAKERS)
+        self.job_tracker.reset(live_stages)
+        self._sync_timeline()
+        self.transcription_time_label.setText("Live session running...")
+        self.diar_time_label.setText("Runs after you stop" if use_diarization else "Off")
+        self.visual_time_label.setText("Not used in live mode")
         self.status_label.setText("Recording live audio...")
         self._append_terminal_log(
             f"Live capture started: {live_device.name} | source={options.source_mode} | format={audio_format_to_dict(capture_format)}"
@@ -2846,9 +2605,18 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.diar_progress_bar.setValue(0)
         self.visual_progress_bar.setValue(0)
-        self.transcription_time_label.setText("Transcription time: --")
-        self.diar_time_label.setText("Diarization time: --")
-        self.visual_time_label.setText("Visual analysis time: --")
+        enabled_stages: set[Stage] = set()
+        if run_mode in {"full", "transcribe_only"}:
+            enabled_stages.add(Stage.TRANSCRIBE)
+        if run_diarization:
+            enabled_stages.add(Stage.SPEAKERS)
+        if run_visual:
+            enabled_stages.add(Stage.VISUALS)
+        self.job_tracker.reset(enabled_stages)
+        self._sync_timeline()
+        self.transcription_time_label.setText("--")
+        self.diar_time_label.setText("--")
+        self.visual_time_label.setText("--")
         self.status_label.setText("Starting...")
         self.terminal_log.clear()
         self._append_terminal_log(f"Starting job for: {os.path.basename(self.media_path or '')}")
@@ -3109,13 +2877,18 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.diar_progress_bar.setRange(0, 100)
         self.visual_progress_bar.setRange(0, 100)
-        if not cancelled:
+        if cancelled:
+            self.job_tracker.cancel_active()
+        else:
             if self._current_run_mode in {"full", "transcribe_only"}:
                 self.progress_bar.setValue(100)
-                self._set_bar_color(self.progress_bar, self._progress_color(100))
+                self.job_tracker.complete(Stage.TRANSCRIBE, transcription_seconds)
+                if self._current_use_diarization and self.job_tracker.info(Stage.SPEAKERS).state == "active":
+                    self.job_tracker.complete(Stage.SPEAKERS, diarization_seconds)
             if self._current_use_visual_analysis:
                 self.visual_progress_bar.setValue(100)
-                self._set_bar_color(self.visual_progress_bar, self._progress_color(100))
+                self.job_tracker.complete(Stage.VISUALS, visual_analysis_seconds)
+        self._sync_timeline()
         done = "Cancelled."
         if not cancelled:
             if self._current_run_mode == "visual_only":
@@ -3137,17 +2910,17 @@ class MainWindow(QMainWindow):
         self.status_label.setText(done)
         self._append_terminal_log(done)
         if self._current_run_mode in {"full", "transcribe_only"}:
-            self.transcription_time_label.setText(f"Transcription time: {self._format_seconds(transcription_seconds)}")
+            self.transcription_time_label.setText(self._format_seconds(transcription_seconds))
         else:
-            self.transcription_time_label.setText("Transcription time: n/a (visual-only)")
+            self.transcription_time_label.setText("Not used")
         if self._current_use_diarization and self._current_run_mode in {"full", "transcribe_only"}:
-            self.diar_time_label.setText(f"Diarization time: {self._format_seconds(diarization_seconds)}")
+            self.diar_time_label.setText(self._format_seconds(diarization_seconds))
         else:
-            self.diar_time_label.setText("Diarization time: n/a (disabled)")
+            self.diar_time_label.setText("Off")
         if self._current_use_visual_analysis and self._current_run_mode in {"full", "visual_only"}:
-            self.visual_time_label.setText(f"Visual analysis time: {self._format_seconds(visual_analysis_seconds)}")
+            self.visual_time_label.setText(self._format_seconds(visual_analysis_seconds))
         else:
-            self.visual_time_label.setText("Visual analysis time: n/a (disabled)")
+            self.visual_time_label.setText("Off")
         if self._live_session is not None and self._live_finalizing:
             final_text = (transcript_only or transcript or "").strip()
             try:
@@ -3210,10 +2983,12 @@ class MainWindow(QMainWindow):
         self.visual_progress_bar.setValue(0)
         self.status_label.setText("Error")
         self._append_terminal_log(f"Error: {error_msg}")
-        self.transcription_time_label.setText("Transcription time: --")
-        self.diar_time_label.setText("Diarization time: --")
-        self.visual_time_label.setText("Visual analysis time: --")
-        
+        self.job_tracker.fail_active()
+        self._sync_timeline()
+        self.transcription_time_label.setText("--")
+        self.diar_time_label.setText("--")
+        self.visual_time_label.setText("--")
+
         # Batch handling
         if self._batch_active and self._current_batch_index != -1:
             self.batch_queue_model.update_item_status(self._current_batch_index, "failed", error=error_msg)
@@ -3233,17 +3008,24 @@ class MainWindow(QMainWindow):
         self._hide_download_progress_dialog()
         self._cleanup_worker()
 
+    @Slot()
+    def _on_system_scheme_changed(self) -> None:
+        if self.theme_mode == "system":
+            self._apply_theme()
+
     @Slot(int)
     def _on_transcription_progress(self, value: int) -> None:
         self.progress_bar.setValue(value)
-        self._set_bar_color(self.progress_bar, self._progress_color(value))
+        self.job_tracker.progress(Stage.TRANSCRIBE, value)
+        self._sync_timeline()
 
     @Slot(int)
     def _on_visual_progress(self, value: int) -> None:
         if self.visual_progress_bar.maximum() == 0:
             self.visual_progress_bar.setRange(0, 100)
         self.visual_progress_bar.setValue(value)
-        self._set_bar_color(self.visual_progress_bar, self._progress_color(value))
+        self.job_tracker.progress(Stage.VISUALS, value)
+        self._sync_timeline()
 
     @Slot(int)
     def _on_diar_progress(self, value: int) -> None:
@@ -3253,7 +3035,13 @@ class MainWindow(QMainWindow):
         if self.diar_progress_bar.maximum() == 0:
             self.diar_progress_bar.setRange(0, 100)
         self.diar_progress_bar.setValue(value)
-        self._set_bar_color(self.diar_progress_bar, self._progress_color(value))
+        self.job_tracker.progress(Stage.SPEAKERS, value)
+        self._sync_timeline()
+
+    def _sync_timeline(self) -> None:
+        """Push the tracker's stage states into the timeline widgets."""
+        for stage in (Stage.TRANSCRIBE, Stage.SPEAKERS, Stage.VISUALS):
+            self.job_timeline.set_stage_state(stage, self.job_tracker.info(stage).state)
 
     @Slot(bool)
     def _update_diar_ui_state(self, enabled: bool) -> None:
@@ -3273,11 +3061,11 @@ class MainWindow(QMainWindow):
         if not diar_controls_enabled:
             self.diar_progress_bar.setRange(0, 100)
             self.diar_progress_bar.setValue(0)
-            self.diar_progress_bar.setFormat("Diarization disabled")
-            self._set_bar_color(self.diar_progress_bar, "#94a3b8")
+            self.diar_progress_bar.setFormat("Off")
+            self.job_timeline.set_stage_state(Stage.SPEAKERS, "disabled")
         else:
-            self.diar_progress_bar.setFormat("Diarization %p%")
-            self._set_bar_color(self.diar_progress_bar, self._progress_color(self.diar_progress_bar.value()))
+            self.diar_progress_bar.setFormat("%p%")
+            self.job_timeline.set_stage_state(Stage.SPEAKERS, self.job_tracker.info(Stage.SPEAKERS).state)
         self._update_service_visibility()
 
     @Slot(bool)
@@ -3366,12 +3154,9 @@ class MainWindow(QMainWindow):
         diarization_supported = self._selected_model_supports_diarization()
         if not diarization_supported and self.diar_checkbox.isChecked():
             self.diar_checkbox.setChecked(False)
-        self.progress_bar.setVisible(allow_transcription)
-        self.transcription_time_label.setVisible(allow_transcription)
-        self.diar_progress_bar.setVisible(run_diarization)
-        self.diar_time_label.setVisible(run_diarization)
-        self.visual_progress_bar.setVisible(run_visual)
-        self.visual_time_label.setVisible(run_visual)
+        self.job_timeline.set_stage_visible(Stage.TRANSCRIBE, allow_transcription)
+        self.job_timeline.set_stage_visible(Stage.SPEAKERS, run_diarization)
+        self.job_timeline.set_stage_visible(Stage.VISUALS, run_visual)
 
         controls_idle = not self._is_transcription_running() and not self._live_capture_active and not self._live_finalizing
         self.model_combo.setEnabled(allow_transcription and controls_idle)
@@ -3409,12 +3194,10 @@ class MainWindow(QMainWindow):
             self.visual_scope_combo.setEnabled(not live_mode and not self._is_transcription_running())
             self.visual_interval_input.setEnabled(not live_mode and not self._is_transcription_running())
 
-        if mode == "visual_only":
-            self.visual_progress_bar.setFormat("Visual analysis %p%")
-        elif live_mode and self._live_capture_active:
-            self.progress_bar.setFormat("Live transcription")
+        if live_mode and self._live_capture_active:
+            self.progress_bar.setFormat("Live")
         else:
-            self.progress_bar.setFormat("Transcription %p%")
+            self.progress_bar.setFormat("%p%")
         self._update_live_mode_ui()
 
     @Slot(int)
@@ -3576,15 +3359,8 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _progress_color(value: int) -> str:
-        if value >= 100:
-            return "#16a34a"  # green
-        if value >= 76:
-            return "#2563eb"  # blue
-        if value >= 51:
-            return "#facc15"  # yellow
-        if value >= 26:
-            return "#f97316"  # orange
-        return "#dc2626"  # red
+        """Return the stage state used to style a progress bar at ``value`` percent."""
+        return "done" if value >= 100 else "active"
 
     @staticmethod
     def _format_seconds(seconds: float) -> str:
@@ -3607,21 +3383,9 @@ class MainWindow(QMainWindow):
         return value
 
     @staticmethod
-    def _set_bar_color(bar: QProgressBar, color: str) -> None:
-        bar.setStyleSheet(
-            f"""
-            QProgressBar {{
-                border: 1px solid #d0d7e2;
-                border-radius: 7px;
-                background: #ffffff;
-                text-align: center;
-            }}
-            QProgressBar::chunk {{
-                background: {color};
-                border-radius: 6px;
-            }}
-            """
-        )
+    def _set_bar_color(bar: QProgressBar, state: str) -> None:
+        """Style ``bar`` by stage state (active/done/failed/disabled); colours live in the theme."""
+        set_state(bar, state)
 
     @Slot()
     def configure_hf_token(self) -> None:

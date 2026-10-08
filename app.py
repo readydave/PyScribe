@@ -2,6 +2,7 @@
 # Gradio-based listener UI for PyScribe.
 
 import argparse
+import base64
 from collections.abc import Iterator
 import datetime
 import logging
@@ -21,6 +22,7 @@ from services.listener_security_service import (
 )
 import services as pyscribe_services
 from services.runtime_compat import ensure_platform_sys_version_compat
+from services.ui_tokens import FONT_DIR, FONT_FAMILY, FONT_FILES, PALETTES
 from services.runtime_env_service import (
     configure_runtime_environment,
     reexec_if_loader_env_changed,
@@ -59,43 +61,99 @@ def _ensure_listener_runtime() -> None:
     APP_CONFIG = pyscribe_services.load_config()
     _LISTENER_RUNTIME_READY = True
 
-CUSTOM_CSS = """
-html.pyscribe-prog-red progress,
-html.pyscribe-prog-red [role="progressbar"],
-html.pyscribe-prog-red .progress-bar,
-html.pyscribe-prog-red .progress-bar-wrap > div {
-  accent-color: #dc2626 !important;
-  background-color: #dc2626 !important;
-}
-html.pyscribe-prog-orange progress,
-html.pyscribe-prog-orange [role="progressbar"],
-html.pyscribe-prog-orange .progress-bar,
-html.pyscribe-prog-orange .progress-bar-wrap > div {
-  accent-color: #f97316 !important;
-  background-color: #f97316 !important;
-}
-html.pyscribe-prog-yellow progress,
-html.pyscribe-prog-yellow [role="progressbar"],
-html.pyscribe-prog-yellow .progress-bar,
-html.pyscribe-prog-yellow .progress-bar-wrap > div {
-  accent-color: #facc15 !important;
-  background-color: #facc15 !important;
-}
-html.pyscribe-prog-blue progress,
-html.pyscribe-prog-blue [role="progressbar"],
-html.pyscribe-prog-blue .progress-bar,
-html.pyscribe-prog-blue .progress-bar-wrap > div {
-  accent-color: #2563eb !important;
-  background-color: #2563eb !important;
-}
-html.pyscribe-prog-green progress,
-html.pyscribe-prog-green [role="progressbar"],
-html.pyscribe-prog-green .progress-bar,
-html.pyscribe-prog-green .progress-bar-wrap > div {
-  accent-color: #16a34a !important;
-  background-color: #16a34a !important;
-}
 
+def _font_face_css() -> str:
+    """@font-face rules with the bundled font inlined as data URIs.
+
+    Inlining keeps the listener working offline and avoids exposing a server file path to LAN clients.
+    Only two weights are embedded to keep the page small; other weights map to the nearest one.
+    """
+    rules = []
+    for weight in (400, 600):
+        path = FONT_DIR / FONT_FILES[weight]
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError:
+            LOGGER.warning("Bundled font missing: %s", path)
+            continue
+        rules.append(
+            f'@font-face {{ font-family: "{FONT_FAMILY}"; font-weight: {weight}; font-style: normal; '
+            f'font-display: swap; src: url("data:font/ttf;base64,{encoded}") format("truetype"); }}'
+        )
+    return "\n".join(rules)
+
+
+def _token_css() -> str:
+    light, dark = PALETTES["light"], PALETTES["dark"]
+    return f"""
+:root {{ --pyscribe-bar-active: {light.bar_active}; --pyscribe-bar-done: {light.done}; --pyscribe-rule: {light.rule}; --pyscribe-ink: {light.ink}; }}
+body.dark, .dark {{ --pyscribe-bar-active: {dark.bar_active}; --pyscribe-bar-done: {dark.done}; --pyscribe-rule: {dark.rule}; --pyscribe-ink: {dark.ink}; }}
+"""
+
+
+# Progress bars use one calm colour while running and the "done" colour at 100%,
+# instead of the old red-to-green percentage ramp.
+_PROGRESS_SELECTORS = ("progress", '[role="progressbar"]', ".progress-bar", ".progress-bar-wrap > div")
+
+
+def _progress_css() -> str:
+    def rule(cls: str, var: str) -> str:
+        selectors = ",\n".join(f"html.{cls} {sel}" for sel in _PROGRESS_SELECTORS)
+        return f"{selectors} {{\n  accent-color: var({var}) !important;\n  background-color: var({var}) !important;\n}}\n"
+
+    active = "".join(
+        rule(cls, "--pyscribe-bar-active")
+        for cls in ("pyscribe-prog-red", "pyscribe-prog-orange", "pyscribe-prog-yellow", "pyscribe-prog-blue")
+    )
+    return active + rule("pyscribe-prog-green", "--pyscribe-bar-done")
+
+
+def build_theme() -> "gr.themes.Base":
+    """Gradio theme built from the shared PyScribe palette (light and dark)."""
+    light, dark = PALETTES["light"], PALETTES["dark"]
+    return gr.themes.Base(
+        font=(gr.themes.Font(FONT_FAMILY), gr.themes.Font("ui-sans-serif"), gr.themes.Font("system-ui"), gr.themes.Font("sans-serif")),
+        radius_size=gr.themes.sizes.radius_md,
+    ).set(
+        body_background_fill=light.page,
+        body_background_fill_dark=dark.page,
+        body_text_color=light.ink,
+        body_text_color_dark=dark.ink,
+        block_background_fill=light.card,
+        block_background_fill_dark=dark.card,
+        block_border_color=light.rule,
+        block_border_color_dark=dark.rule,
+        block_label_text_color=light.muted,
+        block_label_text_color_dark=dark.muted,
+        block_title_text_color=light.ink,
+        block_title_text_color_dark=dark.ink,
+        input_border_width="1px",
+        input_background_fill=light.page,
+        input_background_fill_dark=dark.input_bg,
+        input_border_color=light.rule,
+        input_border_color_dark=dark.rule,
+        button_primary_background_fill=light.rubric,
+        button_primary_background_fill_dark=dark.rubric,
+        button_primary_background_fill_hover=light.rubric_hover,
+        button_primary_background_fill_hover_dark=dark.rubric_hover,
+        button_primary_text_color="#FFFFFF",
+        button_primary_text_color_dark="#FFFFFF",
+        button_secondary_background_fill=light.accent,
+        button_secondary_background_fill_dark=dark.accent,
+        button_secondary_background_fill_hover=light.accent_hover,
+        button_secondary_background_fill_hover_dark=dark.accent_hover,
+        button_secondary_text_color=light.accent_text,
+        button_secondary_text_color_dark=dark.accent_text,
+        button_secondary_border_color=light.accent,
+        button_secondary_border_color_dark=dark.accent,
+        checkbox_background_color_selected=light.accent,
+        checkbox_background_color_selected_dark=dark.accent,
+        slider_color=light.accent,
+        slider_color_dark=dark.accent_hover,
+    )
+
+
+CUSTOM_CSS = _font_face_css() + _token_css() + _progress_css() + """
 html { font-size: calc(16px * var(--pyscribe-text-scale, 1)); }
 .gradio-container {
   --text-xxs: calc(9px * var(--pyscribe-text-scale, 1)) !important;
@@ -133,7 +191,7 @@ html { font-size: calc(16px * var(--pyscribe-text-scale, 1)); }
   background: #8882;
   backdrop-filter: blur(4px);
   font: 13px/1 sans-serif;
-  color: inherit;
+  color: var(--pyscribe-ink, inherit);
 }
 #pyscribe-text-size button {
   min-width: 28px;
@@ -857,22 +915,23 @@ def create_interface() -> gr.Blocks:
             Drop an audio/video file to transcribe on this host machine.
             """
         )
-        gr.Markdown(
-            """
-            **Model tips:** use built-in choices or a custom Hugging Face repo ID (`owner/repo`).
-            If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
-            For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
-            Granite Speech (4.0 and 4.1) is available as an experimental backend and does not support speaker identification in PyScribe yet.
-            Nemotron Speech Streaming (`nvidia/nemotron-speech-streaming-en-0.6b`) is an experimental English-only backend; Names / terms are applied as a spelling-correction pass on the final transcript (live text shows raw output until then).
-            Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
-            """
-        )
-        gr.Markdown(
-            """
-            **LLM post-processing:** configure profiles in Qt (`Tools > LLM Connections...`) and then use
-            the Listener's **LLM Post-Processing** section for connection tests and template-based summarization.
-            """
-        )
+        with gr.Accordion("About models and LLM post-processing", open=False):
+            gr.Markdown(
+                """
+                **Model tips:** use built-in choices or a custom Hugging Face repo ID (`owner/repo`).
+                If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
+                For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
+                Granite Speech (4.0 and 4.1) is available as an experimental backend and does not support speaker identification in PyScribe yet.
+                Nemotron Speech Streaming (`nvidia/nemotron-speech-streaming-en-0.6b`) is an experimental English-only backend; Names / terms are applied as a spelling-correction pass on the final transcript (live text shows raw output until then).
+                Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
+                """
+            )
+            gr.Markdown(
+                """
+                **LLM post-processing:** configure profiles in Qt (`Tools > LLM Connections...`) and then use
+                the Listener's **LLM Post-Processing** section for connection tests and template-based summarization.
+                """
+            )
 
         with gr.Row():
             with gr.Column(scale=1):
@@ -881,93 +940,94 @@ def create_interface() -> gr.Blocks:
                     file_types=["audio", "video"]
                 )
 
-                model_dropdown = gr.Dropdown(
-                    choices=ALL_MODELS,
-                    value=APP_CONFIG.last_model if APP_CONFIG.last_model in ALL_MODELS else RECOMMENDED_MODEL,
-                    label="Select Transcription Model",
-                    info=f"Recommended for your hardware ({DEVICE.upper()}): {RECOMMENDED_MODEL}",
-                    allow_custom_value=True,
-                    visible=initial_allow_transcription,
-                )
-                run_mode_dropdown = gr.Dropdown(
-                    choices=["full", "transcribe_only", "visual_only"],
-                    value=initial_run_mode,
-                    label="Run mode",
-                    info="full = transcript + optional OCR, transcribe_only = transcript only, visual_only = OCR only",
-                )
-                diar_checkbox = gr.Checkbox(
-                    label="Identify speakers",
-                    value=APP_CONFIG.use_diarization,
-                    visible=initial_allow_transcription,
-                )
-                default_backend = (
-                    APP_CONFIG.diar_backend
-                    if APP_CONFIG.diar_backend in AVAILABLE_DIAR_BACKENDS
-                    else AVAILABLE_DIAR_BACKENDS[0]
-                )
-                diar_backend_dropdown = gr.Dropdown(
-                    choices=AVAILABLE_DIAR_BACKENDS,
-                    value=default_backend,
-                    label="Diarization mode",
-                    info=_format_diar_backend_info(default_backend),
-                    visible=initial_allow_transcription and APP_CONFIG.use_diarization,
-                )
-                max_speakers_input = gr.Textbox(
-                    label="Max speakers (optional)",
-                    value="" if APP_CONFIG.max_speakers is None else str(APP_CONFIG.max_speakers),
-                    placeholder="e.g. 2",
-                    visible=initial_allow_transcription and APP_CONFIG.use_diarization,
-                )
-                hotwords_input = gr.Textbox(
-                    label="Names / terms (optional)",
-                    placeholder="e.g. Kubernetes, Dr. Okafor, PyScribe",
-                    info="Comma-separated names and jargon to bias recognition toward. Keep it short and relevant.",
-                    visible=initial_allow_transcription,
-                )
-                batched_checkbox = gr.Checkbox(
-                    label="Faster GPU decoding (may drop short utterances)",
-                    value=False,
-                    info="About 2.5x faster on GPU, but can drop filler words and brief replies. Leave off for interviews; no effect on CPU.",
-                    visible=initial_allow_transcription,
-                )
-                visual_checkbox = gr.Checkbox(
-                    label="Analyze visuals (slides/chat OCR, beta)",
-                    value=APP_CONFIG.use_visual_analysis,
-                    visible=initial_allow_visual,
-                )
-                visual_profile_dropdown = gr.Dropdown(
-                    choices=["fast", "balanced", "accurate"],
-                    value=str(APP_CONFIG.visual_profile or "balanced").lower(),
-                    label="Visual mode",
-                    info="fast = quickest, balanced = default, accurate = most thorough.",
-                    visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
-                )
-                visual_backend_dropdown = gr.Dropdown(
-                    choices=["auto", "rapidocr", "paddleocr", "surya", "pytesseract"],
-                    value=str(APP_CONFIG.visual_ocr_backend or "auto").lower(),
-                    label="Visual OCR backend",
-                    info="auto picks the best available backend; paddleocr/surya/rapidocr may download models on first run.",
-                    visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
-                )
-                visual_interval = gr.Slider(
-                    minimum=0.5,
-                    maximum=10.0,
-                    step=0.5,
-                    value=float(APP_CONFIG.visual_sample_seconds or 1.0),
-                    label="Visual sample interval (seconds)",
-                    info="Lower values capture more slide/chat changes but use more compute.",
-                    visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
-                )
-
                 submit_btn = gr.Button("Transcribe", variant="primary")
+
+                with gr.Accordion("Transcription settings", open=True):
+                    model_dropdown = gr.Dropdown(
+                        choices=ALL_MODELS,
+                        value=APP_CONFIG.last_model if APP_CONFIG.last_model in ALL_MODELS else RECOMMENDED_MODEL,
+                        label="Select Transcription Model",
+                        info=f"Recommended for your hardware ({DEVICE.upper()}): {RECOMMENDED_MODEL}",
+                        allow_custom_value=True,
+                        visible=initial_allow_transcription,
+                    )
+                    run_mode_dropdown = gr.Dropdown(
+                        choices=["full", "transcribe_only", "visual_only"],
+                        value=initial_run_mode,
+                        label="Run mode",
+                        info="full = transcript + optional OCR, transcribe_only = transcript only, visual_only = OCR only",
+                    )
+                    diar_checkbox = gr.Checkbox(
+                        label="Identify speakers",
+                        value=APP_CONFIG.use_diarization,
+                        visible=initial_allow_transcription,
+                    )
+                    default_backend = (
+                        APP_CONFIG.diar_backend
+                        if APP_CONFIG.diar_backend in AVAILABLE_DIAR_BACKENDS
+                        else AVAILABLE_DIAR_BACKENDS[0]
+                    )
+                    diar_backend_dropdown = gr.Dropdown(
+                        choices=AVAILABLE_DIAR_BACKENDS,
+                        value=default_backend,
+                        label="Diarization mode",
+                        info=_format_diar_backend_info(default_backend),
+                        visible=initial_allow_transcription and APP_CONFIG.use_diarization,
+                    )
+                    max_speakers_input = gr.Textbox(
+                        label="Max speakers (optional)",
+                        value="" if APP_CONFIG.max_speakers is None else str(APP_CONFIG.max_speakers),
+                        placeholder="e.g. 2",
+                        visible=initial_allow_transcription and APP_CONFIG.use_diarization,
+                    )
+                    hotwords_input = gr.Textbox(
+                        label="Names / terms (optional)",
+                        placeholder="e.g. Kubernetes, Dr. Okafor, PyScribe",
+                        info="Comma-separated names and jargon to bias recognition toward. Keep it short and relevant.",
+                        visible=initial_allow_transcription,
+                    )
+                    batched_checkbox = gr.Checkbox(
+                        label="Faster GPU decoding (may drop short utterances)",
+                        value=False,
+                        info="About 2.5x faster on GPU, but can drop filler words and brief replies. Leave off for interviews; no effect on CPU.",
+                        visible=initial_allow_transcription,
+                    )
+                    visual_checkbox = gr.Checkbox(
+                        label="Analyze visuals (slides/chat OCR, beta)",
+                        value=APP_CONFIG.use_visual_analysis,
+                        visible=initial_allow_visual,
+                    )
+                    visual_profile_dropdown = gr.Dropdown(
+                        choices=["fast", "balanced", "accurate"],
+                        value=str(APP_CONFIG.visual_profile or "balanced").lower(),
+                        label="Visual mode",
+                        info="fast = quickest, balanced = default, accurate = most thorough.",
+                        visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
+                    )
+                    visual_backend_dropdown = gr.Dropdown(
+                        choices=["auto", "rapidocr", "paddleocr", "surya", "pytesseract"],
+                        value=str(APP_CONFIG.visual_ocr_backend or "auto").lower(),
+                        label="Visual OCR backend",
+                        info="auto picks the best available backend; paddleocr/surya/rapidocr may download models on first run.",
+                        visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
+                    )
+                    visual_interval = gr.Slider(
+                        minimum=0.5,
+                        maximum=10.0,
+                        step=0.5,
+                        value=float(APP_CONFIG.visual_sample_seconds or 1.0),
+                        label="Visual sample interval (seconds)",
+                        info="Lower values capture more slide/chat changes but use more compute.",
+                        visible=initial_allow_visual and APP_CONFIG.use_visual_analysis,
+                    )
 
             with gr.Column(scale=2):
                 status_output = gr.Textbox(label="Status", interactive=False)
                 transcript_output = gr.Textbox(
                     label="Transcription",
                     interactive=True,
-                    lines=15,
-                    max_lines=15,
+                    lines=24,
+                    max_lines=24,
                 )
                 with gr.Row():
                     copy_btn = gr.Button("Copy to Clipboard")
@@ -1208,6 +1268,7 @@ def launch_listener(
         auth=auth,
         css=CUSTOM_CSS,
         head=CUSTOM_HEAD,
+        theme=build_theme(),
     )
     return chosen_port
 

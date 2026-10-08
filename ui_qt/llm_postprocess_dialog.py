@@ -47,6 +47,7 @@ from services import (
     run_connection_test,
     update_user_prompt_template,
 )
+from ui_qt import theme
 
 _TEXT_FILE_EXTENSIONS = {".txt", ".md", ".markdown", ".log", ".rtf"}
 _IMAGE_FILE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff"}
@@ -96,9 +97,10 @@ class FileDropTarget(QLabel):
         event.ignore()
 
     def _apply_style(self) -> None:
-        border = "#2563eb" if self._active else "#94a3b8"
-        background = "#eff6ff" if self._active else "#f8fafc"
-        text = "#1d4ed8" if self._active else "#334155"
+        palette = theme.active_palette()
+        border = palette.ink if self._active else palette.muted
+        background = palette.card if self._active else palette.surface
+        text = palette.ink if self._active else palette.muted
         self.setStyleSheet(
             f"border: 2px dashed {border}; border-radius: 10px; background: {background}; color: {text}; font-weight: 600;"
         )

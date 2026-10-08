@@ -166,6 +166,20 @@ def _resolve_lan_ip() -> str:
     return "localhost"
 
 
+def run_mcp() -> None:
+    """Runs the MCP server over stdio. Nothing may be printed to stdout: that is the protocol channel."""
+    try:
+        from services.mcp_server import run_stdio
+    except ModuleNotFoundError as exc:
+        print(
+            f"The MCP server needs the 'mcp' package ({exc.name} is missing). "
+            "Install it with: uv pip install --python .venv/bin/python -r requirements.txt",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+    run_stdio()
+
+
 def run_qt() -> None:
     """Launches the PySide6 desktop UI."""
     LOGGER.info("Launching Qt desktop UI")
@@ -194,6 +208,12 @@ def parse_args() -> argparse.Namespace:
 
     qt_parser = subparsers.add_parser("qt", help="Run PySide6 desktop GUI")
     qt_parser.set_defaults(mode="qt")
+
+    mcp_parser = subparsers.add_parser(
+        "mcp",
+        help="Run the MCP server on stdio (for Claude Code, Codex, and other MCP clients)",
+    )
+    mcp_parser.set_defaults(mode="mcp")
 
     return parser.parse_args()
 
@@ -366,6 +386,9 @@ def main() -> None:
             auth_user=auth_user,
             auth_pass=auth_pass,
         )
+        return
+    if args.mode == "mcp":
+        run_mcp()
         return
     if args.mode == "qt":
         run_qt()

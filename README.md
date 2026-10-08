@@ -7,6 +7,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 - `docs/user_guide.md` - full feature guide for Qt, Listener, CLI, and environment settings.
 - `docs/qt_help.md` - in-app Qt help content.
+- `docs/mcp.md` - using PyScribe as an MCP server from Claude Code, Codex, and other clients.
 - `docs/upgrade_2026-10.md` - October 2026 runtime/accuracy upgrade: results, decisions, setup notes, how to reproduce.
 - `CONTRIBUTING.md` - development and contribution workflow.
 - `SECURITY.md` - vulnerability reporting and security guidance.
@@ -23,6 +24,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt Transcription page built from movable panels (Setup, Progress, Hardware, Batch queue): drag, tab, float, resize, close, lock, or reset them from View > Panels; the layout is remembered
 - Light and dark themes that follow the system colour scheme, with a bundled font so Linux and Windows look the same
 - Start-up defaults you control from the Settings page (model, File/Live, names/terms, faster decoding, open-files folder); window size, sidebar, panel layout, theme, and last-used run options are remembered
+- MCP server (`python main.py mcp`): Claude Code, Codex, and other MCP clients can transcribe audio and read your transcripts, with your own subscription doing the AI work (see [docs/mcp.md](docs/mcp.md))
 - AI summaries and action items from local, LAN, or hosted models (Claude via the native API; OpenAI, Gemini, OpenRouter and other OpenAI-compatible services), with automatic splitting of long transcripts and per-connection token and temperature settings
 - Colour themes: four presets (Iron-gall, Verdigris, Ochre, Graphite) plus your own, with a palette editor, live preview, automatic contrast fixes, and import/export; the Listener uses the same choice
 - One job timeline showing each stage (Transcribe, Speakers, Visuals) with its state and elapsed time

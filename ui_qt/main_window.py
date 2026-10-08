@@ -735,6 +735,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_menus()
         self._fit_to_available_screen()
+        self._apply_tab_order()
         self._restore_dock_layout()
         self._apply_theme()
         QApplication.styleHints().colorSchemeChanged.connect(self._on_system_scheme_changed)
@@ -1341,6 +1342,57 @@ class MainWindow(QMainWindow):
     def _apply_default_dock_sizes(self) -> None:
         self.dock_host.resizeDocks([self.setup_dock, self.hardware_dock], [400, 340], Qt.Horizontal)
         self.dock_host.resizeDocks([self.progress_dock], [160], Qt.Vertical)
+
+    def _apply_tab_order(self) -> None:
+        """Tab through the window in reading order: sidebar, setup, actions, transcript, progress, queue."""
+        self.transcription_scroll.setFocusPolicy(Qt.NoFocus)
+        chain: list[QWidget] = [
+            self.sidebar_toggle_btn,
+            self.new_project_btn,
+            self.nav_list,
+            *self.input_segment_buttons,
+            self.live_source_combo,
+            self.live_device_combo,
+            self.live_output_dir_input,
+            self.live_output_dir_btn,
+            self.live_title_input,
+            self.live_keep_audio_checkbox,
+            self.drop_label.browse_btn,
+            self.model_combo,
+            self.transcribe_checkbox,
+            self.advanced_toggle,
+            self.diar_checkbox,
+            self.diar_backend_combo,
+            self.max_speakers_input,
+            self.hotwords_input,
+            self.batched_checkbox,
+            self.visual_checkbox,
+            self.visual_profile_combo,
+            self.visual_backend_combo,
+            self.visual_scope_combo,
+            self.visual_interval_input,
+            self.transcribe_btn,
+            self.stop_live_btn,
+            self.pause_live_btn,
+            self.cancel_btn,
+            self.force_stop_btn,
+            self.save_btn,
+            self.rename_with_title_btn,
+            self.open_btn,
+            self.copy_btn,
+            self.text_area,
+            self.job_timeline.details_toggle,
+            self.batch_queue_view,
+            self.add_to_queue_btn,
+            self.import_folder_btn,
+            self.remove_from_queue_btn,
+            self.clear_queue_btn,
+            self.start_batch_btn,
+            self.clear_completed_btn,
+            self.exit_btn,
+        ]
+        for current, following in zip(chain, chain[1:]):
+            QWidget.setTabOrder(current, following)
 
     @Slot()
     def _reset_dock_layout(self) -> None:

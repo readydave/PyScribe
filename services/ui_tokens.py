@@ -32,6 +32,7 @@ class Palette:
     accent_text: str
     rubric: str
     rubric_hover: str
+    failed_text: str
     done: str
     done_text: str
     bar_active: str
@@ -56,11 +57,12 @@ PALETTES: dict[str, Palette] = {
         accent_text="#FFFFFF",
         rubric="#C2412D",
         rubric_hover="#A83624",
-        done="#2F7D6B",
+        failed_text="#C2412D",
+        done="#286B5B",
         done_text="#FFFFFF",
         bar_active="#9DB2E3",
-        disabled_bg="#C5CCD9",
-        disabled_text="#6B7488",
+        disabled_bg="#D5DBE6",
+        disabled_text="#566079",
         log_bg="#1B2133",
         log_text="#C9D3EC",
     ),
@@ -76,13 +78,14 @@ PALETTES: dict[str, Palette] = {
         accent="#3B4A70",
         accent_hover="#4B5D8C",
         accent_text="#F2F5FA",
-        rubric="#D2513B",
-        rubric_hover="#E2614C",
+        rubric="#C4452F",
+        rubric_hover="#CC4B35",
+        failed_text="#F0806C",
         done="#4FB39B",
         done_text="#0F1A17",
-        bar_active="#4A6AB5",
+        bar_active="#3D5BA3",
         disabled_bg="#2A3144",
-        disabled_text="#7B859C",
+        disabled_text="#98A2B8",
         log_bg="#0E1119",
         log_text="#B9C5E3",
     ),

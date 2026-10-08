@@ -38,10 +38,6 @@ class JobTimeline(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        title = QLabel("Progress")
-        title.setObjectName("PageSubtitle")
-        layout.addWidget(title)
-
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)

@@ -3,96 +3,33 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
+from services.ui_tokens import FONT_DIR, FONT_FAMILY, PALETTES, STAGE_COLORS, Palette
+
 LOGGER = logging.getLogger(__name__)
 
-FONT_FAMILY = "Atkinson Hyperlegible Next"
-FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 FONT_FALLBACKS = '"Segoe UI", "Roboto", "Helvetica", sans-serif'
 THEME_MODES = ("system", "light", "dark")
+
+_active_mode = "light"
 
 # Progress/stage states understood by the `state` dynamic property in the QSS.
 STAGE_STATES = ("pending", "active", "done", "failed", "disabled")
 
 
-@dataclass(frozen=True)
-class Palette:
-    """Colour tokens. Rubric red is reserved for the primary action and live recording."""
-
-    page: str
-    surface: str
-    sidebar: str
-    card: str
-    input_bg: str
-    rule: str
-    ink: str
-    muted: str
-    accent: str
-    accent_hover: str
-    accent_text: str
-    rubric: str
-    rubric_hover: str
-    done: str
-    done_text: str
-    bar_active: str
-    disabled_bg: str
-    disabled_text: str
-    log_bg: str
-    log_text: str
+def active_palette() -> Palette:
+    """Palette of the theme most recently applied (used by custom-painted widgets)."""
+    return PALETTES[_active_mode]
 
 
-PALETTES: dict[str, Palette] = {
-    "light": Palette(
-        page="#EEF1F5",
-        surface="#F6F8FB",
-        sidebar="#E6EAF1",
-        card="#FFFFFF",
-        input_bg="#FFFFFF",
-        rule="#D3D9E3",
-        ink="#26304A",
-        muted="#566079",
-        accent="#26304A",
-        accent_hover="#38456A",
-        accent_text="#FFFFFF",
-        rubric="#C2412D",
-        rubric_hover="#A83624",
-        done="#2F7D6B",
-        done_text="#FFFFFF",
-        bar_active="#9DB2E3",
-        disabled_bg="#C5CCD9",
-        disabled_text="#6B7488",
-        log_bg="#1B2133",
-        log_text="#C9D3EC",
-    ),
-    "dark": Palette(
-        page="#141821",
-        surface="#191E2A",
-        sidebar="#10131A",
-        card="#1D2230",
-        input_bg="#171B26",
-        rule="#2E3546",
-        ink="#E3E7F0",
-        muted="#98A2B8",
-        accent="#3B4A70",
-        accent_hover="#4B5D8C",
-        accent_text="#F2F5FA",
-        rubric="#E2614C",
-        rubric_hover="#EE7561",
-        done="#4FB39B",
-        done_text="#0F1A17",
-        bar_active="#4A6AB5",
-        disabled_bg="#2A3144",
-        disabled_text="#7B859C",
-        log_bg="#0E1119",
-        log_text="#B9C5E3",
-    ),
-}
+def stage_color(stage: str | None) -> str:
+    """Trace colour for a job stage; the neutral bar colour when no stage is running."""
+    light, dark = STAGE_COLORS.get(stage or "", (PALETTES["light"].bar_active, PALETTES["dark"].bar_active))
+    return dark if _active_mode == "dark" else light
 
 
 def sanitize_mode(value: object) -> str:
@@ -136,7 +73,9 @@ def load_fonts() -> str:
 
 def apply_theme(app: QApplication, mode: str) -> str:
     """Apply the Fusion style, bundled font, and QSS. Returns the effective mode."""
+    global _active_mode
     effective = resolve_mode(mode)
+    _active_mode = effective
     family = load_fonts()
     if app.style().objectName().lower() != "fusion":
         app.setStyle("Fusion")
@@ -225,10 +164,10 @@ def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
         #dropBrowseButton {{
             background: {p.accent};
             color: {p.accent_text};
-            padding: 2px 24px;
+            padding: 2px 18px;
             font-weight: 700;
             font-size: 11pt;
-            min-width: 180px;
+            min-width: 140px;
             min-height: 44px;
             border-radius: 22px;
             outline: none;
@@ -372,6 +311,64 @@ def build_qss(mode: str, family: str = FONT_FAMILY) -> str:
         }}
         QProgressBar[state="disabled"]::chunk {{
             background: {p.disabled_bg};
+        }}
+        #Transparent {{
+            background: transparent;
+        }}
+        #StatusLine {{
+            font-weight: 600;
+            font-size: 11pt;
+        }}
+        QMainWindow::separator {{
+            background: {p.page};
+            width: 6px;
+            height: 6px;
+        }}
+        QMainWindow::separator:hover {{
+            background: {p.rule};
+        }}
+        QDockWidget {{
+            font-weight: 600;
+        }}
+        QDockWidget::title {{
+            background: {p.surface};
+            border: 1px solid {p.rule};
+            padding: 6px 10px;
+            text-align: left;
+        }}
+        QTabBar::tab {{
+            background: {p.surface};
+            color: {p.muted};
+            border: 1px solid {p.rule};
+            padding: 6px 14px;
+        }}
+        QTabBar::tab:selected {{
+            background: {p.card};
+            color: {p.ink};
+        }}
+        QPushButton[segment] {{
+            background: transparent;
+            color: {p.ink};
+            border: 1px solid {p.rule};
+            border-radius: 0px;
+            padding: 8px 22px;
+        }}
+        QPushButton[segment="left"] {{
+            border-top-left-radius: 8px;
+            border-bottom-left-radius: 8px;
+        }}
+        QPushButton[segment="right"] {{
+            border-top-right-radius: 8px;
+            border-bottom-right-radius: 8px;
+        }}
+        QPushButton[segment]:hover {{
+            background: {p.surface};
+            border-color: {p.rule};
+        }}
+        QPushButton[segment]:checked {{
+            background: {p.accent};
+            color: {p.accent_text};
+            border-color: {p.accent};
         }}
         #StageName {{
             font-weight: 600;

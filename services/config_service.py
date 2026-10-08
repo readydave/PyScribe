@@ -35,6 +35,9 @@ class AppConfig:
     live_input_device_id: str | None = None
     live_output_dir: str | None = None
     live_keep_audio_on_success: bool = True
+    dock_layout: str | None = None
+    dock_locked: bool = False
+    setup_advanced_expanded: bool = False
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".pyscribe_config.json"
@@ -77,6 +80,9 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         live_input_device_id=_as_optional_str(data.get("live_input_device_id")),
         live_output_dir=_as_optional_str(data.get("live_output_dir")),
         live_keep_audio_on_success=_as_bool(data.get("live_keep_audio_on_success"), default=True),
+        dock_layout=_as_optional_str(data.get("dock_layout")),
+        dock_locked=_as_bool(data.get("dock_locked"), default=False),
+        setup_advanced_expanded=_as_bool(data.get("setup_advanced_expanded"), default=False),
     )
 
 

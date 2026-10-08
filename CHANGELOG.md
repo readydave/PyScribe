@@ -8,6 +8,7 @@ The format is inspired by Keep a Changelog.
 
 ### Changed
 
+- Qt UI: new shared theme (`ui_qt/theme.py`) with a bundled Atkinson Hyperlegible Next font, Fusion style on every OS, and light/dark that follows the system colour scheme live. Progress is now one job timeline (Transcribe, Speakers, Visuals) with per-stage state and elapsed time; the pipeline log moved under a collapsible Details toggle. Progress bars no longer change colour by percentage and now look correct in dark mode.
 - Moved to Transformers 5 (`transformers>=5.13`, verified on 5.18) and `huggingface-hub>=1.0` (was pinned to 0.36.0). Hugging Face token helpers now use `huggingface_hub.get_token()` / `login()` instead of the removed `HfFolder`; persisting a token now validates it against the Hub. Granite 4.0/4.1, Whisper and diarization results are unchanged. Recreate the virtual environment from `requirements.txt` (and re-run `scripts/install_paddle_gpu.sh` for GPU OCR).
 
 ### Added

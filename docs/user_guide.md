@@ -41,9 +41,9 @@ If you run `python main.py` with no mode, you get an interactive launcher menu. 
 - Left sidebar can be collapsed/expanded with the small toggle button in the sidebar header. The choice is remembered.
 - The Transcription screen is built from movable panels around the transcript:
   - **Setup** (File/Live switch, drop zone, model, **More options**), **Progress**, **Hardware**, and **Batch queue**.
-  - Drag a panel by its title bar to move, tab, or float it; drag the gaps between panels to resize; the title-bar buttons float or close a panel.
+  - Drag a panel by its title bar to move, tab, or float it; drag the visible divider bars between panels (they highlight on hover) to resize them, also while **Lock layout** is on; the title-bar buttons float or close a panel.
   - **View > Panels** re-opens closed panels, **Lock layout** stops accidental moves, and **Reset layout** restores the default.
-  - The layout, window size, and sidebar state are saved when you close the app. On windows narrower than 1500 px the Hardware panel starts as a tab beside Setup.
+  - The layout (including panel sizes), window size, and sidebar state are saved shortly after you change them and when you close the app. A narrow Setup panel scrolls sideways instead of clipping its controls. On windows narrower than 1500 px the Hardware panel starts as a tab beside Setup.
 - **Progress** shows one row per stage (Transcribe, Speakers, Visuals) with state and elapsed time; **Details** opens the event log.
 - **Hardware** shows 60-second CPU, memory, GPU, and VRAM traces while a job runs, coloured by the running stage.
 - Speaker labels in the transcript are colour-coded per speaker. While recording live, the timer and Stop button turn red.

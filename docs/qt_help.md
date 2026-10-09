@@ -13,7 +13,7 @@
 
 - **Navigation sidebar**: switch between **Transcription**, **LLM**, and **Settings** screens.
 - **Sidebar toggle**: collapse/expand the left navigation area.
-- **Panels**: the Transcription page is made of movable panels (Setup, Progress, Hardware, Batch queue). Drag a panel by its title bar to move, tab, or float it; drag the gaps between panels to resize; use the title-bar buttons to float or close. **View > Panels** re-opens closed panels, **Lock layout** stops accidental moves, and **Reset layout** restores the default. Your layout is saved when you close the app.
+- **Panels**: the Transcription page is made of movable panels (Setup, Progress, Hardware, Batch queue). Drag a panel by its title bar to move, tab, or float it; drag the visible divider bars between panels (they highlight when you hover) to resize them, even with **Lock layout** on; use the title-bar buttons to float or close. **View > Panels** re-opens closed panels, **Lock layout** stops accidental moves, and **Reset layout** restores the default. Your layout and panel sizes are saved shortly after you change them and when you close the app. In a narrow Setup panel, a scroll bar appears instead of cutting controls off.
 - **Drop zone**: choose a local media file via drag/drop or **Browse Files**.
 - **Model**: supports built-in model names and custom Hugging Face repo IDs.
 - **File / Live switch** (top of the Setup panel):

@@ -439,12 +439,13 @@ def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = No
             font-size: 11pt;
         }}
         QMainWindow::separator {{
-            background: {p.page};
-            width: 6px;
-            height: 6px;
-        }}
-        QMainWindow::separator:hover {{
             background: {p.rule};
+            width: 8px;
+            height: 8px;
+            margin: 0;
+        }}
+        QMainWindow::separator:hover, QMainWindow::separator:pressed {{
+            background: {p.accent};
         }}
         QDockWidget {{
             font-weight: 600;

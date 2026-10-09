@@ -13,7 +13,7 @@ import time
 from _thread import LockType
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QAbstractListModel, QByteArray, QEvent, QModelIndex, QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, QDragLeaveEvent, QDropEvent, QFont, QKeySequence, QPalette
 from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
 from PySide6.QtWidgets import (
@@ -842,7 +842,7 @@ class MainWindow(QMainWindow):
 
         main_surface = QFrame()
         main_surface.setObjectName("MainSurface")
-        main_surface.setMinimumWidth(560)
+        main_surface.setMinimumWidth(360)
         main_layout = QVBoxLayout(main_surface)
         main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(12)
@@ -1311,7 +1311,7 @@ class MainWindow(QMainWindow):
         self.transcription_scroll = QScrollArea()
         self.transcription_scroll.setWidgetResizable(True)
         self.transcription_scroll.setFrameShape(QFrame.NoFrame)
-        self.transcription_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.transcription_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.transcription_scroll.setWidget(setup_content)
 
         self.dock_host = QMainWindow()
@@ -1379,9 +1379,28 @@ class MainWindow(QMainWindow):
         dock.setObjectName(object_name)
         dock.setWidget(widget)
         dock.setFeatures(self._dock_features())
+        dock.installEventFilter(self)
         dock.topLevelChanged.connect(lambda _floating: self._update_transcription_card_columns())
         dock.dockLocationChanged.connect(lambda _area: self._update_transcription_card_columns())
         return dock
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        """Persist the dock layout shortly after the user drags a separator or resizes a dock."""
+        if event.type() == QEvent.Resize and watched in getattr(self, "docks", ()):
+            self._schedule_dock_layout_save()
+        return super().eventFilter(watched, event)
+
+    def _schedule_dock_layout_save(self) -> None:
+        if not getattr(self, "_ui_ready", False):
+            return
+        timer = getattr(self, "_dock_save_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(600)
+            timer.timeout.connect(self._save_dock_layout)
+            self._dock_save_timer = timer
+        timer.start()
 
     def _dock_features(self) -> QDockWidget.DockWidgetFeature:
         if getattr(self, "_docks_locked", False):
@@ -1409,6 +1428,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_default_dock_sizes)
 
     def _apply_default_dock_sizes(self) -> None:
+        if getattr(self, "_dock_sizes_restored", False):
+            return  # a saved layout's sizes win over the deferred defaults queued while building
         if self.hardware_dock.isVisible() and self.dock_host.dockWidgetArea(self.hardware_dock) == Qt.RightDockWidgetArea:
             self.dock_host.resizeDocks([self.setup_dock, self.hardware_dock], [400, 340], Qt.Horizontal)
         else:
@@ -1471,6 +1492,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _reset_dock_layout(self) -> None:
+        self._dock_sizes_restored = False
         self._arrange_default_docks()
         self.lock_layout_action.setChecked(False)
         self._save_dock_layout()
@@ -1490,6 +1512,8 @@ class MainWindow(QMainWindow):
             if not self.dock_host.restoreState(state, DOCK_LAYOUT_VERSION):
                 LOGGER.info("Saved dock layout was not compatible; using the default layout.")
                 self._arrange_default_docks()
+            else:
+                self._dock_sizes_restored = True
         locked = bool(getattr(self.config, "dock_locked", False))
         self.lock_layout_action.setChecked(locked)
         self._set_docks_locked(locked)
@@ -3756,6 +3780,8 @@ class MainWindow(QMainWindow):
                 )
                 event.ignore()
                 return
+        if getattr(self, "_dock_save_timer", None) is not None:
+            self._dock_save_timer.stop()
         self._save_dock_layout()
         self._save_window_geometry()
         self._set_window_title_status(None)

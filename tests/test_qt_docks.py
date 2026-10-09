@@ -4,10 +4,12 @@ import os
 import unittest
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDockWidget
 
 from services.config_service import AppConfig
 from services.model_service import RuntimeInfo
+from ui_qt import theme
 from ui_qt.main_window import MainWindow
 
 
@@ -182,6 +184,59 @@ class DockLayoutTests(unittest.TestCase):
         self.assertFalse(win.advanced_body.isVisibleTo(win.advanced_options_card))
         win.advanced_toggle.setChecked(True)
         self.assertTrue(saved[-1].setup_advanced_expanded)
+
+    def _window_1100(self) -> tuple[MainWindow, list[AppConfig]]:
+        win, saved = self._build_window()
+        win.resize(1100, 700)
+        QApplication.processEvents()
+        return win, saved
+
+    def test_setup_dock_can_be_widened_without_the_transcript_blocking_it(self) -> None:
+        win, _ = self._window_1100()
+        win.dock_host.resizeDocks([win.setup_dock], [450], Qt.Horizontal)
+        QApplication.processEvents()
+        self.assertGreaterEqual(win.setup_dock.width(), 440)
+        self.assertGreaterEqual(win.dock_host.centralWidget().width(), 360)
+
+    def test_resizing_is_still_allowed_when_layout_is_locked(self) -> None:
+        win, _ = self._window_1100()
+        win.lock_layout_action.setChecked(True)
+        win.dock_host.resizeDocks([win.setup_dock], [420], Qt.Horizontal)
+        QApplication.processEvents()
+        self.assertGreaterEqual(win.setup_dock.width(), 410)
+
+    def test_resized_layout_is_saved_after_debounce_and_restored(self) -> None:
+        win, saved = self._window_1100()
+        saved.clear()
+        win._dock_save_timer = None
+        win.dock_host.resizeDocks([win.setup_dock], [470], Qt.Horizontal)
+        QApplication.processEvents()
+        timer = win._dock_save_timer
+        self.assertIsNotNone(timer)
+        self.assertTrue(timer.isActive())
+        timer.timeout.emit()
+        self.assertTrue(saved[-1].dock_layout)
+        win2, _ = self._build_window(saved[-1])
+        self.assertTrue(win2._dock_sizes_restored)  # deferred default sizes must not override
+        win2.resize(1100, 700)  # the offscreen screen may be smaller than the saved window
+        QApplication.processEvents()
+        win2._restore_dock_layout()
+        QApplication.processEvents()
+        self.assertGreaterEqual(win2.setup_dock.width(), 420)
+
+    def test_layout_save_is_not_scheduled_while_building(self) -> None:
+        win, _ = self._build_window()
+        win._ui_ready = False
+        win._dock_save_timer = None
+        win._schedule_dock_layout_save()
+        self.assertIsNone(win._dock_save_timer)
+
+    def test_separator_styling_is_visible_in_every_mode(self) -> None:
+        for mode in ("light", "dark"):
+            qss = theme.build_qss(mode)
+            block = qss.split("QMainWindow::separator {", 1)[1].split("}", 1)[0]
+            self.assertIn("8px", block)
+            self.assertNotIn(theme.PALETTES[mode].page, block)
 
 
 if __name__ == "__main__":

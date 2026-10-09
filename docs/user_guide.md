@@ -117,7 +117,9 @@ In live mode:
   - On: keep the timestamped `YYYY-MM-DD_HHMMSS-live-capture.wav` file after a successful final pass.
   - Off: remove the saved live capture audio after a successful final pass, but keep the session folder, `session.json`, and `final_transcript.txt`.
 - **Timer**: elapsed recorded time for the current session. It freezes while live capture is paused.
-- On CUDA systems, PyScribe checks currently free GPU memory before live capture. If free VRAM appears too low for the selected model, it warns before starting and suggests unloading LM Studio, reducing GPU layers, choosing a smaller Whisper model, or switching to CPU/int8.
+- **Compute**: `Auto` (default, uses the GPU when CUDA is available), `CPU`, or `GPU`. It applies to the live session and its final post-pass, and is remembered between runs. If `GPU` is chosen without CUDA, PyScribe falls back to CPU and says so in the event log.
+- **Precision**: `Auto`, `float16`, or `int8`. `float16` is GPU-only (CPU uses `int8`). The option is hidden for Nemotron, which always uses float16 on GPU and float32 on CPU.
+- When Compute resolves to the GPU, PyScribe checks currently free GPU memory before live capture; choosing `CPU` skips this check. If free VRAM appears too low for the selected model, it warns before starting and suggests unloading LM Studio, reducing GPU layers, choosing a smaller Whisper model, or switching to CPU/int8.
 - Each live session folder contains:
   - `YYYY-MM-DD_HHMMSS-live-capture.wav`
   - `session.json`

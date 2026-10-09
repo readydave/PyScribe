@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import multiprocessing as mp
 import os
@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from services.live_transcription_service import LiveRuntimeChoice, resolve_live_runtime
 from services import (
     AppConfig,
     LiveAudioDevice,
@@ -401,6 +402,7 @@ class TranscriptionWorker(QObject):
         language: str | None,
         hotwords: str | None = None,
         batched: bool = False,
+        runtime_override: RuntimeInfo | None = None,
     ) -> None:
         super().__init__()
         self.media_path: str = media_path
@@ -417,7 +419,7 @@ class TranscriptionWorker(QObject):
         self.visual_scope: str = visual_scope
         self.visual_sample_seconds: float = visual_sample_seconds
         self.language: str | None = language
-        self.runtime: RuntimeInfo = detect_runtime()
+        self.runtime: RuntimeInfo = runtime_override or detect_runtime()
         self._lock: LockType = threading.Lock()
         self._cancel_requested: bool = False
         self._force_stop_requested: bool = False
@@ -926,6 +928,23 @@ class MainWindow(QMainWindow):
         self.live_timer_label = QLabel("00:00:00")
         self.live_timer_label.setObjectName("metricsLabel")
         live_grid.addWidget(self.live_timer_label, 4, 1)
+        live_grid.addWidget(QLabel("Compute"), 5, 0)
+        self.live_device_mode_combo = QComboBox()
+        for label, value in (("Auto", "auto"), ("CPU", "cpu"), ("GPU", "gpu")):
+            self.live_device_mode_combo.addItem(label, value)
+        self.live_device_mode_combo.setCurrentIndex(max(self.live_device_mode_combo.findData(self.config.live_device_mode), 0))
+        self.live_device_mode_combo.setToolTip("Device for live transcription and its final post-pass.")
+        live_grid.addWidget(self.live_device_mode_combo, 5, 1)
+        self.live_compute_label = QLabel("Precision")
+        live_grid.addWidget(self.live_compute_label, 6, 0)
+        self.live_compute_combo = QComboBox()
+        for label, value in (("Auto", "auto"), ("float16", "float16"), ("int8", "int8")):
+            self.live_compute_combo.addItem(label, value)
+        self.live_compute_combo.setCurrentIndex(max(self.live_compute_combo.findData(self.config.live_compute_type), 0))
+        self.live_compute_combo.setToolTip("Ignored for Nemotron, which always uses float16 on GPU and float32 on CPU.")
+        live_grid.addWidget(self.live_compute_combo, 6, 1)
+        self.live_device_mode_combo.currentIndexChanged.connect(self._on_live_runtime_changed)
+        self.live_compute_combo.currentIndexChanged.connect(self._on_live_runtime_changed)
         live_layout.addLayout(live_grid)
         self.live_keep_audio_checkbox = QCheckBox("Keep recorded audio after completion")
         self.live_keep_audio_checkbox.setChecked(bool(self.config.live_keep_audio_on_success))
@@ -1392,6 +1411,8 @@ class MainWindow(QMainWindow):
             *self.input_segment_buttons,
             self.live_source_combo,
             self.live_device_combo,
+            self.live_device_mode_combo,
+            self.live_compute_combo,
             self.live_output_dir_input,
             self.live_output_dir_btn,
             self.live_title_input,
@@ -2645,10 +2666,11 @@ class MainWindow(QMainWindow):
             diar_backend=diar_backend,
         )
 
+        live_runtime = self._resolve_live_runtime(model_name)
         options = LiveSessionOptions(
             model_name=model_name,
-            device=self.runtime.device,
-            compute_type=self.runtime.compute_type,
+            device=live_runtime.device,
+            compute_type=live_runtime.compute_type,
             language=None,
             source_mode=self._selected_live_source_mode(),
             input_device_id=live_device.id,
@@ -2722,11 +2744,29 @@ class MainWindow(QMainWindow):
         self._update_live_elapsed_label()
         self._update_live_mode_ui()
 
+    def _resolve_live_runtime(self, model_name: str) -> LiveRuntimeChoice:
+        return resolve_live_runtime(
+            str(self.live_device_mode_combo.currentData() or "auto"),
+            str(self.live_compute_combo.currentData() or "auto"),
+            self.runtime,
+            model_name,
+        )
+
+    @Slot()
+    def _on_live_runtime_changed(self) -> None:
+        self._save_config(
+            live_device_mode=str(self.live_device_mode_combo.currentData() or "auto"),
+            live_compute_type=str(self.live_compute_combo.currentData() or "auto"),
+        )
+
     def _confirm_live_vram_preflight(self, model_name: str) -> bool:
+        live_runtime = self._resolve_live_runtime(model_name)
+        if live_runtime.note:
+            self._append_terminal_log(live_runtime.note)
         result = assess_live_vram_preflight(
             model_name,
-            device=self.runtime.device,
-            compute_type=self.runtime.compute_type,
+            device=live_runtime.device,
+            compute_type=live_runtime.compute_type,
         )
         if result.status == "unavailable":
             LOGGER.info("Live VRAM preflight unavailable: %s", result.message)
@@ -2894,6 +2934,11 @@ class MainWindow(QMainWindow):
             visual_scope="slides_only",
             visual_sample_seconds=1.0,
             language=session.options.language,
+            runtime_override=replace(
+                self.runtime,
+                device=session.options.device,
+                compute_type=session.options.compute_type,
+            ),
         )
 
     @Slot()
@@ -3097,6 +3142,7 @@ class MainWindow(QMainWindow):
         language: str | None,
         hotwords: str | None = None,
         batched: bool = False,
+        runtime_override: RuntimeInfo | None = None,
     ) -> None:
         self.worker_thread = QThread()
         self.worker = TranscriptionWorker(
@@ -3114,6 +3160,7 @@ class MainWindow(QMainWindow):
             language=language,
             hotwords=hotwords,
             batched=batched,
+            runtime_override=runtime_override,
         )
         self._update_service_visibility()
         self.worker.moveToThread(self.worker_thread)
@@ -3462,6 +3509,10 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_model_selection_changed(self, text: str) -> None:
         model_name = normalize_model_name(text.strip())
+        if hasattr(self, "live_compute_combo"):
+            fixed = bool(model_name) and resolve_transcription_model(model_name).backend_kind == "nemotron_streaming"
+            self.live_compute_combo.setVisible(not fixed)
+            self.live_compute_label.setVisible(not fixed)
         recommended = recommend_model(self.runtime)
         if not hasattr(self, "model_hint_label"):
             return

@@ -33,8 +33,8 @@ and practical support for GPU-heavy speech/OCR workloads.
 
 - `main.py` is the primary entry point. It handles the interactive launcher, Qt mode, listener mode, logging setup, runtime environment setup, and listener security validation.
 - `app.py` builds the Gradio listener UI. It uses lazy runtime initialization so importing listener code does not immediately load heavyweight ML dependencies.
-- `ui_qt/` contains the PySide6 desktop UI, including the main window, benchmark dialog, LLM connection dialog, and LLM post-process dialog.
-- `services/` contains shared business logic for both frontends. Important services include transcription, live transcription, model/runtime selection, model downloads, config persistence, prompt templates, LLM profiles, LLM post-processing, listener security, logging, and OCR/multimodal helpers.
+- `ui_qt/` contains the PySide6 desktop UI: the main window (movable dock panels), `theme.py` (QSS, bundled font, light/dark), `theme_dialog.py` (colour theme editor), `job_stages.py` and `job_timeline.py` (progress timeline), `hw_panel.py` (hardware traces), `speaker_highlight.py`, the benchmark dialog, the LLM connection dialog, and the LLM post-process dialog.
+- `services/` contains shared business logic for both frontends. Important services include transcription, live transcription, model/runtime selection, model downloads, config persistence, prompt templates, LLM profiles, LLM post-processing (local, LAN, and hosted providers; long-transcript splitting), colour themes (`ui_themes.py`, `ui_tokens.py`; Qt-free so the Listener can use them), the MCP server (`mcp_server.py`, `mcp_service.py`), listener security, logging, and OCR/multimodal helpers.
 - \`diarization.py\` and \`diar_backends.py\` contain diarization diagnostics and backend integration for pyannote.
 
 - `models.py` defines curated speech model tiers, labels, and hardware-aware ranking helpers.
@@ -48,7 +48,7 @@ and practical support for GPU-heavy speech/OCR workloads.
 - Batch transcription: Qt batch queue supports drag-and-drop or folder selection for multiple media files, processing them sequentially with status tracking and overall progress visualization.
 - Live desktop transcription: Qt live mode records microphone or loopback audio into a recoverable session, shows rolling transcript updates, supports pause/resume, and runs a final cleanup pass on stop. **Session titles** can be provided to automatically name output folders and files.
 - Listener transcription: `python main.py serve --port 7860` starts the Gradio listener. Localhost is the default; LAN/public exposure requires explicit flags and authentication.
-- LLM post-processing: users configure local or LAN LLM profiles, choose prompt templates, add optional text/image context, preview payloads, and process current or saved transcripts.
+- LLM post-processing: users configure local, LAN, or hosted (cloud) LLM profiles, choose prompt templates, add optional text/image context, preview payloads, and process current or saved transcripts.
 - Developer workflow: create a local venv, install `requirements.txt`, run CI smoke checks, then run targeted pytest modules for the changed services/UI.
 - Packaging workflow: `pyproject.toml` exposes the `pyscribe` console script via `main:main`.
 
@@ -101,7 +101,8 @@ Private or short-term working items belong in local `TODO.md`.
 
 - Improve packaging/distribution for non-developer installs.
 - Add more structured diagnostics for GPU/OCR/model availability problems.
-- Broaden LLM profile/provider ergonomics without weakening endpoint-scope policy.
+- Broaden LLM profile/provider ergonomics without weakening endpoint-scope policy (cloud scope is opt-in per profile, https only, with a confirmation).
+- Finish the deferred UX items: Load/Save rows in the Qt progress timeline, a Listener stage strip, an optional notes-folder (Obsidian) export, and on-device checks (Windows, Wayland floating docks, GPU hardware panel).
 
 ## Known Risks / Fragile Areas
 
@@ -111,7 +112,8 @@ Private or short-term working items belong in local `TODO.md`.
 - CUDA/OCR runtime setup: `services/runtime_env_service.py`, pyannote subprocess isolation, in-memory `soundfile` audio loading for pyannote, the gated `community-1` model, PaddleOCR/Tesseract paths (PaddleOCR 3.x runs on GPU when the CUDA `paddlepaddle-gpu` build from `scripts/install_paddle_gpu.sh` is installed and enough VRAM is free, otherwise on CPU where `auto` prefers RapidOCR), and Linux loader environment changes.
 - File path handling: uploaded media, temporary files, saved transcripts, live capture folders, and user prompt templates.
 - Config compatibility: `services/config_service.py` should preserve older config files and unknown additive behavior where practical.
-- LLM network policy: local vs LAN profile scope, CIDR restrictions, TLS verification behavior, and concurrent local workload checks.
+- LLM network policy: local vs LAN vs cloud profile scope, CIDR restrictions, TLS verification behavior (always on for cloud), credential-bearing requests never follow redirects, cloud profiles hidden from the Listener by default, and concurrent local workload checks.
+- MCP server: `python main.py mcp` (stdio only). File access is limited to audio/video inside allowed folders, only downloaded models are used, and transcript text returned to a client is untrusted content.
 - UI regressions: Qt layout resizing, live mode state transitions, and dialog close/cancel behavior.
 
 ## Security Notes

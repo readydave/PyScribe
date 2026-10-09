@@ -33,14 +33,21 @@ If you run `python main.py` with no mode, you get an interactive launcher menu. 
 
 ### Layout + Navigation
 
-- The main Qt window uses a left navigation sidebar and a right content stack:
+- The main Qt window uses a left navigation sidebar and a content stack:
   - **Transcription**
   - **LLM**
   - **Settings**
 - **New Project** returns to the Transcription screen.
-- Left sidebar can be collapsed/expanded with the small toggle button in the sidebar header.
-- Transcription screen includes a right-side status rail that can also be hidden/shown from the page header.
-- The app now opens sized to the available screen area and remains fully resizable.
+- Left sidebar can be collapsed/expanded with the small toggle button in the sidebar header. The choice is remembered.
+- The Transcription screen is built from movable panels around the transcript:
+  - **Setup** (File/Live switch, drop zone, model, **More options**), **Progress**, **Hardware**, and **Batch queue**.
+  - Drag a panel by its title bar to move, tab, or float it; drag the gaps between panels to resize; the title-bar buttons float or close a panel.
+  - **View > Panels** re-opens closed panels, **Lock layout** stops accidental moves, and **Reset layout** restores the default.
+  - The layout, window size, and sidebar state are saved when you close the app. On windows narrower than 1500 px the Hardware panel starts as a tab beside Setup.
+- **Progress** shows one row per stage (Transcribe, Speakers, Visuals) with state and elapsed time; **Details** opens the event log.
+- **Hardware** shows 60-second CPU, memory, GPU, and VRAM traces while a job runs, coloured by the running stage.
+- Speaker labels in the transcript are colour-coded per speaker. While recording live, the timer and Stop button turn red.
+- The app opens sized to the available screen area and remains fully resizable.
 
 ### File Selection
 
@@ -58,7 +65,7 @@ If you run `python main.py` with no mode, you get an interactive launcher menu. 
 
 ### Input Modes
 
-- **Input** selector:
+- **File / Live** switch (top of the Setup panel):
   - `File`: existing file-based transcription workflow.
   - `Live`: Qt-only live capture workflow (Linux-first).
 - Live mode hides the drop zone and disables visual OCR controls.
@@ -223,10 +230,13 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
   - Benchmark selected models using bundled sample audio.
   - Shortcut: `Ctrl+B`
 - **LLM Connections...**
-  - Configure enabled local/LAN LLM profiles.
-  - Supports `ollama`, `lm_studio`, and OpenAI-compatible endpoints.
+  - Configure enabled local, LAN, and hosted (`cloud`) LLM profiles.
+  - Supports `ollama`, `lm_studio`, OpenAI-compatible endpoints, and Anthropic (native Claude API).
+  - **Add Cloud Profile** adds a starting point for Claude, OpenAI, Gemini, or OpenRouter. **Test Connection** lists the models your key can use; any model your provider offers can be the default.
+  - Cloud profiles must use `https://`, need an API key and a ticked confirmation that transcripts and images are sent to the provider, and always verify TLS.
   - API key field supports `env:VAR_NAME` references for secure persisted config.
   - Direct API keys are treated as session-only and are not written to disk.
+  - **Context tokens**, **Max output tokens**, and **Temperature** are per profile (empty = automatic or provider default).
   - Includes subnet detection and LAN scan utilities to discover reachable local-network endpoints.
   - Shortcut: `Ctrl+Shift+L`
 - **LLM Post-Process...**
@@ -238,11 +248,17 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 
 ### View
 
+- **Panels**
+  - Toggle each panel, **Lock layout**, and **Reset layout** (see Layout + Navigation).
 - **Theme**
   - `System`
   - `Light`
   - `Dark`
   - Theme preference is persisted across launches.
+- **Colour theme**
+  - Four presets (Iron-gall, Verdigris, Ochre, Graphite), each with light and dark versions, plus your own.
+  - **Edit themes...** opens the editor: click a swatch to change a colour with live preview; text colours that would be hard to read are adjusted automatically; presets can't be changed, so editing one saves a copy; custom themes can be duplicated, renamed, deleted, exported, and imported (`.json`).
+  - The Listener uses the same colour theme when it starts.
 
 ### Help
 
@@ -283,6 +299,22 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 - Concurrency policy:
   - Local profiles are blocked while local transcription is in progress.
   - LAN profiles may run concurrently only if profile concurrent mode is enabled.
+  - Cloud profiles do not compete for local compute and may run at any time.
+- Long transcripts:
+  - Each profile has a context size (automatic by default: 16k for Ollama, 8k for LM Studio and other local servers, large for hosted models).
+  - A transcript that does not fit is split into parts, each part is processed, and the results are merged; the status line shows progress.
+  - A reply that stops at the output limit is flagged so you know it may be cut off.
+- The Listener hides cloud profiles unless `llm_allow_cloud_in_listener` is `true` in `~/.pyscribe_config.json` (anyone who can open the Listener could otherwise use your key).
+
+### Settings and start-up defaults
+
+- **Settings > Start-up defaults**: default model (empty = last model used), start in File or Live, names/terms, faster GPU decoding, and the folder file dialogs open in. **Use current settings as defaults** copies the Transcription page's current choices.
+- Remembered automatically: run mode, speaker and visual options (saved when a job starts), live capture choices, theme and colour theme, panel layout, window size, and sidebar state.
+- **Settings > AI connections** opens the LLM Connections dialog. API keys are set per connection.
+
+### MCP server
+
+- `python main.py mcp` runs PyScribe as an MCP server over stdio so Claude Code, Codex, and other MCP clients can transcribe audio and read transcripts. See `docs/mcp.md`.
 
 ## 4) Gradio Listener Features
 

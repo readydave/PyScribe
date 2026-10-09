@@ -8,6 +8,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - `docs/user_guide.md` - full feature guide for Qt, Listener, CLI, and environment settings.
 - `docs/qt_help.md` - in-app Qt help content.
 - `docs/mcp.md` - using PyScribe as an MCP server from Claude Code, Codex, and other clients.
+- `docs/handoff_2026-10-08_ux-ai-mcp.md` - state of the UX/theme/AI/MCP work, open items, and notes for the next session.
 - `docs/upgrade_2026-10.md` - October 2026 runtime/accuracy upgrade: results, decisions, setup notes, how to reproduce.
 - `CONTRIBUTING.md` - development and contribution workflow.
 - `SECURITY.md` - vulnerability reporting and security guidance.
@@ -97,8 +98,10 @@ See `CHANGELOG.md` for the full unreleased change list. Notable current updates 
 - Shared listener security/auth validation, restricted non-local/public listener exposure, and rejection of legacy `--auth-pass` CLI secrets.
 - Consolidated `pyscribe.log` logging with timestamped archive rotation.
 - Qt dashboard/sidebar refresh, responsive transcription cards, hide/show side panels, clickable drop zone, and terminal-style live pipeline logs.
+- Qt dashboard rebuilt as movable panels with a job-stage timeline, hardware traces, light/dark themes with four colour presets and a theme editor, speaker-coloured transcripts, working start-up defaults, and a refreshed Listener look (see `CHANGELOG.md`).
+- Hosted AI providers (Claude, OpenAI, Gemini, OpenRouter) alongside local and LAN models, with automatic splitting of long transcripts, and an MCP server for Claude Code, Codex, and other clients (`docs/mcp.md`).
 - Qt and Listener LLM post-processing with prompt templates, user template management, payload preview, optional image attachments, OCR fallback, and safe cancellation.
-- LLM connection profile diagnostics with local/LAN scope policy, subnet detection, LAN scan, LM Studio support, profile rename, and secure `env:VAR_NAME` API key references.
+- LLM connection profile diagnostics with local/LAN/cloud scope policy, subnet detection, LAN scan, LM Studio support, profile rename, and secure `env:VAR_NAME` API key references.
 
 ## Requirements
 

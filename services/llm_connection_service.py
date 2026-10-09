@@ -303,8 +303,26 @@ def run_connection_test(profile: LLMConnectionProfile) -> ConnectionTestResult:
     return _test_openai_compatible(profile=profile, stages=stages)
 
 
-def get_failure_suggestions(code: str) -> tuple[str, ...]:
-    """Return user-facing suggestions for a failure code."""
+_CLI_FAILURE_SUGGESTIONS: dict[str, tuple[str, ...]] = {
+    "auth_failed": (
+        "Run 'claude' in a terminal and sign in with your Claude account, then try again.",
+        "PyScribe uses the CLI's own sign-in; API-key environment variables are not passed to it.",
+    ),
+    "cli_not_installed": (
+        "Install Claude Code, run 'claude' once in a terminal and sign in with your own account.",
+        "Make sure the 'claude' command is on the PATH PyScribe starts with.",
+    ),
+    "timeout": (
+        "The Claude Code CLI did not answer in time. Run 'claude' in a terminal to check it responds.",
+        "Increase the timeout in this profile if your connection is slow.",
+    ),
+}
+
+
+def get_failure_suggestions(code: str, *, provider: str | None = None) -> tuple[str, ...]:
+    """Return user-facing suggestions for a failure code, tailored to CLI providers when given."""
+    if provider in CLI_PROVIDERS and code in _CLI_FAILURE_SUGGESTIONS:
+        return _CLI_FAILURE_SUGGESTIONS[code]
     mapping: dict[str, tuple[str, ...]] = {
         "invalid_url": (
             "Use a full URL like http://127.0.0.1:11434 or http://192.168.1.20:1234/v1.",
@@ -808,7 +826,7 @@ def _fail_result(
         status="fail",
         code=code,
         detail=detail,
-        suggestions=get_failure_suggestions(code),
+        suggestions=get_failure_suggestions(code, provider=profile.provider),
     )
     stages.append(stage_result)
     LOGGER.info(

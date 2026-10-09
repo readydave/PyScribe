@@ -226,6 +226,16 @@ class LLMConnectionServiceTests(unittest.TestCase):
         suggestions = get_failure_suggestions("timeout")
         self.assertGreaterEqual(len(suggestions), 1)
 
+    def test_claude_cli_auth_failed_suggestions(self) -> None:
+        cli = get_failure_suggestions("auth_failed", provider="claude_cli")
+        self.assertEqual(
+            cli[0], "Run 'claude' in a terminal and sign in with your Claude account, then try again."
+        )
+        self.assertIn("API-key environment variables are not passed", cli[1])
+        generic = get_failure_suggestions("auth_failed")
+        self.assertEqual(get_failure_suggestions("auth_failed", provider="anthropic"), generic)
+        self.assertIn("API key/token", generic[0])
+
 
 if __name__ == "__main__":
     unittest.main()

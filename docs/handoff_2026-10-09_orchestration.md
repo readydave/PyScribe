@@ -86,7 +86,6 @@ See local `TODO.md`. In short:
   - a real `claude_cli` post-process run (sign-in, rate limit, cancel)
 - Optional: notes-folder (Obsidian) export (parked by the maintainer).
 - Known gaps:
-  - The `auth_failed` suggestion text is shared with the HTTP providers and still mentions an API key or token for `claude_cli`; the CLI's own detail line says to sign in.
   - A background task that runs longer than the 2 s quit drain can still trigger a QThread warning at exit; a warning is logged.
 
 ## Practical notes

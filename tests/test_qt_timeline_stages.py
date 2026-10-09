@@ -12,6 +12,7 @@ from services.config_service import AppConfig
 from services.model_service import RuntimeInfo
 from ui_qt.job_stages import Stage
 from ui_qt.main_window import MainWindow
+from qt_close import close_and_drain
 
 
 class TimelineStageTests(unittest.TestCase):
@@ -34,7 +35,7 @@ class TimelineStageTests(unittest.TestCase):
         window = MainWindow()
         window.show()
         QApplication.processEvents()
-        self.addCleanup(window.close)
+        self.addCleanup(close_and_drain, window)
         return window
 
     def test_load_and_save_rows_hidden_when_idle(self) -> None:

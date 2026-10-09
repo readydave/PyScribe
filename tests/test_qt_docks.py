@@ -11,6 +11,7 @@ from services.config_service import AppConfig
 from services.model_service import RuntimeInfo
 from ui_qt import theme
 from ui_qt.main_window import MainWindow
+from qt_close import close_and_drain
 
 
 class DockLayoutTests(unittest.TestCase):
@@ -34,7 +35,7 @@ class DockLayoutTests(unittest.TestCase):
         window = MainWindow()
         window.show()
         QApplication.processEvents()
-        self.addCleanup(window.close)
+        self.addCleanup(close_and_drain, window)
         return window, saved
 
     def test_default_layout_has_all_panels_visible(self) -> None:

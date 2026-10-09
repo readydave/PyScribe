@@ -18,6 +18,7 @@ from services import AppConfig
 from services.live_vram_service import LiveVramPreflight
 from services.model_service import RuntimeInfo
 from ui_qt.main_window import MainWindow
+from qt_close import close_and_drain
 
 
 class _FakeLiveSession:
@@ -256,7 +257,7 @@ class QtLiveModeTests(unittest.TestCase):
         window = MainWindow()
         window.show()
         QApplication.processEvents()
-        self.addCleanup(window.close)
+        self.addCleanup(close_and_drain, window)
         return window
 
     def test_live_mode_toggle_updates_visibility(self) -> None:

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication
 from services import AppConfig
 from services.model_service import RuntimeInfo
 from ui_qt.main_window import MainWindow
+from qt_close import close_and_drain
 
 
 class OcrFallbackControlTests(unittest.TestCase):
@@ -37,7 +38,7 @@ class OcrFallbackControlTests(unittest.TestCase):
             item.start()
             self.addCleanup(item.stop)
         window = MainWindow()
-        self.addCleanup(window.close)
+        self.addCleanup(close_and_drain, window)
         return window, saved
 
     def test_combo_defaults_to_auto_and_loads_saved_value(self) -> None:

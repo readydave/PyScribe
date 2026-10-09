@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 from services.config_service import AppConfig
 from services.model_service import RuntimeInfo
 from ui_qt.main_window import TRANSCRIPT_MIN_WIDTH, MainWindow
+from qt_close import close_and_drain
 
 
 class ActionRowFitTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class ActionRowFitTests(unittest.TestCase):
             self.addCleanup(item.stop)
         window = MainWindow()
         window.show()
-        self.addCleanup(window.close)
+        self.addCleanup(close_and_drain, window)
         return window
 
     def _settle(self, win: MainWindow, width: int, height: int) -> None:

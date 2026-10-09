@@ -677,6 +677,7 @@ class DiarBackendProbeWorker(QObject):
 DOCK_LAYOUT_VERSION = 1
 NARROW_WINDOW_WIDTH = 1500
 TRANSCRIPT_MIN_WIDTH = 300
+DIAR_PROBE_CLOSE_TIMEOUT_MS = 15000
 
 
 class MainWindow(QMainWindow):
@@ -709,6 +710,8 @@ class MainWindow(QMainWindow):
         self._diar_backends_resolved: bool = False
         self._diar_probe_status_before: str = ""
         self._diar_probe_thread: QThread | None = None
+        self._close_pending: bool = False
+        self._close_finalized: bool = False
         self._diar_probe_worker: DiarBackendProbeWorker | None = None
         self.theme_mode: str = self._sanitize_theme_mode(getattr(self.config, "theme_mode", "system"))
         self._current_run_mode: str = "full"
@@ -2035,6 +2038,8 @@ class MainWindow(QMainWindow):
         self._diar_probe_worker.finished.connect(self._on_diar_backend_probe_finished)
         self._diar_probe_worker.finished.connect(self._diar_probe_thread.quit)
         self._diar_probe_thread.finished.connect(self._on_diar_backend_probe_thread_finished)
+        # Connected up front, after the release slot: a probe that ends while closeEvent is still saving must not be missed.
+        self._diar_probe_thread.finished.connect(self._finish_deferred_close)
         self._diar_probe_thread.finished.connect(self._diar_probe_thread.deleteLater)
         self._diar_probe_thread.start()
 
@@ -3770,25 +3775,59 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
-        if self._diar_probe_thread and self._diar_probe_thread.isRunning():
-            self.status_label.setText("Waiting for speaker backend initialization to finish...")
-            self._diar_probe_thread.quit()
-            if not self._diar_probe_thread.wait(15000):
-                QMessageBox.information(
-                    self,
-                    "Initializing backends",
-                    "Speaker backend initialization is still running. Please try closing again in a few seconds.",
-                )
-                event.ignore()
-                return
+        if self._close_finalized:
+            event.accept()  # deferred close: state was saved when the close began
+            return
+        if self._close_pending:
+            event.ignore()
+            return
+        probe_running = bool(self._diar_probe_thread and self._diar_probe_thread.isRunning())
         if getattr(self, "_dock_save_timer", None) is not None:
             self._dock_save_timer.stop()
         self._save_dock_layout()
         self._save_window_geometry()
         self._set_window_title_status(None)
-        LOGGER.info("Qt close accepted")
         self.stop_hw_monitor()
+        # Re-check: the probe may have ended while the saves above ran (then there is nothing left to wait for).
+        if probe_running and self._diar_probe_thread is not None and self._diar_probe_thread.isRunning():
+            event.ignore()
+            self._begin_deferred_close()
+            return
+        LOGGER.info("Qt close accepted")
         event.accept()
+
+    def _begin_deferred_close(self) -> None:
+        """Hide now and finish closing once the (uncancellable) diarization probe thread ends."""
+        LOGGER.info("Qt close deferred until the speaker backend probe finishes.")
+        self._close_pending = True
+        self._quit_on_last_window_closed = QApplication.quitOnLastWindowClosed()
+        QApplication.setQuitOnLastWindowClosed(False)
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(self._on_deferred_close_timeout)
+        self._close_timer.start(DIAR_PROBE_CLOSE_TIMEOUT_MS)
+        for dock in self.docks:
+            if dock.isFloating():
+                dock.hide()
+        self.hide()
+
+    @Slot()
+    def _finish_deferred_close(self) -> None:
+        if not self._close_pending:
+            return
+        self._close_timer.stop()
+        self._close_pending = False
+        self._close_finalized = True
+        QApplication.setQuitOnLastWindowClosed(self._quit_on_last_window_closed)
+        self.close()
+        if self._quit_on_last_window_closed and QThread.currentThread().loopLevel() > 0:
+            QApplication.quit()  # closing an already-hidden window does not trigger quit-on-last-window-closed
+
+    @Slot()
+    def _on_deferred_close_timeout(self) -> None:
+        LOGGER.warning("Speaker backend probe still running %d ms after close; exiting without it.", DIAR_PROBE_CLOSE_TIMEOUT_MS)
+        logging.shutdown()
+        os._exit(0)
 
     def _hf_token_status_text(self) -> str:
         return "HF token: configured" if get_hf_token() else "HF token: not configured"

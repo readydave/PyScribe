@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from services.config_service import AppConfig
 from services.model_service import RuntimeInfo
 from ui_qt.main_window import MainWindow
+from qt_close import close_and_drain
 
 
 class NewProjectTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class NewProjectTests(unittest.TestCase):
             item.start()
             self.addCleanup(item.stop)
         window = MainWindow()
-        self.addCleanup(window.close)
+        self.addCleanup(close_and_drain, window)
         return window
 
     def _fill(self, win: MainWindow) -> None:

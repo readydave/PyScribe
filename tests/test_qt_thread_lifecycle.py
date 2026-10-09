@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import unittest
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
 from ui_qt.thread_lifecycle import release_worker
@@ -67,10 +68,11 @@ class ThreadLifecycleTests(unittest.TestCase):
             state["worker"] = None  # dropped here, on the main thread
 
         thread.finished.connect(on_finished)
-        thread.finished.connect(lambda: QTimer.singleShot(0, QApplication.quit))
         thread.start()
-        QTimer.singleShot(5000, QApplication.quit)
-        self._app.exec()
+        end = time.monotonic() + 5.0  # pump events directly: a stray quit() from another test must not end this wait
+        while state["worker"] is not None and time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.01)
         thread.wait(2000)
         self.assertIsNone(state["worker"])
         self.assertEqual(_destroyed_on, [threading.get_ident()])

@@ -98,6 +98,7 @@ from ui_qt.flow_layout import FlowLayout
 from ui_qt.hw_panel import HardwarePanel
 from ui_qt.job_stages import STAGE_ORDER, Stage, JobTracker
 from ui_qt.job_timeline import JobTimeline, set_state
+from ui_qt.thread_lifecycle import release_worker
 from ui_qt.speaker_highlight import SpeakerHighlighter
 from ui_qt.theme_dialog import ThemeEditorDialog
 from ui_qt.llm_connection_dialog import LLMConnectionsDialog
@@ -2033,7 +2034,6 @@ class MainWindow(QMainWindow):
         self._diar_probe_thread.started.connect(self._diar_probe_worker.run)
         self._diar_probe_worker.finished.connect(self._on_diar_backend_probe_finished)
         self._diar_probe_worker.finished.connect(self._diar_probe_thread.quit)
-        self._diar_probe_worker.finished.connect(self._diar_probe_worker.deleteLater)
         self._diar_probe_thread.finished.connect(self._on_diar_backend_probe_thread_finished)
         self._diar_probe_thread.finished.connect(self._diar_probe_thread.deleteLater)
         self._diar_probe_thread.start()
@@ -2077,8 +2077,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_diar_backend_probe_thread_finished(self) -> None:
+        release_worker(self._diar_probe_thread)
         self._diar_probe_thread = None
-        self._diar_probe_worker = None
+        self._diar_probe_worker = None  # dropped on the main thread, never destroyed on the probe thread
 
     def set_media_path(self, path: str) -> None:
         if not os.path.isfile(path):

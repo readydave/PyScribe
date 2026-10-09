@@ -49,6 +49,7 @@ from services import (
     update_user_prompt_template,
 )
 from ui_qt import theme
+from ui_qt.thread_lifecycle import release_worker
 
 _TEXT_FILE_EXTENSIONS = {".txt", ".md", ".markdown", ".log", ".rtf"}
 _IMAGE_FILE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff"}
@@ -1054,8 +1055,6 @@ class LLMPostprocessDialog(QDialog):
         self._postprocess_worker.failed.connect(self._on_postprocess_failed)
         self._postprocess_worker.finished.connect(self._postprocess_thread.quit)
         self._postprocess_worker.failed.connect(self._postprocess_thread.quit)
-        self._postprocess_worker.finished.connect(self._postprocess_worker.deleteLater)
-        self._postprocess_worker.failed.connect(self._postprocess_worker.deleteLater)
         self._postprocess_thread.finished.connect(self._on_postprocess_thread_finished)
         self._postprocess_thread.finished.connect(self._postprocess_thread.deleteLater)
 
@@ -1177,8 +1176,9 @@ class LLMPostprocessDialog(QDialog):
 
     @Slot()
     def _on_postprocess_thread_finished(self) -> None:
+        release_worker(self._postprocess_thread)
         self._postprocess_thread = None
-        self._postprocess_worker = None
+        self._postprocess_worker = None  # dropped on the main thread, never destroyed on the worker thread
         self._complete_pending_close_if_ready()
 
     def _finalize_postprocess_run(self) -> None:

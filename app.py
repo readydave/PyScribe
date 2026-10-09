@@ -4,6 +4,7 @@
 import argparse
 import base64
 import functools
+import html
 from collections.abc import Iterator
 import datetime
 import logging
@@ -22,6 +23,7 @@ from services.listener_security_service import (
     validate_listener_security,
 )
 import services as pyscribe_services
+from services.job_stages import ACTIVE, DISABLED, DONE, FAILED, PENDING, STAGE_LABELS, STAGE_ORDER, Stage, StageInfo
 from services.runtime_compat import ensure_platform_sys_version_compat
 from services.ui_themes import DEFAULT_THEME_ID, Palette, resolve
 from services.ui_tokens import FONT_DIR, FONT_FAMILY, FONT_FILES
@@ -96,6 +98,35 @@ def _token_css(light: Palette, dark: Palette) -> str:
     return f"""
 :root {{ --pyscribe-bar-active: {light.bar_active}; --pyscribe-bar-done: {light.done}; --pyscribe-rule: {light.rule}; --pyscribe-ink: {light.ink}; }}
 body.dark, .dark {{ --pyscribe-bar-active: {dark.bar_active}; --pyscribe-bar-done: {dark.done}; --pyscribe-rule: {dark.rule}; --pyscribe-ink: {dark.ink}; }}
+"""
+
+
+def _stage_strip_css(light: Palette, dark: Palette) -> str:
+    def vars_(p: Palette) -> str:
+        return (
+            f"--pyscribe-stage-active: {p.bar_active}; --pyscribe-stage-done: {p.done}; "
+            f"--pyscribe-stage-failed: {p.failed_text}; --pyscribe-stage-off-bg: {p.disabled_bg}; "
+            f"--pyscribe-stage-off-text: {p.disabled_text}; --pyscribe-stage-muted: {p.muted}; --pyscribe-stage-card: {p.card};"
+        )
+
+    return f"""
+:root {{ {vars_(light)} }}
+body.dark, .dark {{ {vars_(dark)} }}
+.pyscribe-stage-strip {{ display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
+.pyscribe-stage {{
+  padding: 3px 10px;
+  border: 1px solid var(--pyscribe-rule);
+  border-radius: 999px;
+  background: var(--pyscribe-stage-card);
+  color: var(--pyscribe-stage-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}}
+.pyscribe-stage-active {{ border-color: var(--pyscribe-stage-active); color: var(--pyscribe-stage-active); font-weight: 600; }}
+.pyscribe-stage-done {{ border-color: var(--pyscribe-stage-done); color: var(--pyscribe-stage-done); }}
+.pyscribe-stage-failed {{ border-color: var(--pyscribe-stage-failed); color: var(--pyscribe-stage-failed); font-weight: 600; }}
+.pyscribe-stage-disabled {{ background: var(--pyscribe-stage-off-bg); color: var(--pyscribe-stage-off-text); opacity: 0.7; }}
+.pyscribe-stage-note {{ flex-basis: 100%; color: var(--pyscribe-stage-failed); font-size: var(--text-sm); }}
 """
 
 
@@ -220,7 +251,7 @@ html { font-size: calc(16px * var(--pyscribe-text-scale, 1)); }
 def build_css(theme_id: str | None = None, custom_themes: list[dict] | None = None) -> str:
     """Listener stylesheet for the chosen colour theme."""
     light, dark = _theme_palettes(theme_id, custom_themes)
-    return _font_face_css() + _token_css(light, dark) + _progress_css() + _BASE_CSS
+    return _font_face_css() + _token_css(light, dark) + _progress_css() + _stage_strip_css(light, dark) + _BASE_CSS
 
 
 CUSTOM_CSS = build_css()
@@ -339,7 +370,7 @@ CUSTOM_HEAD = """
 _cancel_event = threading.Event()
 _transcription_active = threading.Event()
 GradioUpdate = dict[str, object]
-TranscribeYield = tuple[str, str, GradioUpdate, GradioUpdate, str]
+TranscribeYield = tuple[str, str, GradioUpdate, GradioUpdate, str, str]
 
 
 def _progress_badge(pct: float) -> str:
@@ -642,6 +673,39 @@ def find_open_port(host: str, preferred_port: int, max_tries: int = 50) -> int:
         f"No open port found between {preferred_port} and {preferred_port + max_tries}."
     )
 
+def run_media_job(**kwargs: Any) -> Iterator[Any]:
+    """Run one media job; imported lazily so the listener module loads before the job service does."""
+    from services.listener_job import run_media_job as _run_media_job
+
+    return _run_media_job(**kwargs)
+
+
+_STAGE_MARKS = {DONE: " \u2713", FAILED: " \u2717"}
+
+
+def render_stage_strip(stages: dict[Stage, StageInfo] | None, note: str = "") -> str:
+    """HTML chips for the job stages (Save is not shown). Every dynamic string is HTML-escaped."""
+    if not stages:
+        return ""
+    chips = []
+    for stage in STAGE_ORDER:
+        if stage is Stage.SAVE or stage not in stages:
+            continue
+        info = stages[stage]
+        state = info.state if info.state in (PENDING, ACTIVE, DONE, FAILED, DISABLED) else PENDING
+        suffix = f" {int(info.percent)}%" if state == ACTIVE and info.percent else _STAGE_MARKS.get(state, "")
+        label = html.escape(f"{STAGE_LABELS[stage]}{suffix}")
+        title = html.escape(f"{STAGE_LABELS[stage]}: {'off' if state == DISABLED else state}")
+        chips.append(f'<span class="pyscribe-stage pyscribe-stage-{state}" title="{title}">{label}</span>')
+    if note:
+        chips.append(f'<span class="pyscribe-stage-note">{html.escape(note)}</span>')
+    return f'<div class="pyscribe-stage-strip">{"".join(chips)}</div>'
+
+
+def _idle_stage_strip() -> str:
+    return render_stage_strip({stage: StageInfo() for stage in STAGE_ORDER})
+
+
 def transcribe(
     audio_path: Any,
     model_name: str,
@@ -664,7 +728,7 @@ def transcribe(
     _cancel_event.clear()
 
     if audio_path is None:
-        yield "Status: No audio file provided.", "", gr.update(visible=True), gr.update(visible=False), ""
+        yield "Status: No audio file provided.", "", gr.update(visible=True), gr.update(visible=False), "", ""
         return
 
     media_path = audio_path.name if hasattr(audio_path, "name") else str(audio_path)
@@ -674,7 +738,7 @@ def transcribe(
 
     model_name = pyscribe_services.normalize_model_name(model_name)
     if should_transcribe and not model_name:
-        yield "Status: No model selected.", "", gr.update(visible=True), gr.update(visible=False), ""
+        yield "Status: No model selected.", "", gr.update(visible=True), gr.update(visible=False), "", ""
         return
 
     model_spec = pyscribe_services.resolve_transcription_model(model_name) if should_transcribe else None
@@ -689,6 +753,7 @@ def transcribe(
             gr.update(visible=True),
             gr.update(visible=False),
             "",
+            "",
         )
     if not use_diarization:
         diar_backend = "off"
@@ -699,6 +764,7 @@ def transcribe(
             "",
             gr.update(visible=True),
             gr.update(visible=False),
+            "",
             "",
         )
         return
@@ -721,6 +787,7 @@ def transcribe(
                     gr.update(visible=True),
                     gr.update(visible=False),
                     "",
+                    "",
                 )
             else:
                 use_visual_analysis = False
@@ -730,6 +797,7 @@ def transcribe(
                     "",
                     gr.update(visible=True),
                     gr.update(visible=False),
+                    "",
                     "",
                 )
     try:
@@ -750,36 +818,13 @@ def transcribe(
         LOGGER.warning("Failed to save listener config: %s", exc, exc_info=True)
         
     status_prefix = "Visual analysis" if run_mode == "visual_only" else "Transcription"
-    yield f"Status: {status_prefix} starting...", "", gr.update(visible=False), gr.update(visible=True, value="Cancel"), ""
+    yield f"Status: {status_prefix} starting...", "", gr.update(visible=False), gr.update(visible=True, value="Cancel"), "", _idle_stage_strip()
     _transcription_active.set()
 
-    full_transcript = ""
-    was_cancelled = False
-    last_phase = "Transcribing"
-    last_pct = 0.0
+    final = None
+    last_key: tuple[str, str, str] | None = None
     try:
-        def _on_status(msg: str) -> None:
-            nonlocal last_phase
-            last_phase = msg
-            progress(None, desc=msg)
-
-        def _on_progress(pct: float) -> None:
-            nonlocal last_pct
-            last_pct = min(max(pct, 0.0), 100.0)
-            badge = _progress_badge(last_pct)
-            step_label = "Analyzing visuals" if run_mode == "visual_only" else "Transcribing"
-            desc = f"{badge} {step_label} {last_pct:.0f}%"
-            progress(min(max(last_pct / 100.0, 0.0), 1.0), desc=desc)
-
-        def _on_model_download_progress(pct: float) -> None:
-            badge = _progress_badge(min(max(pct, 0.0), 100.0))
-            progress(min(max(pct / 100.0, 0.0), 1.0), desc=f"{badge} Downloading model files...")
-
-        def _on_text(text: str) -> None:
-            nonlocal full_transcript
-            full_transcript = text
-
-        result = pyscribe_services.transcribe_media_file(
+        for upd in run_media_job(
             media_path=media_path,
             model_name=model_name,
             run_mode=run_mode,
@@ -796,28 +841,55 @@ def transcribe(
             visual_profile=visual_profile,
             visual_ocr_backend=visual_ocr_backend,
             visual_sample_seconds=float(visual_sample_seconds or 1.0),
-            on_status=_on_status,
-            on_text=_on_text,
-            on_progress=_on_progress,
-            on_model_download_progress=_on_model_download_progress,
-        )
-        full_transcript = result.transcript
-        was_cancelled = result.cancelled
-
+        ):
+            pct = min(max(float(upd.overall_pct), 0.0), 100.0)
+            progress(pct / 100.0, desc=f"{_progress_badge(pct)} {upd.status or status_prefix}")
+            if upd.finished:
+                final = upd
+                if upd.error is not None:
+                    yield (
+                        f"Status: {status_prefix} failed.",
+                        upd.transcript.strip(),
+                        gr.update(visible=True),
+                        gr.update(visible=False),
+                        "",
+                        render_stage_strip(upd.stages, note=str(upd.error)),
+                    )
+                    raise gr.Error(f"An error occurred: {upd.error}") from upd.error
+                break
+            strip = render_stage_strip(upd.stages)
+            key = (strip, upd.status, upd.transcript)
+            if key != last_key:
+                last_key = key
+                yield (
+                    f"Status: {upd.status}" if upd.status else f"Status: {status_prefix} running...",
+                    upd.transcript.strip(),
+                    gr.update(visible=False),
+                    gr.update(visible=True, value="Cancel"),
+                    "",
+                    strip,
+                )
+    except gr.Error:
+        raise
     except Exception as e:
         # Use gr.Error to properly raise exceptions in the Gradio UI
         raise gr.Error(f"An error occurred: {e}")
     finally:
         _transcription_active.clear()
 
+    result = final.result if final is not None else None
+    full_transcript = result.transcript if result is not None else (final.transcript if final is not None else "")
+    was_cancelled = bool(final.cancelled) if final is not None else False
+    final_strip = render_stage_strip(final.stages) if final is not None else _idle_stage_strip()
+
     if was_cancelled or _cancel_event.is_set():
         _cancel_event.clear()
-        yield f"Status: {status_prefix} cancelled.", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), "Cancelled."
+        yield f"Status: {status_prefix} cancelled.", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), "Cancelled.", final_strip
         return
 
     final_badge = _progress_badge(100.0)
     final_done = "Visual analysis complete!" if run_mode == "visual_only" else "Transcription complete!"
-    yield f"Status: {final_badge} {final_done}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), final_done
+    yield f"Status: {final_badge} {final_done}", full_transcript.strip(), gr.update(visible=True), gr.update(visible=False), final_done, final_strip
 
 def save_transcript(transcript: str, audio_path: Any, model_name: str) -> str | None:
     if not transcript:
@@ -1045,6 +1117,7 @@ def create_interface() -> gr.Blocks:
 
             with gr.Column(scale=2):
                 status_output = gr.Textbox(label="Status", interactive=False)
+                stage_strip_output = gr.HTML(value="", label="Stages")
                 transcript_output = gr.Textbox(
                     label="Transcription",
                     interactive=True,
@@ -1153,7 +1226,7 @@ def create_interface() -> gr.Blocks:
                 hotwords_input,
                 batched_checkbox,
             ],
-            outputs=[status_output, transcript_output, submit_btn, completion_btn, final_status_output],
+            outputs=[status_output, transcript_output, submit_btn, completion_btn, final_status_output, stage_strip_output],
         )
         run_mode_dropdown.change(
             fn=_update_mode_visibility,

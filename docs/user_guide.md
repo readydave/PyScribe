@@ -366,6 +366,7 @@ Visibility of controls adapts to run mode and toggles.
 ### Listener Outputs
 
 - **Status**
+- **Stage strip** (Load model / Transcribe / Speakers / Visuals chips under Status; shows each stage as waiting, running with a percent, done, failed, or off when that step is not used in the chosen mode; it follows the Listener colour theme in light and dark)
 - **Transcription**
 - **Final status** (completion/cancel summary)
 - **Download Transcript** file output

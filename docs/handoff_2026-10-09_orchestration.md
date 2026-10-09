@@ -4,8 +4,7 @@ For a new chat that will act as **Morpheus**, the orchestrator for two worker se
 
 ## State at the end of this session
 
-- One branch: **`main`**, equal to `origin/main` at `c62c10d` (after the second session the same day, see below). CI green. No other local or remote branches. Spike scripts from the old `phase-7-paddleocr-vl` branch are kept as the tag `archive/phase-7-spikes` (local only). The local tag `backup/pre-trailer-rewrite` holds the pre-rewrite history.
-- History is linear. It was rewritten once (2026-10-09, trailer removal, force-push with lease); no squash. PR #1 is merged.
+- One branch: **`main`**, equal to `origin/main` at `c62c10d` (after the second session the same day, see below). CI green. No other local or remote branches. Spike scripts from the old `phase-7-paddleocr-vl` branch are kept as the tag `archive/phase-7-spikes` (local only).- History is linear. It was rewritten once (2026-10-09, trailer removal, force-push with lease); no squash. PR #1 is merged.
 - Tests: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q -o faulthandler_timeout=120 tests` gave **430 passed** (about 4 minutes) from a clean worktree of `c62c10d`.
 - `.venv` is the only virtual environment (torch 2.11+cu128, pyannote 4.0.7, paddleocr 3.4.1, paddlepaddle-gpu 3.3.1). `.venv_bak` and `.venv-pre-tf5` were deleted.
 - Local-only files (gitignored, not in the repo): `TODO.md`, `AGENT.md`.

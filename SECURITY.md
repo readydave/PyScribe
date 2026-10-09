@@ -30,7 +30,15 @@ Do not include secrets in reports, issues, or logs:
 - private keys
 - local credential files
 
+- API keys for hosted AI providers
+- transcripts and recordings (they may contain sensitive conversations)
+
 Redact any sensitive values before sharing.
+
+## Notes on Features That Send Data Elsewhere
+
+- **Cloud LLM profiles** send transcripts (and any attached images) to the provider you configure. Each cloud profile requires an explicit confirmation, an `https://` address, and a key given as `env:VAR_NAME` (saved) or typed for one session (never saved). Redirects are refused on requests that carry a key. The Listener hides cloud profiles unless `llm_allow_cloud_in_listener` is set.
+- **MCP server** (`python main.py mcp`) uses stdio only and opens no network port. It reads only audio/video files inside the folders in `PYSCRIBE_MCP_ROOTS` (default: your home folder). Text returned to an MCP client goes to whatever provider sits behind that client.
 
 ## Response Expectations
 

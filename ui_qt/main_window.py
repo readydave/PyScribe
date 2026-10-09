@@ -805,7 +805,8 @@ class MainWindow(QMainWindow):
         sidebar_layout.addLayout(brand_row)
 
         self.new_project_btn = QPushButton("+  New Project")
-        self.new_project_btn.clicked.connect(self._switch_to_transcription_view)
+        self.new_project_btn.setToolTip("Clear the current file and transcript and start fresh. Settings and the batch queue are kept.")
+        self.new_project_btn.clicked.connect(self._on_new_project)
         sidebar_layout.addWidget(self.new_project_btn)
 
         self.nav_list = QListWidget()
@@ -1677,6 +1678,49 @@ class MainWindow(QMainWindow):
     @Slot()
     def _switch_to_transcription_view(self) -> None:
         self.nav_list.setCurrentRow(0)
+
+    @Slot()
+    def _on_new_project(self) -> None:
+        """Clear the current file, transcript and progress so a new job starts clean."""
+        if self._is_transcription_running():
+            QMessageBox.information(
+                self, "New Project", "A job is running. Stop or cancel it before starting a new project."
+            )
+            return
+        self._switch_to_transcription_view()
+        has_content = bool(self.transcript_text or self.transcript_only_text or self.visual_report_text)
+        if has_content:
+            answer = QMessageBox.question(
+                self,
+                "New Project",
+                "Discard the current transcript and start a new project?\n\nSave it first if you need it.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self.media_path = None
+        self.path_label.setText("No file selected")
+        self.transcript_text = ""
+        self.transcript_only_text = ""
+        self.visual_report_text = ""
+        self.diarization_warning = None
+        self.text_area.clear()
+        self.save_btn.setEnabled(False)
+        self.copy_btn.setEnabled(False)
+        self.live_title_input.clear()
+        self.terminal_log.clear()
+        for bar in (self.progress_bar, self.diar_progress_bar, self.visual_progress_bar, self.load_progress_bar, self.save_progress_bar):
+            bar.setRange(0, 100)
+            bar.setValue(0)
+        for label in (self.transcription_time_label, self.diar_time_label, self.visual_time_label, self.load_time_label, self.save_time_label):
+            label.setText("--")
+        self.job_tracker.reset(set())
+        self.job_timeline.set_stage_visible(Stage.LOAD, False)
+        self.job_timeline.set_stage_visible(Stage.SAVE, False)
+        self._sync_timeline()
+        self.status_label.setText("Ready")
+        self._update_live_mode_ui()
 
     @Slot()
     def _toggle_sidebar_collapsed(self) -> None:

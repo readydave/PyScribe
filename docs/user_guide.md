@@ -37,7 +37,7 @@ If you run `python main.py` with no mode, you get an interactive launcher menu. 
   - **Transcription**
   - **LLM**
   - **Settings**
-- **New Project** returns to the Transcription screen.
+- **New Project** clears the current file, transcript and progress and returns to the Transcription screen (it asks first if there is a transcript, and is blocked while a job runs). Settings and the batch queue are kept.
 - Left sidebar can be collapsed/expanded with the small toggle button in the sidebar header. The choice is remembered.
 - The Transcription screen is built from movable panels around the transcript:
   - **Setup** (File/Live switch, drop zone, model, **More options**), **Progress**, **Hardware**, and **Batch queue**.

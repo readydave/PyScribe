@@ -265,6 +265,36 @@ class PaddleDeviceTests(unittest.TestCase):
                 _fn, name, _err, _note = mm._build_ocr_fn("auto", long_video=long_video)
             self.assertEqual(name, expected, f"gpu={gpu} long_video={long_video}")
 
+    def test_auto_fallback_note_names_the_real_failure_reason(self) -> None:
+        fake_fn = lambda image, mode="slide": ""  # noqa: E731
+        offline = (
+            "PaddleOCR init/runtime error: Cannot reach https://huggingface.co/api/models/PaddlePaddle/UVDoc"
+            "?token=hf_abcdef123456: offline mode is enabled."
+        )
+        with (
+            patch.object(mm, "_paddle_will_use_gpu", return_value=True),
+            patch.object(mm, "_build_paddle_ocr_fn", return_value=(None, offline)),
+            patch.object(mm, "_build_rapid_ocr_fn", return_value=(fake_fn, None)),
+        ):
+            _fn, name, _err, note = mm._build_ocr_fn("auto")
+        self.assertEqual(name, "rapidocr")
+        self.assertEqual(
+            note,
+            "PaddleOCR unavailable: model manifest check failed (Hugging Face unreachable); using RapidOCR.",
+        )
+
+    def test_brief_failure_reason_is_one_clean_line(self) -> None:
+        self.assertEqual(mm._brief_failure_reason("Install PaddleOCR: pip install paddleocr"), "not installed")
+        text = mm._brief_failure_reason(
+            "PaddleOCR init/runtime error: CUDA failed at /home/me/.cache/x/y.bin with hf_secret123456 "
+            "see https://example.com/a?token=abc " + "x" * 300
+        )
+        self.assertNotIn("/home/me", text)
+        self.assertNotIn("hf_secret", text)
+        self.assertNotIn("example.com", text)
+        self.assertLessEqual(len(text), 110)
+        self.assertNotIn("\n", text)
+
 
 if __name__ == "__main__":
     unittest.main()

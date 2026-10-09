@@ -679,6 +679,7 @@ def transcribe_media_file(
     on_diar_progress: ProgressCallback | None = None,
     on_visual_progress: ProgressCallback | None = None,
     on_model_download_progress: ProgressCallback | None = None,
+    on_stage: Callable[[str, str], None] | None = None,
 ) -> TranscriptionResult:
     """
     End-to-end transcription for media input files used by listener mode.
@@ -757,6 +758,8 @@ def transcribe_media_file(
 
         if on_status:
             on_status(f"Loading model '{model_name}' on {device.upper()}...")
+        if on_stage:
+            on_stage("load", "start")
         model_ref = ensure_model_cached(
             model_name,
             on_status=on_status,
@@ -769,6 +772,8 @@ def transcribe_media_file(
             use_cache=True,
             model_spec=model_spec,
         )
+        if on_stage:
+            on_stage("load", "done")
 
         if on_status:
             on_status(f"Transcribing with '{model_name}'...")

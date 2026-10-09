@@ -266,6 +266,31 @@ class TranscriptionServiceTests(unittest.TestCase):
         self.assertEqual(load_model_mock.call_args.kwargs["model_spec"], spec)
         self.assertFalse(transcribe_mock.call_args.kwargs["use_diarization"])
 
+    def test_transcribe_media_file_reports_model_load_stage(self) -> None:
+        stages: list[tuple[str, str]] = []
+        with patch("services.transcription_service.get_ffmpeg_cmd", return_value="ffmpeg"), patch(
+            "services.transcription_service.convert_to_16k_mono", return_value="prepared.wav"
+        ), patch("services.transcription_service.ensure_model_cached", return_value="ref"), patch(
+            "services.transcription_service.load_model", return_value=object()
+        ), patch(
+            "services.transcription_service.transcribe_prepared_audio",
+            return_value=TranscriptionResult(
+                transcript="t", transcript_only="t", visual_report="", segments=[], cancelled=False,
+                duration_seconds=1.0, transcription_seconds=1.0, diarization_seconds=0.0,
+                visual_analysis_seconds=0.0,
+            ),
+        ):
+            transcribe_media_file(
+                media_path="clip.wav",
+                model_name="ibm-granite/granite-4.0-1b-speech",
+                run_mode="transcribe_only",
+                device="cpu",
+                compute_type="int8",
+                cancel_event=threading.Event(),
+                on_stage=lambda stage, state: stages.append((stage, state)),
+            )
+        self.assertEqual(stages, [("load", "start"), ("load", "done")])
+
     def test_transcribe_media_file_visual_only_keeps_report_out_of_transcript_field(self) -> None:
         fake_multimodal = SimpleNamespace(
             analyze_video_stream=lambda *args, **kwargs: _FakeVisualResult(

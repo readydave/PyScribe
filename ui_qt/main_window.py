@@ -94,7 +94,7 @@ from services.ui_themes import all_themes
 from ui_qt import theme
 from ui_qt.benchmark_dialog import BenchmarkDialog
 from ui_qt.hw_panel import HardwarePanel
-from ui_qt.job_stages import Stage, JobTracker
+from ui_qt.job_stages import STAGE_ORDER, Stage, JobTracker
 from ui_qt.job_timeline import JobTimeline, set_state
 from ui_qt.speaker_highlight import SpeakerHighlighter
 from ui_qt.theme_dialog import ThemeEditorDialog
@@ -346,6 +346,7 @@ def _transcription_process_entry(
                 on_diar_progress=lambda p: _emit("diar_progress", max(0, min(100, int(p)))),
                 on_visual_progress=lambda p: _emit("visual_progress", max(0, min(100, int(p)))),
                 on_model_download_progress=lambda p: _emit("model_download_progress", max(0, min(100, int(p)))),
+                on_stage=lambda stage, state: _emit("stage", f"{stage}:{state}"),
             )
 
         try:
@@ -379,6 +380,7 @@ class TranscriptionWorker(QObject):
     progress: Signal = Signal(int)
     visual_progress: Signal = Signal(int)
     model_download_progress: Signal = Signal(int)
+    stage_event: Signal = Signal(str)
     diar_progress: Signal = Signal(int)
     finished: Signal = Signal(bool, str, str, str, float, float, float)
     failed: Signal = Signal(str)
@@ -559,6 +561,8 @@ class TranscriptionWorker(QObject):
                         self.visual_progress.emit(int(value))
                     elif etype == "model_download_progress":
                         self.model_download_progress.emit(int(value))
+                    elif etype == "stage":
+                        self.stage_event.emit(str(value))
                     elif etype == "finished":
                         terminal_emitted = True
                         LOGGER.info("Qt worker: finished event cancelled=%s", bool(value.get("cancelled")))
@@ -603,6 +607,8 @@ class TranscriptionWorker(QObject):
                     self.visual_progress.emit(int(value))
                 elif etype == "model_download_progress":
                     self.model_download_progress.emit(int(value))
+                elif etype == "stage":
+                    self.stage_event.emit(str(value))
                 elif etype == "finished" and not terminal_emitted:
                     terminal_emitted = True
                     LOGGER.info("Qt worker: late finished event cancelled=%s", bool(value.get("cancelled")))
@@ -1172,6 +1178,12 @@ class MainWindow(QMainWindow):
         self.transcription_time_label = self.job_timeline.detail_label(Stage.TRANSCRIBE)
         self.diar_time_label = self.job_timeline.detail_label(Stage.SPEAKERS)
         self.visual_time_label = self.job_timeline.detail_label(Stage.VISUALS)
+        self.load_progress_bar = self.job_timeline.bar(Stage.LOAD)
+        self.save_progress_bar = self.job_timeline.bar(Stage.SAVE)
+        self.load_time_label = self.job_timeline.detail_label(Stage.LOAD)
+        self.save_time_label = self.job_timeline.detail_label(Stage.SAVE)
+        self.job_timeline.set_stage_visible(Stage.LOAD, False)
+        self.job_timeline.set_stage_visible(Stage.SAVE, False)
         self.terminal_log = self.job_timeline.log
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("StatusLine")
@@ -2686,6 +2698,8 @@ class MainWindow(QMainWindow):
         if use_diarization:
             live_stages.add(Stage.SPEAKERS)
         self.job_tracker.reset(live_stages)
+        self.job_timeline.set_stage_visible(Stage.LOAD, False)
+        self.job_timeline.set_stage_visible(Stage.SAVE, False)
         self._sync_timeline()
         self.transcription_time_label.setText("Live session running...")
         self.diar_time_label.setText("Runs after you stop" if use_diarization else "Off")
@@ -2931,7 +2945,20 @@ class MainWindow(QMainWindow):
             enabled_stages.add(Stage.SPEAKERS)
         if run_visual:
             enabled_stages.add(Stage.VISUALS)
+        show_load = run_mode in {"full", "transcribe_only"}
+        show_save = bool(self.media_path) and len(enabled_stages) >= 2
+        if show_load:
+            enabled_stages.add(Stage.LOAD)
+        if show_save:
+            enabled_stages.add(Stage.SAVE)
         self.job_tracker.reset(enabled_stages)
+        self.job_timeline.set_stage_visible(Stage.LOAD, show_load)
+        self.job_timeline.set_stage_visible(Stage.SAVE, show_save)
+        self.load_progress_bar.setRange(0, 100)
+        self.load_progress_bar.setValue(0)
+        self.save_progress_bar.setValue(0)
+        self.load_time_label.setText("--")
+        self.save_time_label.setText("--")
         self._sync_timeline()
         self.transcription_time_label.setText("--")
         self.diar_time_label.setText("--")
@@ -3095,6 +3122,7 @@ class MainWindow(QMainWindow):
         self.worker.transcript.connect(self._on_transcript_update)
         self.worker.progress.connect(self._on_transcription_progress)
         self.worker.model_download_progress.connect(self._on_model_download_progress)
+        self.worker.stage_event.connect(self._on_stage_event)
         self.worker.diar_progress.connect(self._on_diar_progress)
         self.worker.visual_progress.connect(self._on_visual_progress)
         self.worker.finished.connect(self._on_worker_finished)
@@ -3196,6 +3224,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.diar_progress_bar.setRange(0, 100)
         self.visual_progress_bar.setRange(0, 100)
+        self.load_progress_bar.setRange(0, 100)
+        self.save_progress_bar.setRange(0, 100)
         if cancelled:
             self.job_tracker.cancel_active()
         else:
@@ -3272,7 +3302,7 @@ class MainWindow(QMainWindow):
                 return
 
         if not cancelled:
-            self._auto_save_completed_parts(transcript=transcript, transcript_only=transcript_only, visual_report=visual_report)
+            self._run_auto_save_stage(transcript=transcript, transcript_only=transcript_only, visual_report=visual_report)
 
         if transcript or visual_report:
             self.save_btn.setEnabled(True)
@@ -3307,6 +3337,8 @@ class MainWindow(QMainWindow):
         self.transcription_time_label.setText("--")
         self.diar_time_label.setText("--")
         self.visual_time_label.setText("--")
+        self.load_progress_bar.setRange(0, 100)
+        self.save_progress_bar.setRange(0, 100)
 
         # Batch handling
         if self._batch_active and self._current_batch_index != -1:
@@ -3359,10 +3391,10 @@ class MainWindow(QMainWindow):
 
     def _sync_timeline(self) -> None:
         """Push the tracker's stage states into the timeline widgets."""
-        for stage in (Stage.TRANSCRIBE, Stage.SPEAKERS, Stage.VISUALS):
+        for stage in STAGE_ORDER:
             self.job_timeline.set_stage_state(stage, self.job_tracker.info(stage).state)
         active = next(
-            (stage for stage in (Stage.TRANSCRIBE, Stage.SPEAKERS, Stage.VISUALS) if self.job_tracker.info(stage).state == "active"),
+            (stage for stage in STAGE_ORDER if self.job_tracker.info(stage).state == "active"),
             None,
         )
         self.hw_panel.set_stage(active.value if active else None)
@@ -3970,6 +4002,43 @@ class MainWindow(QMainWindow):
         if transcript_part:
             return transcript_part, "all"
         return ocr_part, "all"
+
+    def _run_auto_save_stage(self, *, transcript: str, transcript_only: str, visual_report: str) -> None:
+        """Run auto-save and reflect it in the Save row of the timeline."""
+        saving = self.job_tracker.info(Stage.SAVE).state == "pending"
+        if saving:
+            self.job_tracker.start(Stage.SAVE)
+            self.save_progress_bar.setRange(0, 0)
+            self._sync_timeline()
+        try:
+            self._auto_save_completed_parts(transcript=transcript, transcript_only=transcript_only, visual_report=visual_report)
+        finally:
+            if saving:
+                self.save_progress_bar.setRange(0, 100)
+                self.save_progress_bar.setValue(100)
+                self.job_tracker.complete(Stage.SAVE)
+                self.save_time_label.setText(self._format_stage_seconds(Stage.SAVE))
+                self._sync_timeline()
+
+    def _format_stage_seconds(self, stage: Stage) -> str:
+        elapsed = self.job_tracker.info(stage).elapsed
+        return f"{elapsed:.1f}s" if elapsed is not None else "--"
+
+    @Slot(str)
+    def _on_stage_event(self, value: str) -> None:
+        """Handle worker stage events of the form ``<stage>:<start|done>``."""
+        name, _, state = value.partition(":")
+        if name != Stage.LOAD.value:
+            return
+        if state == "start":
+            self.job_tracker.start(Stage.LOAD)
+            self.load_progress_bar.setRange(0, 0)
+        elif state == "done":
+            self.load_progress_bar.setRange(0, 100)
+            self.load_progress_bar.setValue(100)
+            self.job_tracker.complete(Stage.LOAD)
+            self.load_time_label.setText(self._format_stage_seconds(Stage.LOAD))
+        self._sync_timeline()
 
     def _auto_save_completed_parts(self, *, transcript: str, transcript_only: str, visual_report: str) -> None:
         if self._is_live_mode() or not self.media_path:

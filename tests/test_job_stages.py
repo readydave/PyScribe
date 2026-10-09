@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from ui_qt.job_stages import ACTIVE, DISABLED, DONE, FAILED, PENDING, JobTracker, Stage
+from ui_qt.job_stages import ACTIVE, DISABLED, DONE, FAILED, PENDING, STAGE_ORDER, JobTracker, Stage
 from ui_qt.theme import PALETTES, build_qss, sanitize_mode
 
 
@@ -63,6 +63,23 @@ class JobTrackerTests(unittest.TestCase):
         info = self.tracker.info(Stage.TRANSCRIBE)
         self.assertEqual(info.state, PENDING)
         self.assertEqual(info.percent, 0)
+
+    def test_start_marks_stage_active_without_percent(self) -> None:
+        self.tracker.reset({Stage.LOAD, Stage.TRANSCRIBE})
+        self.tracker.start(Stage.LOAD)
+        self.assertEqual(self.tracker.info(Stage.LOAD).state, ACTIVE)
+        self.tracker.complete(Stage.LOAD)
+        self.assertEqual(self.tracker.info(Stage.LOAD).state, DONE)
+        self.assertIsNotNone(self.tracker.info(Stage.LOAD).elapsed)
+
+    def test_start_ignores_disabled_stage(self) -> None:
+        self.tracker.reset({Stage.TRANSCRIBE})
+        self.tracker.start(Stage.SAVE)
+        self.assertEqual(self.tracker.info(Stage.SAVE).state, DISABLED)
+
+    def test_load_and_save_bracket_the_pipeline(self) -> None:
+        self.assertEqual(STAGE_ORDER[0], Stage.LOAD)
+        self.assertEqual(STAGE_ORDER[-1], Stage.SAVE)
 
 
 class ThemeTests(unittest.TestCase):

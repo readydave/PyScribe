@@ -146,6 +146,7 @@ def test_connection_test_fails_cleanly_without_network_when_keyring_broken(fake:
 
 
 def test_postprocess_call_with_broken_keyring_raises_auth_failed_and_sends_no_request(fake: FakeKeyring) -> None:
+    pytest.importorskip("ffmpeg")  # llm_postprocess_service imports multimodal_service, which needs ffmpeg-python
     from services import llm_postprocess_service as post
 
     fake.fail = RuntimeError("locked")

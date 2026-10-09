@@ -67,6 +67,21 @@ CLOUD_PRESETS: tuple[dict[str, object], ...] = (
     },
 )
 
+# Providers that run the user's own signed-in command-line program (no URL, no key). One row per provider:
+# add or remove a row and the provider list, the "Add CLI Profile" button and the field handling follow.
+CLI_PROVIDERS: tuple[dict[str, str], ...] = (
+    {
+        "id": "claude_cli",
+        "label": "Claude Code CLI",
+        "name": "claude-cli",
+        "default_model": "",
+        "note": "Runs your own signed-in Claude Code CLI, for personal use only. See docs/user_guide.md (LLM Connections).",
+        "ack": "I understand transcripts will be sent through my signed-in CLI to the vendor",
+    },
+)
+CLI_PROVIDER_IDS = frozenset(item["id"] for item in CLI_PROVIDERS)
+CLOUD_ACK_TEXT = "I understand transcripts and images will be sent to this provider"
+
 
 class LLMConnectionsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
@@ -81,6 +96,7 @@ class LLMConnectionsDialog(QDialog):
         self._keyring_available = False
         self._closed = False
         self._busy_keyring = False
+        self._cli_mode = False
         self._availability_handle: keyring_worker.TaskHandle | None = None
         self._test_handle: keyring_worker.TaskHandle | None = None
         self._created_refs: set[str] = set()  # keyring entries made in this session (removed if the dialog is cancelled)
@@ -120,11 +136,17 @@ class LLMConnectionsDialog(QDialog):
 
         self.name_input = QLineEdit()
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["ollama", "lm_studio", "openai_compatible", "anthropic"])
+        self.provider_combo.addItems(["ollama", "lm_studio", "openai_compatible", "anthropic", *(item["id"] for item in CLI_PROVIDERS)])
         self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
         self.scope_combo = QComboBox()
         self.scope_combo.addItems(["local", "lan", "cloud"])
         self.scope_combo.currentTextChanged.connect(self._on_scope_changed)
+        self.cli_note_label = QLabel("")
+        self.cli_note_label.setWordWrap(True)
+        self.cli_note_label.setVisible(False)
+        font = self.cli_note_label.font()
+        font.setItalic(True)
+        self.cli_note_label.setFont(font)
         self.base_url_input = QLineEdit()
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.Password)
@@ -158,13 +180,14 @@ class LLMConnectionsDialog(QDialog):
             "0 = most literal, higher = more varied. Leave empty to use the provider's default "
             "(some frontier models reject a custom value)."
         )
-        self.cloud_ack_check = QCheckBox("I understand transcripts and images will be sent to this provider")
+        self.cloud_ack_check = QCheckBox(CLOUD_ACK_TEXT)
         self.cloud_ack_check.setToolTip("Required for cloud profiles. Meeting transcripts may contain sensitive information.")
         self.enabled_check = QCheckBox("Profile enabled")
         self.concurrent_check = QCheckBox("Allow concurrent run with local transcription")
 
         form.addRow("Name", self.name_input)
         form.addRow("Provider", self.provider_combo)
+        form.addRow("", self.cli_note_label)
         form.addRow("Scope", self.scope_combo)
         form.addRow("Base URL", self.base_url_input)
         form.addRow("API Key", self.api_key_input)
@@ -203,6 +226,17 @@ class LLMConnectionsDialog(QDialog):
         row_buttons.addWidget(self.add_btn)
         row_buttons.addWidget(self.preset_combo)
         row_buttons.addWidget(self.add_preset_btn)
+        self.cli_preset_combo = QComboBox()
+        for item in CLI_PROVIDERS:
+            self.cli_preset_combo.addItem(item["label"], item)
+        self.add_cli_btn = QPushButton("Add CLI Profile")
+        self.add_cli_btn.setToolTip("Add a profile that runs your own signed-in command-line AI program (personal use only).")
+        self.add_cli_btn.clicked.connect(self._on_add_cli_profile)
+        if CLI_PROVIDERS:
+            row_buttons.addWidget(self.cli_preset_combo)
+            row_buttons.addWidget(self.add_cli_btn)
+        self.cli_preset_combo.setVisible(len(CLI_PROVIDERS) > 1)
+        self.add_cli_btn.setVisible(bool(CLI_PROVIDERS))
         row_buttons.addWidget(self.rename_btn)
         row_buttons.addWidget(self.delete_btn)
         row_buttons.addWidget(self.apply_btn)
@@ -409,11 +443,73 @@ class LLMConnectionsDialog(QDialog):
             "session), tick the confirmation box, then press Test Connection to list the models your key can use."
         )
 
+    @Slot()
+    def _on_add_cli_profile(self) -> None:
+        item = self.cli_preset_combo.currentData()
+        if not isinstance(item, dict):
+            return
+        name = str(item["name"])
+        candidate, counter = name, 2
+        while self._is_profile_name_in_use(candidate):
+            candidate = f"{name}-{counter}"
+            counter += 1
+        self._profiles.append(
+            {
+                "name": candidate,
+                "provider": item["id"],
+                "scope": "cloud",
+                "base_url": "",
+                "api_key": "",
+                "api_key_runtime": "",
+                "default_model": item["default_model"],
+                "timeout_seconds": 120.0,
+                "verify_tls": True,
+                "enabled": True,
+                "allow_concurrent_with_local_transcription": False,
+                "allowed_cidrs": [],
+                "cloud_acknowledged": False,
+                "temperature": None,
+            }
+        )
+        self._refresh_profile_list()
+        self.profile_list.setCurrentRow(len(self._profiles) - 1)
+        self._refresh_default_profile_combo()
+        self._result_box.setPlainText(
+            f"Added '{candidate}'. It runs your own signed-in CLI (personal use only). Tick the confirmation box, "
+            "then press Test Connection."
+        )
+
+    @staticmethod
+    def _cli_provider(provider: str) -> dict[str, str] | None:
+        key = (provider or "").strip().lower()
+        return next((item for item in CLI_PROVIDERS if item["id"] == key), None)
+
+    def _apply_provider_mode(self, provider: str) -> None:
+        """Disable and clear the URL/key fields for a CLI provider; for other providers just re-enable them."""
+        cli = self._cli_provider(provider)
+        was_cli = self._cli_mode
+        self._cli_mode = cli is not None
+        self.cli_note_label.setText(cli["note"] if cli else "")
+        self.cli_note_label.setVisible(cli is not None)
+        self.cloud_ack_check.setText(cli["ack"] if cli else CLOUD_ACK_TEXT)
+        for widget in (self.base_url_input, self.api_key_input, self.keyring_check, self.scope_combo):
+            widget.setEnabled(cli is None and not self._busy_keyring)
+        if cli is not None:
+            self.base_url_input.clear()
+            self.api_key_input.clear()
+            self.keyring_check.setChecked(False)
+            self.scope_combo.setCurrentText("cloud")
+        elif was_cli and (self.scope_combo.currentText() or "").strip().lower() == "cloud" and (provider or "").strip().lower() != "anthropic":
+            self.scope_combo.setCurrentText("local")
+
     @Slot(str)
     def _on_provider_changed(self, value: str) -> None:
         if self._suspend_field_events:
             return
         provider = (value or "").strip().lower()
+        self._apply_provider_mode(provider)
+        if self._cli_mode:
+            return
         current_url = (self.base_url_input.text() or "").strip()
         if provider == "anthropic":
             if not current_url or "127.0.0.1" in current_url or "localhost" in current_url:
@@ -554,6 +650,7 @@ class LLMConnectionsDialog(QDialog):
             self.temperature_input.setText("" if temperature is None else str(temperature))
             self.cloud_ack_check.setChecked(bool(profile.get("cloud_acknowledged", False)))
             self._on_scope_changed(str(profile.get("scope", "local")))
+            self._apply_provider_mode(str(profile.get("provider", "ollama")))
         finally:
             self._suspend_field_events = False
 
@@ -587,7 +684,18 @@ class LLMConnectionsDialog(QDialog):
             return
         scope_value = self.scope_combo.currentText().strip()
         base_url_value = (self.base_url_input.text() or "").strip()
-        if scope_value == "cloud":
+        cli_provider = self._cli_provider(self.provider_combo.currentText())
+        if cli_provider is not None:
+            scope_value = "cloud"
+            base_url_value = ""
+            if not self.cloud_ack_check.isChecked():
+                QMessageBox.warning(
+                    self,
+                    "Confirm cloud use",
+                    "Tick the confirmation box: transcripts are sent through your signed-in CLI to the vendor.",
+                )
+                return
+        elif scope_value == "cloud":
             if not base_url_value.lower().startswith("https://"):
                 QMessageBox.warning(self, "Cloud profile", "Cloud profiles must use an https:// address.")
                 return
@@ -636,7 +744,10 @@ class LLMConnectionsDialog(QDialog):
             "cloud_acknowledged": bool(self.cloud_ack_check.isChecked() and scope_value == "cloud"),
         }
         old_ref_id = secret_store.ref_id_from(self._profiles[row].get("api_key"))
-        if old_ref_id and entered_api_key == KEYRING_PLACEHOLDER:
+        if cli_provider is not None:  # no key of any kind; a keyring entry the profile held goes with the switch
+            self._schedule_key_delete(old_ref_id)
+            self._commit_profile(row, old_name, profile, "", "", then)
+        elif old_ref_id and entered_api_key == KEYRING_PLACEHOLDER:
             self._commit_profile(row, old_name, profile, f"keyring:{old_ref_id}", "", then)
         elif entered_api_key.lower().startswith("env:"):
             self._schedule_key_delete(old_ref_id)
@@ -728,6 +839,8 @@ class LLMConnectionsDialog(QDialog):
         self._busy_keyring = busy
         for widget in (self.profile_list, self.apply_btn, self.test_btn, self.save_btn, self.delete_btn, self.api_key_input, self.keyring_check):
             widget.setEnabled(not busy)
+        if not busy:
+            self._apply_provider_mode(self.provider_combo.currentText())
 
     @Slot(object)
     def _on_keyring_availability(self, available: object) -> None:

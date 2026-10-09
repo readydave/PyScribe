@@ -15,16 +15,18 @@ from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
-from services import secret_store
+from services import cli_llm_provider, secret_store
 
 
 LOGGER = logging.getLogger(__name__)
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_SUPPORTED_PROVIDERS = {"ollama", "openai_compatible", "lm_studio", "anthropic"}
+_SUPPORTED_PROVIDERS = {"ollama", "openai_compatible", "lm_studio", "anthropic", "claude_cli"}
 _SUPPORTED_SCOPES = {"local", "lan", "cloud"}
 ANTHROPIC_API_VERSION = "2023-06-01"
-CLOUD_PROVIDERS = {"anthropic"}
+CLOUD_PROVIDERS = {"anthropic", "claude_cli"}
+# Providers that run the user's own signed-in CLI: always cloud scope, no URL, no API key.
+CLI_PROVIDERS = {"claude_cli"}
 # Context sizes (tokens) assumed when a profile doesn't set one.
 DEFAULT_CONTEXT_TOKENS = {"ollama": 16384, "lm_studio": 8192, "openai_compatible": 8192, "anthropic": 180000}
 CLOUD_DEFAULT_CONTEXT_TOKENS = 120000
@@ -252,6 +254,15 @@ def run_connection_test(profile: LLMConnectionProfile) -> ConnectionTestResult:
     )
     stages: list[ConnectionStageResult] = []
 
+    if profile.provider in CLI_PROVIDERS:
+        cli_error = _check_cli_policy(profile)
+        if cli_error is not None:
+            return _fail_result(
+                profile=profile, stages=stages, stage="scope_policy", code=cli_error, detail=_failure_detail(cli_error)
+            )
+        stages.append(ConnectionStageResult(stage="scope_policy", status="pass", code=None, detail="Scope policy passed."))
+        return _test_claude_cli(profile=profile, stages=stages)
+
     parsed = _parse_base_url(profile.base_url)
     if parsed is None:
         return _fail_result(
@@ -362,6 +373,13 @@ def get_failure_suggestions(code: str) -> tuple[str, ...]:
         ),
         "policy_cloud_requires_key": (
             "Enter env:YOUR_KEY_NAME (recommended) or an API key for this session.",
+        ),
+        "cli_not_installed": (
+            "Install Claude Code, run 'claude' once in a terminal and sign in with your own account.",
+        ),
+        "cli_failed": (
+            "Run 'claude' in a terminal and check it starts and is signed in.",
+            "Then press Test Connection again.",
         ),
         "rate_limited": (
             "Wait a moment and try again, or check your plan's rate limits and credit balance.",
@@ -607,6 +625,43 @@ def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[Connecti
     return result
 
 
+def _test_claude_cli(profile: LLMConnectionProfile, stages: list[ConnectionStageResult]) -> ConnectionTestResult:
+    """Check the binary exists, then run a tiny prompt (tools off) to confirm it is signed in."""
+    binary = cli_llm_provider.find_binary()
+    if binary is None:
+        error = cli_llm_provider.CliError(
+            "cli_not_installed", "The Claude CLI ('claude') was not found. Install Claude Code and sign in, then try again."
+        )
+        return _fail_result(profile=profile, stages=stages, stage="binary", code=error.code, detail=error.detail)
+    stages.append(ConnectionStageResult(stage="binary", status="pass", code=None, detail="Claude CLI found."))
+    model = profile.default_model or cli_llm_provider.DEFAULT_MODEL
+    try:
+        cli_llm_provider.run_claude(
+            "Reply with the single word OK.",
+            model=model,
+            timeout_seconds=min(profile.timeout_seconds, 60.0),
+            binary=binary,
+        )
+    except cli_llm_provider.CliError as exc:
+        return _fail_result(
+            profile=profile, stages=stages, stage="inference_smoke", code=exc.code, detail=exc.detail, selected_model=model
+        )
+    stages.append(
+        ConnectionStageResult(stage="inference_smoke", status="pass", code=None, detail="The Claude CLI answered a test prompt.")
+    )
+    return ConnectionTestResult(
+        status="pass",
+        provider=profile.provider,
+        base_url="",
+        selected_model=model,
+        detected_models=(),
+        loaded_model=None,
+        failure_code=None,
+        failure_detail=None,
+        stages=tuple(stages),
+    )
+
+
 def _test_anthropic(profile: LLMConnectionProfile, stages: list[ConnectionStageResult]) -> ConnectionTestResult:
     try:
         api_key = resolve_profile_api_key(profile)
@@ -781,16 +836,20 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
     provider = (_as_optional_str(raw.get("provider")) or "ollama").lower()
     scope = (_as_optional_str(raw.get("scope")) or "local").lower()
     base_url = _as_optional_str(raw.get("base_url")) or ""
+    is_cli = provider in CLI_PROVIDERS
+    if is_cli:  # a CLI profile has no endpoint: scope is fixed and any stored URL/key is ignored
+        scope, base_url = "cloud", ""
     if provider not in _SUPPORTED_PROVIDERS:
         LOGGER.warning("Skipping unknown LLM provider '%s' for profile '%s'", provider, name)
         return None
     if scope not in _SUPPORTED_SCOPES:
         LOGGER.warning("Skipping unknown LLM scope '%s' for profile '%s'", scope, name)
         return None
-    if not base_url:
+    if not base_url and not is_cli:
         LOGGER.warning("Skipping profile '%s' with empty base_url", name)
         return None
-    base_url = _normalize_base_url_for_profile(provider, base_url)
+    if not is_cli:
+        base_url = _normalize_base_url_for_profile(provider, base_url)
     is_cloud = scope == "cloud"
     timeout_seconds = _as_float(
         raw.get("timeout_seconds"),
@@ -807,9 +866,9 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
         provider=provider,
         scope=scope,
         base_url=base_url.rstrip("/"),
-        api_key=_resolve_profile_api_key(raw),
-        api_key_ref=_profile_key_ref(raw),
-        default_model=_as_optional_str(raw.get("default_model")),
+        api_key=None if is_cli else _resolve_profile_api_key(raw),
+        api_key_ref=None if is_cli else _profile_key_ref(raw),
+        default_model=_as_optional_str(raw.get("default_model")) or (cli_llm_provider.DEFAULT_MODEL if is_cli else None),
         timeout_seconds=timeout_seconds,
         verify_tls=True if is_cloud else _as_bool(raw.get("verify_tls"), default=True),
         allowed_cidrs=_as_cidr_tuple(raw.get("allowed_cidrs"), default=_DEFAULT_ALLOWED_CIDRS),
@@ -825,10 +884,22 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
     )
 
 
+def _check_cli_policy(profile: LLMConnectionProfile) -> str | None:
+    """CLI providers need only the cloud confirmation: no URL, key or TLS setting applies."""
+    if profile.scope != "cloud" or profile.base_url:
+        return "policy_cloud_not_remote"  # defensive: a CLI profile must never carry an endpoint
+    if not profile.cloud_acknowledged:
+        return "policy_cloud_not_acknowledged"
+    return None
+
+
 def evaluate_profile_scope_policy(profile: LLMConnectionProfile) -> tuple[bool, str | None, str | None]:
     """
     Validate base URL shape and scope policy for runtime use (without network calls).
     """
+    if profile.provider in CLI_PROVIDERS:
+        cli_error = _check_cli_policy(profile)
+        return (True, None, None) if cli_error is None else (False, cli_error, _failure_detail(cli_error))
     parsed = _parse_base_url(profile.base_url)
     if parsed is None:
         return False, "invalid_url", "Base URL must be an absolute http/https URL."

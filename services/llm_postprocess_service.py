@@ -17,6 +17,7 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from services.llm_connection_service import (
+    CLI_PROVIDERS,
     LLMConnectionProfile,
     anthropic_endpoint_url,
     effective_context_tokens,
@@ -30,6 +31,7 @@ from services.llm_connection_service import (
 )
 from services.multimodal_service import extract_text_from_images
 from services.prompt_template_service import PromptTemplate
+from services import cli_llm_provider
 from services.secret_store import SecretStoreError
 
 
@@ -605,6 +607,15 @@ def _call_model(
 ) -> _CallOutcome:
     """One request to the provider; raises ``_LLMPostprocessException`` on failure."""
     stream = bool(on_output_chunk)
+    if profile.provider in CLI_PROVIDERS:
+        return _call_cli(
+            profile=profile,
+            model=model,
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+            on_output_chunk=on_output_chunk,
+            run_control=run_control,
+        )
     try:
         api_key = resolve_profile_api_key(profile)
     except SecretStoreError as exc:
@@ -691,6 +702,30 @@ def _call_model(
     )
     text, truncated = _extract_response(kind, result)
     return _CallOutcome(text=text, retry_note=retry_note, truncated=truncated)
+
+
+def _call_cli(
+    *,
+    profile: LLMConnectionProfile,
+    model: str,
+    system_prompt: str,
+    user_payload: str,
+    on_output_chunk: OutputChunkCallback | None,
+    run_control: LLMRunControl | None,
+) -> _CallOutcome:
+    """Run the user's signed-in CLI (tools off). The answer arrives in one piece, so the chunk callback fires once."""
+    try:
+        result = cli_llm_provider.run_claude(
+            cli_llm_provider.build_cli_prompt(system_prompt, user_payload),
+            model=model,
+            timeout_seconds=profile.timeout_seconds,
+            cancel_check=run_control.is_cancelled if run_control else None,
+        )
+    except cli_llm_provider.CliError as exc:
+        raise _LLMPostprocessException(exc.code, exc.detail) from None
+    if on_output_chunk:
+        on_output_chunk(result.text)
+    return _CallOutcome(text=result.text)
 
 
 def _extract_response(kind: str, result: Any) -> tuple[str, bool]:

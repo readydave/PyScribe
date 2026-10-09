@@ -21,7 +21,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import ipaddress
 from collections.abc import Callable
+from urllib.parse import urlparse
 
 from services import AppConfig, discover_local_networks, load_llm_profiles, scan_lan_for_llm_instances, run_connection_test
 from services import secret_store
@@ -82,6 +84,54 @@ CLI_PROVIDERS: tuple[dict[str, str], ...] = (
 CLI_PROVIDER_IDS = frozenset(item["id"] for item in CLI_PROVIDERS)
 CLOUD_ACK_TEXT = "I understand transcripts and images will be sent to this provider"
 
+# Which form rows each provider shows, per scope. "offered" are the scopes the Scope box lists for a new or
+# changed provider; every scope the services accept still has a row set, so a saved profile that uses an
+# unusual scope (e.g. ollama on cloud, anthropic on lan) keeps showing the right rows.
+_COMMON_ROWS = ("scope", "model", "timeout", "context", "max_output", "temperature")
+_HTTP_ROWS = ("base_url", "api_key", "keyring")
+# "discovery" is the network-scan block under the form; it only makes sense for an HTTP endpoint on this network.
+_SCOPE_EXTRA_ROWS = {
+    "local": ("tls", "concurrent", "discovery"),
+    "lan": ("cidrs", "tls", "concurrent", "discovery"),
+    "cloud": ("ack",),
+}
+
+
+def _http_provider(offered: tuple[str, ...]) -> dict[str, object]:
+    return {
+        "offered": offered,
+        "fields": {scope: frozenset(_COMMON_ROWS + _HTTP_ROWS + extra) for scope, extra in _SCOPE_EXTRA_ROWS.items()},
+    }
+
+
+PROVIDER_FORM: dict[str, dict[str, object]] = {
+    "ollama": _http_provider(("local", "lan")),
+    "lm_studio": _http_provider(("local", "lan")),
+    "openai_compatible": _http_provider(("local", "lan", "cloud")),
+    "anthropic": _http_provider(("cloud",)),
+}
+for _cli in CLI_PROVIDERS:  # no URL, key, TLS, CIDRs, concurrency or temperature: the CLI only takes a model and a timeout
+    PROVIDER_FORM[_cli["id"]] = {
+        "offered": ("cloud",),
+        "fields": {"cloud": frozenset(("scope", "model", "timeout", "context", "max_output", "ack"))},
+    }
+DEFAULT_CIDRS_TEXT = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+
+def _needs_public_https(url: str) -> bool:
+    """True for a URL that cannot be the hosted Anthropic API: not https, or pointing at a private/LAN host."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() != "https" or not host:
+        return True
+    if host == "localhost" or host.endswith((".local", ".lan", ".internal")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
+
 
 class LLMConnectionsDialog(QDialog):
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
@@ -96,13 +146,13 @@ class LLMConnectionsDialog(QDialog):
         self._keyring_available = False
         self._closed = False
         self._busy_keyring = False
-        self._cli_mode = False
         self._availability_handle: keyring_worker.TaskHandle | None = None
         self._test_handle: keyring_worker.TaskHandle | None = None
         self._created_refs: set[str] = set()  # keyring entries made in this session (removed if the dialog is cancelled)
         self._pending_deletes: set[str] = set()  # entries of replaced/deleted keys (removed once the dialog is saved)
 
         self._build_ui()
+        self._apply_form_rules(self.provider_combo.currentText(), self.scope_combo.currentText())
         self._availability_handle = keyring_worker.start_task(
             keyring_worker.check_available(), on_done=self._on_keyring_availability
         )
@@ -131,7 +181,7 @@ class LLMConnectionsDialog(QDialog):
         top.addWidget(self.profile_list, 1)
 
         form_wrap = QWidget()
-        form = QFormLayout(form_wrap)
+        form = self._form = QFormLayout(form_wrap)
         form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
         self.name_input = QLineEdit()
@@ -260,7 +310,8 @@ class LLMConnectionsDialog(QDialog):
         root.addLayout(scan_row)
 
         apply_scan_row = QHBoxLayout()
-        apply_scan_row.addWidget(QLabel("Discovered endpoint"))
+        self.discovery_label = QLabel("Discovered endpoint")
+        apply_scan_row.addWidget(self.discovery_label)
         self.scan_results_combo = QComboBox()
         self.apply_scan_btn = QPushButton("Apply Scan Result")
         self.apply_scan_btn.clicked.connect(self._on_apply_scan_result)
@@ -399,13 +450,9 @@ class LLMConnectionsDialog(QDialog):
 
     @Slot(str)
     def _on_scope_changed(self, value: str) -> None:
-        is_cloud = (value or "").strip().lower() == "cloud"
-        self.cloud_ack_check.setVisible(is_cloud)
-        self.allowed_cidrs_input.setEnabled(not is_cloud)
-        self.concurrent_check.setEnabled(not is_cloud)
-        if is_cloud:
-            self.verify_tls_check.setChecked(True)
-        self.verify_tls_check.setEnabled(not is_cloud)
+        if self._suspend_field_events:
+            return
+        self._apply_form_rules(self.provider_combo.currentText(), value)
 
     @Slot()
     def _on_add_cloud_preset(self) -> None:
@@ -484,37 +531,100 @@ class LLMConnectionsDialog(QDialog):
         key = (provider or "").strip().lower()
         return next((item for item in CLI_PROVIDERS if item["id"] == key), None)
 
-    def _apply_provider_mode(self, provider: str) -> None:
-        """Disable and clear the URL/key fields for a CLI provider; for other providers just re-enable them."""
+    def _apply_form_rules(self, provider: str, scope: str) -> bool:
+        """Show only the rows that apply to this provider and scope. Returns True when the scope is unusual for the provider.
+
+        Rows are hidden (and disabled), never reset to another provider or scope here; only values that cannot apply
+        to a CLI provider are cleared.
+        """
+        provider = (provider or "").strip().lower()
+        scope = (scope or "local").strip().lower()
+        spec = PROVIDER_FORM.get(provider) or PROVIDER_FORM["openai_compatible"]
+        offered = list(spec["offered"])  # type: ignore[arg-type]
+        flagged = scope not in offered
+        if flagged:
+            offered.append(scope)
+        if [self.scope_combo.itemText(i) for i in range(self.scope_combo.count())] != offered:
+            self.scope_combo.blockSignals(True)
+            try:
+                self.scope_combo.clear()
+                self.scope_combo.addItems(offered)
+            finally:
+                self.scope_combo.blockSignals(False)
+        if self.scope_combo.currentText() != scope:
+            self.scope_combo.blockSignals(True)
+            try:
+                self.scope_combo.setCurrentText(scope)
+            finally:
+                self.scope_combo.blockSignals(False)
+        fields_by_scope: dict[str, frozenset[str]] = spec["fields"]  # type: ignore[assignment]
+        fields = fields_by_scope.get(scope) or next(iter(fields_by_scope.values()))
         cli = self._cli_provider(provider)
-        was_cli = self._cli_mode
-        self._cli_mode = cli is not None
         self.cli_note_label.setText(cli["note"] if cli else "")
-        self.cli_note_label.setVisible(cli is not None)
+        self._form.setRowVisible(self.cli_note_label, cli is not None)
         self.cloud_ack_check.setText(cli["ack"] if cli else CLOUD_ACK_TEXT)
-        for widget in (self.base_url_input, self.api_key_input, self.keyring_check, self.scope_combo):
-            widget.setEnabled(cli is None and not self._busy_keyring)
-        if cli is not None:
+        if cli is not None:  # nothing typed here can apply to a CLI profile
             self.base_url_input.clear()
             self.api_key_input.clear()
+            self.temperature_input.clear()
             self.keyring_check.setChecked(False)
-            self.scope_combo.setCurrentText("cloud")
-        elif was_cli and (self.scope_combo.currentText() or "").strip().lower() == "cloud" and (provider or "").strip().lower() != "anthropic":
-            self.scope_combo.setCurrentText("local")
+        if "cidrs" in fields and not (self.allowed_cidrs_input.text() or "").strip():
+            self.allowed_cidrs_input.setText(DEFAULT_CIDRS_TEXT)
+        if scope == "cloud":
+            self.verify_tls_check.setChecked(True)  # hosted endpoints always verify certificates
+        active = 0 <= self.profile_list.currentRow() < len(self._profiles) and not self._busy_keyring
+        rows = {
+            "scope": self.scope_combo,
+            "base_url": self.base_url_input,
+            "api_key": self.api_key_input,
+            "keyring": self.keyring_check,
+            "model": self.default_model_input,
+            "timeout": self.timeout_input,
+            "context": self.context_tokens_input,
+            "max_output": self.max_output_input,
+            "temperature": self.temperature_input,
+            "cidrs": self.allowed_cidrs_input,
+            "ack": self.cloud_ack_check,
+            "tls": self.verify_tls_check,
+            "concurrent": self.concurrent_check,
+        }
+        for key, widget in rows.items():
+            visible = key in fields and (key != "keyring" or self._keyring_available)
+            self._form.setRowVisible(widget, visible)
+            widget.setEnabled(visible and active)
+        self.scope_combo.setEnabled(active and len(offered) > 1)  # a fixed scope is shown but not editable
+        for widget in (
+            self.include_non_private_check,
+            self.include_loopback_check,
+            self.refresh_networks_btn,
+            self.network_combo,
+            self.scan_btn,
+            self.discovery_label,
+            self.scan_results_combo,
+            self.apply_scan_btn,
+        ):
+            widget.setVisible("discovery" in fields)
+        return flagged
 
     @Slot(str)
     def _on_provider_changed(self, value: str) -> None:
         if self._suspend_field_events:
             return
         provider = (value or "").strip().lower()
-        self._apply_provider_mode(provider)
-        if self._cli_mode:
+        spec = PROVIDER_FORM.get(provider)
+        current_scope = (self.scope_combo.currentText() or "local").strip().lower()
+        offered = spec["offered"] if spec else ()
+        scope = current_scope if (not offered or current_scope in offered) else offered[0]  # type: ignore[index]
+        self._apply_form_rules(provider, scope)
+        if self._cli_provider(provider) is not None:
             return
         current_url = (self.base_url_input.text() or "").strip()
+        if provider != "anthropic" and "api.anthropic.com" in current_url:
+            current_url = ""
+            self.base_url_input.clear()
         if provider == "anthropic":
-            if not current_url or "127.0.0.1" in current_url or "localhost" in current_url:
+            if not current_url or _needs_public_https(current_url):
                 self.base_url_input.setText("https://api.anthropic.com")
-            self.scope_combo.setCurrentText("cloud")
             return
         if provider == "ollama":
             if not current_url or current_url in {"http://127.0.0.1:1234", "http://localhost:1234"}:
@@ -524,7 +634,7 @@ class LLMConnectionsDialog(QDialog):
             if not current_url or current_url in {"http://127.0.0.1:11434", "http://localhost:11434"}:
                 self.base_url_input.setText("http://127.0.0.1:1234")
             if (self.scope_combo.currentText() or "").strip().lower() == "lan" and "127.0.0.1" in self.base_url_input.text():
-                self.scope_combo.setCurrentText("local")
+                self._apply_form_rules(provider, "local")
             return
         # openai_compatible default
         if not current_url:
@@ -649,10 +759,15 @@ class LLMConnectionsDialog(QDialog):
             temperature = profile.get("temperature", 0.2 if str(profile.get("scope", "local")) != "cloud" else None)
             self.temperature_input.setText("" if temperature is None else str(temperature))
             self.cloud_ack_check.setChecked(bool(profile.get("cloud_acknowledged", False)))
-            self._on_scope_changed(str(profile.get("scope", "local")))
-            self._apply_provider_mode(str(profile.get("provider", "ollama")))
+            saved_provider = str(profile.get("provider", "ollama"))
+            saved_scope = str(profile.get("scope", "local"))
+            unusual_scope = self._apply_form_rules(saved_provider, saved_scope)
         finally:
             self._suspend_field_events = False
+        if unusual_scope:
+            self._result_box.setPlainText(
+                f"Note: the scope '{saved_scope}' is unusual for provider '{saved_provider}'. The saved settings are kept as they are."
+            )
 
     @Slot()
     def _on_apply_profile(self, _checked: bool = False, then: Callable[[], None] | None = None) -> None:
@@ -737,10 +852,10 @@ class LLMConnectionsDialog(QDialog):
             "verify_tls": verify_tls,
             "enabled": self.enabled_check.isChecked(),
             "allow_concurrent_with_local_transcription": self.concurrent_check.isChecked(),
-            "allowed_cidrs": cidr_values,
+            "allowed_cidrs": cidr_values if scope_value == "lan" else [],
             "context_tokens": context_tokens,
             "max_output_tokens": max_output_tokens,
-            "temperature": temperature,
+            "temperature": None if cli_provider is not None else temperature,
             "cloud_acknowledged": bool(self.cloud_ack_check.isChecked() and scope_value == "cloud"),
         }
         old_ref_id = secret_store.ref_id_from(self._profiles[row].get("api_key"))
@@ -840,12 +955,12 @@ class LLMConnectionsDialog(QDialog):
         for widget in (self.profile_list, self.apply_btn, self.test_btn, self.save_btn, self.delete_btn, self.api_key_input, self.keyring_check):
             widget.setEnabled(not busy)
         if not busy:
-            self._apply_provider_mode(self.provider_combo.currentText())
+            self._apply_form_rules(self.provider_combo.currentText(), self.scope_combo.currentText())
 
     @Slot(object)
     def _on_keyring_availability(self, available: object) -> None:
         self._keyring_available = bool(available)
-        self.keyring_check.setVisible(self._keyring_available)
+        self._apply_form_rules(self.provider_combo.currentText(), self.scope_combo.currentText())
 
     @Slot()
     def _on_test_connection(self) -> None:

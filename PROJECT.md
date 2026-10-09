@@ -60,6 +60,7 @@ and practical support for GPU-heavy speech/OCR workloads.
 - Pyannote diarization backends run in a spawned subprocess to avoid CUDA/cuDNN runtime conflicts after ASR model use.
 - Linux runtime setup may re-exec once after adjusting dynamic loader paths for CUDA/OCR libraries.
 - Local config is additive and persisted under user-home paths; plaintext LLM API keys are stripped before config writes unless stored as `env:VAR_NAME` references.
+- Qt background workers (Python `QObject`s moved to a `QThread`) are released on the main thread from the `thread.finished` slot (`ui_qt/thread_lifecycle.py::release_worker`), never `deleteLater`'d from their own signals. Destroying one on its worker thread can deadlock against the GUI thread (Qt signal/slot mutex vs the GIL).
 - Prompt templates are split between repo-provided templates in `assets/prompts/` and user templates under `~/.pyscribe/prompts`.
 
 ## Decision Log
@@ -78,6 +79,7 @@ and practical support for GPU-heavy speech/OCR workloads.
 | 2026-10-05 | Set `no_repeat_ngram_size=4` for file transcription. | Whisper repetition loops cost one AMI meeting 66 words (WER 25.7% -> 21.0% with the guard). | Applied in `services/asr_decode.py`. |
 | 2026-10-09 | Keep the OCR model-manifest check refusing when Hugging Face is unreachable; show the reason and let the user pick the fallback OCR backend (`visual_ocr_fallback`). | The check is a deliberate integrity control; silent fallback to RapidOCR cost accuracy (word F1 0.55 vs 0.99). | Auto note says why it fell back; no cache-bypass switch. See `docs/ocr_backend_check_2026-10.md`. |
 | 2026-10-09 | Single `main` branch with linear history; one commit per item. | Many stale local branches; UX/AI/MCP work merged by fast-forward (PR #1). | Old spike scripts kept as tag `archive/phase-7-spikes`. Orchestration protocol is in `docs/handoff_2026-10-09_orchestration.md`. |
+| 2026-10-09 | Release Qt workers on the main thread; defer the window close while the uncancellable diarization probe runs. | An intermittent GIL/Qt mutex deadlock (about 1 in 7 test runs, possible in the app) and a close that blocked the UI for up to 15 s. | `release_worker()` pattern for all `QThread` workers; closing hides the window at once and force-exits after 15 s. |
 
 
 ## Current Priorities

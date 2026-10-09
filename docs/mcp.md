@@ -86,3 +86,5 @@ generic failure; details stay in PyScribe's log.
   newest 500 kept).
 - **One job at a time.** Jobs queue (up to 10). If the PyScribe desktop app is transcribing at the same time, both
   compete for the GPU, so run one or the other.
+- **Stopping.** When the client disconnects or the server is stopped, queued and running transcriptions are
+  cancelled (they show as "cancelled"). The server waits up to 2 s for the running job to stop, then exits.

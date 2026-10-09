@@ -484,3 +484,80 @@ def clean_names_terms(value: object) -> str:
     """Names/terms hint: plain text only, trimmed and length-limited."""
     text = " ".join(str(value or "").split())
     return text[:MAX_NAMES_TERMS_CHARS]
+
+
+# --- running a template through PyScribe's own LLM connection ---------------------------------
+
+ALLOW_CLOUD_ENV = "PYSCRIBE_MCP_ALLOW_CLOUD"
+MAX_TEMPLATE_RUN_CHARS = 2_000_000
+
+TemplateRunner = Callable[[Any, Any, Any], Any]
+
+
+def cloud_allowed(environ: dict[str, str] | None = None) -> bool:
+    """Cloud profiles are used from MCP only when the user set ``PYSCRIBE_MCP_ALLOW_CLOUD=1`` for the server."""
+    env = os.environ if environ is None else environ
+    return (env.get(ALLOW_CLOUD_ENV) or "").strip() == "1"
+
+
+def pick_llm_profile(profiles: list[Any], name: str | None, *, allow_cloud: bool) -> Any:
+    """Choose an enabled profile by name, or the only usable one. Cloud profiles need ``allow_cloud``."""
+    usable = [p for p in profiles if p.enabled and (allow_cloud or p.scope != "cloud")]
+    wanted = (name or "").strip().lower()
+    if wanted:
+        for profile in profiles:
+            if profile.enabled and profile.name.lower() == wanted:
+                if profile.scope == "cloud" and not allow_cloud:
+                    raise McpToolError(
+                        f"Profile '{profile.name}' sends transcripts to a cloud provider. Cloud profiles are off "
+                        f"for MCP unless the server is started with {ALLOW_CLOUD_ENV}=1."
+                    )
+                return profile
+        raise McpToolError("Unknown or disabled LLM profile. Pass one of: " + (", ".join(p.name for p in usable) or "(none)"))
+    if len(usable) == 1:
+        return usable[0]
+    if not usable:
+        raise McpToolError("No usable LLM profile. Add a local or LAN profile in PyScribe's LLM Connections.")
+    raise McpToolError("Several LLM profiles exist; pass profile as one of: " + ", ".join(p.name for p in usable))
+
+
+def run_template_on_transcript(
+    *,
+    store: TranscriptStore,
+    transcript_id: str,
+    template_id: str,
+    profile_name: str | None,
+    profiles: list[Any],
+    templates: list[Any],
+    runner: TemplateRunner,
+    request_cls: Callable[..., Any],
+    model: str | None = None,
+    allow_cloud: bool = False,
+) -> dict[str, Any]:
+    """Apply a saved template to a stored transcript with a PyScribe LLM profile; returns the model output.
+
+    Scope/cloud policy is enforced twice: here (cloud opt-in) and by ``runner`` (``evaluate_profile_scope_policy``).
+    The transcript is only ever placed in the payload as data, never in the system prompt.
+    """
+    wanted = str(template_id or "").strip().lower()
+    template = next((t for t in templates if t.id == wanted), None)
+    if template is None:
+        raise McpToolError("Unknown template id. Use list_templates to see valid ids.")
+    profile = pick_llm_profile(profiles, profile_name, allow_cloud=allow_cloud)
+    text, meta = store.read(transcript_id)
+    if len(text) > MAX_TEMPLATE_RUN_CHARS:
+        raise McpToolError(f"The transcript is too long to process here ({len(text)} characters).")
+    request = request_cls(transcript_text=text, selected_model=(model or "").strip() or None, include_images=False)
+    result = runner(profile, template, request)
+    if result.status != "pass":
+        raise McpToolError(f"The LLM run failed ({result.error_code}): {result.error_detail}")
+    return {
+        "transcript_id": meta.get("id", transcript_id),
+        "template_id": template.id,
+        "profile": profile.name,
+        "scope": profile.scope,
+        "model": result.model,
+        "output_format": template.output_format,
+        "note": result.info_note,
+        "output": result.output_text,
+    }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -60,7 +61,7 @@ class RuntimeGateTests(unittest.TestCase):
         self.assertFalse(is_nemotron_streaming("tiny"))
 
     def test_old_transformers_is_rejected_with_install_hint(self) -> None:
-        with patch("transformers.__version__", "4.57.1"):
+        with patch.dict(sys.modules, {"transformers": SimpleNamespace(__version__="4.57.1")}):
             with self.assertRaisesRegex(RuntimeError, "transformers>=5.13"):
                 require_nemotron_runtime()
 

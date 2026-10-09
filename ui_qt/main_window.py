@@ -1119,6 +1119,19 @@ class MainWindow(QMainWindow):
         self.visual_interval_input = QLineEdit()
         self.visual_interval_input.setText(f"{float(self.config.visual_sample_seconds or 1.0):.1f}")
         visual_grid.addWidget(self.visual_interval_input, 3, 1)
+        visual_grid.addWidget(QLabel("OCR Fallback"), 4, 0)
+        self.visual_fallback_combo = QComboBox()
+        self.visual_fallback_combo.addItem("auto (built-in order)", "auto")
+        for fallback_name in ("rapidocr", "pytesseract", "surya"):
+            self.visual_fallback_combo.addItem(fallback_name, fallback_name)
+        self.visual_fallback_combo.setToolTip(
+            "Used first when the main OCR backend cannot run (for example PaddleOCR cannot verify its models offline)."
+        )
+        fallback_idx = self.visual_fallback_combo.findData(str(self.config.visual_ocr_fallback or "auto").lower())
+        self.visual_fallback_combo.setCurrentIndex(max(fallback_idx, 0))
+        # The OCR code reads this from the saved config at run time (also in the worker process), so save on change.
+        self.visual_fallback_combo.currentIndexChanged.connect(self._on_visual_fallback_changed)
+        visual_grid.addWidget(self.visual_fallback_combo, 4, 1)
         advanced_layout.addWidget(self.visual_options_widget)
         advanced_layout.addStretch(1)
 
@@ -1430,6 +1443,7 @@ class MainWindow(QMainWindow):
             self.visual_checkbox,
             self.visual_profile_combo,
             self.visual_backend_combo,
+            self.visual_fallback_combo,
             self.visual_scope_combo,
             self.visual_interval_input,
             self.transcribe_btn,
@@ -3146,6 +3160,7 @@ class MainWindow(QMainWindow):
             "use_visual_analysis": use_visual_analysis,
             "visual_profile": visual_profile,
             "visual_ocr_backend": visual_ocr_backend,
+            "visual_ocr_fallback": str(self.visual_fallback_combo.currentData() or "auto"),
             "visual_scope": visual_scope,
             "visual_sample_seconds": visual_sample_seconds,
         }
@@ -3521,6 +3536,7 @@ class MainWindow(QMainWindow):
         visual_controls_enabled = not self._is_live_mode()
         self.visual_profile_combo.setEnabled(visual_controls_enabled)
         self.visual_backend_combo.setEnabled(visual_controls_enabled)
+        self.visual_fallback_combo.setEnabled(visual_controls_enabled)
         self.visual_scope_combo.setEnabled(visual_controls_enabled)
         self.visual_interval_input.setEnabled(visual_controls_enabled)
         self.visual_progress_bar.setEnabled(bool(self.visual_checkbox.isChecked() and visual_controls_enabled))
@@ -3532,6 +3548,11 @@ class MainWindow(QMainWindow):
             self.diar_checkbox.setText("Speaker Identification unavailable for Granite")
             return
         self.diar_checkbox.setText("Speaker Identification is On" if enabled else "Speaker Identification is Off")
+
+    @Slot(int)
+    def _on_visual_fallback_changed(self, index: int) -> None:
+        del index
+        self._save_config(visual_ocr_fallback=str(self.visual_fallback_combo.currentData() or "auto"))
 
     @Slot(int)
     def _on_diar_backend_changed(self, index: int) -> None:
@@ -3632,6 +3653,7 @@ class MainWindow(QMainWindow):
             self.diar_progress_bar.setEnabled(False)
             self.visual_profile_combo.setEnabled(False)
             self.visual_backend_combo.setEnabled(False)
+            self.visual_fallback_combo.setEnabled(False)
             self.visual_scope_combo.setEnabled(False)
             self.visual_interval_input.setEnabled(False)
         else:
@@ -3642,6 +3664,7 @@ class MainWindow(QMainWindow):
             self.max_speakers_input.setEnabled(diar_controls_enabled and not self._live_capture_active)
             self.visual_profile_combo.setEnabled(not live_mode and not self._is_transcription_running())
             self.visual_backend_combo.setEnabled(not live_mode and not self._is_transcription_running())
+            self.visual_fallback_combo.setEnabled(not live_mode and not self._is_transcription_running())
             self.visual_scope_combo.setEnabled(not live_mode and not self._is_transcription_running())
             self.visual_interval_input.setEnabled(not live_mode and not self._is_transcription_running())
 
@@ -4340,6 +4363,7 @@ class MainWindow(QMainWindow):
         use_visual_analysis: bool | object = _UNSET,
         visual_profile: str | object = _UNSET,
         visual_ocr_backend: str | object = _UNSET,
+        visual_ocr_fallback: str | object = _UNSET,
         visual_scope: str | object = _UNSET,
         visual_sample_seconds: float | object = _UNSET,
         live_source_mode: str | object = _UNSET,
@@ -4377,6 +4401,8 @@ class MainWindow(QMainWindow):
                 self.config.visual_profile = str(visual_profile)
             if visual_ocr_backend is not _UNSET:
                 self.config.visual_ocr_backend = str(visual_ocr_backend)
+            if visual_ocr_fallback is not _UNSET:
+                self.config.visual_ocr_fallback = str(visual_ocr_fallback)
             if visual_scope is not _UNSET:
                 self.config.visual_scope = str(visual_scope)
             if visual_sample_seconds is not _UNSET:

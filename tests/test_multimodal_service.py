@@ -283,6 +283,50 @@ class PaddleDeviceTests(unittest.TestCase):
             "PaddleOCR unavailable: model manifest check failed (Hugging Face unreachable); using RapidOCR.",
         )
 
+    def _auto(self, fallback: str, *, paddle_ok: bool, rapid_ok: bool, tess_ok: bool, requested: str = "auto"):
+        fake_fn = lambda image, mode="slide": ""  # noqa: E731
+        offline = "PaddleOCR init/runtime error: Cannot reach https://huggingface.co/x: offline mode is enabled."
+        with (
+            patch.object(mm, "_configured_fallback", return_value=fallback),
+            patch.object(mm, "_paddle_will_use_gpu", return_value=True),
+            patch.object(mm, "_build_paddle_ocr_fn", return_value=(fake_fn, None) if paddle_ok else (None, offline)),
+            patch.object(mm, "_build_rapid_ocr_fn", return_value=(fake_fn, None) if rapid_ok else (None, "Install RapidOCR")),
+            patch.object(mm, "_build_tesseract_ocr_fn", return_value=(fake_fn, None) if tess_ok else (None, "Install Tesseract")),
+        ):
+            _fn, name, _err, note = mm._build_ocr_fn(requested)
+        return name, note
+
+    def test_default_fallback_keeps_existing_order(self) -> None:
+        name, note = self._auto("auto", paddle_ok=False, rapid_ok=True, tess_ok=True)
+        self.assertEqual(name, "rapidocr")
+        self.assertEqual(
+            note, "PaddleOCR unavailable: model manifest check failed (Hugging Face unreachable); using RapidOCR."
+        )
+
+    def test_chosen_fallback_is_used_and_explained(self) -> None:
+        name, note = self._auto("pytesseract", paddle_ok=False, rapid_ok=True, tess_ok=True)
+        self.assertEqual(name, "pytesseract")
+        self.assertEqual(
+            note,
+            "PaddleOCR unavailable: model manifest check failed (Hugging Face unreachable); "
+            "using Tesseract (your chosen fallback).",
+        )
+
+    def test_missing_chosen_fallback_falls_through_with_reason(self) -> None:
+        name, note = self._auto("pytesseract", paddle_ok=False, rapid_ok=True, tess_ok=False)
+        self.assertEqual(name, "rapidocr")
+        self.assertIn("your chosen fallback Tesseract is unavailable too (not installed)", note)
+        self.assertTrue(note.endswith("using RapidOCR."))
+
+    def test_chosen_fallback_not_used_when_paddle_works(self) -> None:
+        name, note = self._auto("pytesseract", paddle_ok=True, rapid_ok=True, tess_ok=True)
+        self.assertEqual(name, "paddleocr")
+        self.assertIsNone(note)
+
+    def test_configured_fallback_defaults_to_auto_on_error(self) -> None:
+        with patch("services.config_service.load_config", side_effect=OSError("boom")):
+            self.assertEqual(mm._configured_fallback(), "auto")
+
     def test_brief_failure_reason_is_one_clean_line(self) -> None:
         self.assertEqual(mm._brief_failure_reason("Install PaddleOCR: pip install paddleocr"), "not installed")
         text = mm._brief_failure_reason(

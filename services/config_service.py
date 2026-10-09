@@ -22,6 +22,7 @@ class AppConfig:
     use_visual_analysis: bool = False
     visual_profile: str = "balanced"
     visual_ocr_backend: str = "auto"
+    visual_ocr_fallback: str = "auto"
     visual_scope: str = "slides_only"
     visual_sample_seconds: float = 1.0
     confirmed_visual_backends: list[str] = field(default_factory=list)
@@ -75,6 +76,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         use_visual_analysis=bool(data.get("use_visual_analysis", False)),
         visual_profile=_as_visual_profile(data.get("visual_profile")),
         visual_ocr_backend=_as_ocr_backend(data.get("visual_ocr_backend")),
+        visual_ocr_fallback=_as_ocr_fallback(data.get("visual_ocr_fallback")),
         visual_scope=_as_visual_scope(data.get("visual_scope")),
         visual_sample_seconds=_as_optional_float(data.get("visual_sample_seconds"), 1.0),
         confirmed_visual_backends=_as_backend_list(data.get("confirmed_visual_backends")),
@@ -171,6 +173,13 @@ def _as_ocr_backend(value: object) -> str:
     if normalized in allowed:
         return normalized
     return "auto"
+
+
+def _as_ocr_fallback(value: object) -> str:
+    """Backend to try first when the main OCR backend cannot be used; "auto" keeps the built-in order."""
+    allowed = {"auto", "rapidocr", "surya", "pytesseract"}
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in allowed else "auto"
 
 
 def _as_visual_scope(value: object) -> str:

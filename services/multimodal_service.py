@@ -547,6 +547,32 @@ def _brief_failure_reason(reason: str | None, *, limit: int = 110) -> str:
     return text[:limit].rstrip(" .;:,") or "backend unavailable"
 
 
+def _configured_fallback() -> str:
+    """The user's chosen fallback OCR backend ("auto" = built-in order). Read from the saved config on each run."""
+    try:
+        from services.config_service import load_config
+
+        return str(load_config().visual_ocr_fallback or "auto")
+    except Exception:
+        return "auto"
+
+
+def _fallback_note(
+    *, order: list[str], name: str, fallback: str, reasons: dict[str, str]
+) -> str | None:
+    """One short line: why the first-choice backend failed and which fallback was used (and why that one)."""
+    failed = [(n, reasons[n]) for n in order if n in reasons]
+    if not failed:
+        return None
+    label = lambda n: _OCR_DISPLAY_NAMES.get(n, n)  # noqa: E731
+    first, first_reason = failed[0]
+    note = f"{label(first)} unavailable: {_brief_failure_reason(first_reason)}; "
+    if fallback != "auto" and fallback != first and fallback in reasons:
+        note += f"your chosen fallback {label(fallback)} is unavailable too ({_brief_failure_reason(reasons[fallback])}); "
+    suffix = " (your chosen fallback)" if name == fallback and fallback != "auto" else ""
+    return f"{note}using {label(name)}{suffix}."
+
+
 def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long_video: bool = False) -> OcrBuildResult:
     requested = (backend or "auto").strip().lower()
     attempts: list[str] = []
@@ -576,29 +602,29 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long
     else:
         order = ["paddleocr", "rapidocr", "surya", "pytesseract"]
 
+    fallback = _configured_fallback()
+    if fallback != "auto" and fallback in order and fallback != order[0]:
+        order.remove(fallback)
+        order.insert(1, fallback)
+
     for name in order:
         fn, reason = backend_builders[name](on_status=on_status)
         if fn is not None:
             fallback_note = None
             if on_status and name != requested and requested != "auto":
                 on_status(f"Requested OCR backend '{requested}' unavailable; using '{name}' fallback.")
-                fallback_reason = attempt_reason_by_backend.get(requested, "unavailable")
+                fallback_reason = _brief_failure_reason(attempt_reason_by_backend.get(requested, "unavailable"))
+                chosen = " (your chosen fallback)" if name == fallback and fallback != "auto" else ""
                 fallback_note = (
                     f"Requested backend '{requested}' unavailable: {fallback_reason}. "
-                    f"Using '{name}' fallback."
+                    f"Using '{name}' fallback{chosen}."
                 )
             elif requested == "auto" and (name != order[0] or long_video):
                 if on_status:
                     on_status(f"Using '{name}' OCR backend.")
-                failed = [(n, attempt_reason_by_backend[n]) for n in order if n in attempt_reason_by_backend]
-                if failed:
-                    first, first_reason = failed[0]
-                    fallback_note = (
-                        f"{_OCR_DISPLAY_NAMES.get(first, first)} unavailable: "
-                        f"{_brief_failure_reason(first_reason)}; using {_OCR_DISPLAY_NAMES.get(name, name)}."
-                    )
-                else:
-                    fallback_note = f"Auto mode selected '{name}' for long-video OCR runtime."
+                fallback_note = _fallback_note(
+                    order=order, name=name, fallback=fallback, reasons=attempt_reason_by_backend
+                ) or f"Auto mode selected '{name}' for long-video OCR runtime."
             return fn, name, None, fallback_note
         attempt_reason_by_backend[name] = reason or "backend unavailable"
         attempts.append(f"{name}: {reason}")

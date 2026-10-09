@@ -96,6 +96,12 @@ unreachable); using RapidOCR." The note is also produced when no status callback
 `tests/test_multimodal_service.py` (`test_auto_fallback_note_names_the_real_failure_reason`,
 `test_brief_failure_reason_is_one_clean_line`). The backend order and the manifest verification are unchanged.
 
+Follow-up (2026-10-09): a user-selectable fallback was added (`visual_ocr_fallback`, Qt "OCR Fallback" combo; choices
+auto, rapidocr, pytesseract, surya; default auto = unchanged order). It is tried right after the first-choice backend;
+if it is not installed the next backend in the usual order is used, and the note names both reasons. The service reads
+it from the saved config at run time, so the combo saves immediately and again at job start. The manifest check has no
+bypass switch.
+
 C. **Slide titles are dropped.** Two- or three-word capitalised titles ("Quarterly Review", "Migration Plan",
 "Security Checklist") never appear in the slides-only report, with either backend. `_is_low_value_slide_line` and
 `_looks_like_person_name` treat them as participant-name fragments. This is independent of the upgrade.

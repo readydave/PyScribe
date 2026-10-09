@@ -165,11 +165,21 @@ class ConfigServiceAdditiveFieldsTests(unittest.TestCase):
         self.assertFalse(cfg.llm_allow_remote_lan)
         self.assertEqual(cfg.llm_profiles, [])
         self.assertEqual(cfg.visual_ocr_backend, "auto")
+        self.assertEqual(cfg.visual_ocr_fallback, "auto")
         self.assertEqual(cfg.visual_scope, "slides_only")
         self.assertEqual(cfg.live_source_mode, "microphone")
         self.assertIsNone(cfg.live_input_device_id)
         self.assertIsNone(cfg.live_output_dir)
         self.assertTrue(cfg.live_keep_audio_on_success)
+
+    def test_visual_ocr_fallback_roundtrip_and_bad_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            save_config(AppConfig(visual_ocr_fallback="pytesseract"), path)
+            self.assertEqual(load_config(path).visual_ocr_fallback, "pytesseract")
+            for bad in ("paddleocr", "nonsense", 7, None, ""):
+                path.write_text(json.dumps({"visual_ocr_fallback": bad}), encoding="utf-8")
+                self.assertEqual(load_config(path).visual_ocr_fallback, "auto", bad)
 
     def test_save_and_reload_additive_llm_fields(self) -> None:
         cfg = AppConfig(

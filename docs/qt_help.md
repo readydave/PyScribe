@@ -84,6 +84,7 @@
   - Optional video-frame OCR to capture on-screen text.
   - Choose visual mode: `fast`, `balanced`, `accurate`.
   - Choose OCR backend: `rapidocr`, `paddleocr`, `surya`, `pytesseract`, or `auto`.
+  - Choose **OCR Fallback** (`auto` by default, or `rapidocr`, `pytesseract`, `surya`): the backend tried first when the main one cannot run. The visual report notes why and which fallback was used.
   - Choose scope: `Slides only` (default) or `Slides + chat`.
   - Set sample interval in seconds (`0.5` to `10.0`; lower = more coverage, slower runtime).
   - Long videos use lower frame caps and faster auto OCR backend preference.

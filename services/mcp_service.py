@@ -386,9 +386,12 @@ class JobManager:
         self._queue: list[str] = []
         self._cond = threading.Condition()
         self._worker: threading.Thread | None = None
+        self._stopping = False
 
     def submit(self, params: dict[str, Any]) -> Job:
         with self._cond:
+            if self._stopping:
+                raise McpToolError("The server is shutting down and cannot start new transcriptions.")
             if len(self._queue) >= MAX_QUEUED_JOBS:
                 raise McpToolError(f"Too many transcriptions are waiting ({MAX_QUEUED_JOBS}). Wait for one to finish.")
             job = Job(id=secrets.token_hex(4), params=params)
@@ -444,10 +447,38 @@ class JobManager:
                 on_tick(job)
         return job
 
+    def shutdown(self, timeout: float = 5.0) -> bool:
+        """Cancel queued and running jobs, stop the worker and join it for up to ``timeout`` seconds.
+
+        Returns True when the worker has ended (or never started). Safe to call more than once.
+        """
+        with self._cond:
+            self._stopping = True
+            for job_id in self._queue:
+                job = self._jobs[job_id]
+                job.cancel_event.set()
+                job.status, job.stage, job.finished_at = "cancelled", "cancelled", time.time()
+            self._queue.clear()
+            running = [j for j in self._jobs.values() if j.status == "running"]
+            for job in running:
+                job.cancel_event.set()
+            worker = self._worker
+            self._cond.notify_all()
+        if worker is None:
+            return True
+        worker.join(timeout=max(0.0, timeout))
+        if worker.is_alive():
+            LOGGER.warning("MCP job worker did not stop within %.1fs (jobs still running: %s)",
+                           timeout, ", ".join(j.id for j in running) or "none")
+            return False
+        return True
+
     def _work(self) -> None:
         while True:
             with self._cond:
                 while not self._queue:
+                    if self._stopping:
+                        return
                     if not self._cond.wait(timeout=60.0) and not self._queue:
                         return  # idle: let the thread end; submit() starts a new one
                 job = self._jobs[self._queue.pop(0)]

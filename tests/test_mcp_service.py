@@ -27,6 +27,11 @@ from services.mcp_service import (
 )
 
 
+def _assert_no_job_threads() -> None:
+    alive = [t.name for t in threading.enumerate() if t.name == "pyscribe-mcp-jobs" and t.is_alive()]
+    assert not alive, f"JobManager worker threads left running: {alive}"
+
+
 class _TempCase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -197,7 +202,31 @@ class PagingTests(unittest.TestCase):
 
 class JobManagerTests(_TempCase):
     def _manager(self, runner) -> JobManager:
-        return JobManager(runner, TranscriptStore(self.root / "store"))
+        manager = JobManager(runner, TranscriptStore(self.root / "store"))
+        self.addCleanup(_assert_no_job_threads)
+        self.addCleanup(manager.shutdown)
+        return manager
+
+    def test_shutdown_cancels_queued_jobs_stops_worker_and_refuses_new_work(self) -> None:
+        release = threading.Event()
+        started = threading.Event()
+
+        def blocking(params, hooks):  # noqa: ANN001
+            started.set()
+            release.wait(5)
+            return RunnerOutput("t", "t", "m", 1.0)
+
+        manager = self._manager(blocking)
+        running = manager.submit({"file_name": "a.mp3"})
+        queued = manager.submit({"file_name": "b.mp3"})
+        self.assertTrue(started.wait(5))
+        threading.Timer(0.2, release.set).start()
+        self.assertTrue(manager.shutdown(5.0))
+        self.assertTrue(manager.shutdown(5.0))  # second call is a no-op
+        self.assertEqual(manager.get(queued.id).status, "cancelled")
+        self.assertTrue(manager.get(running.id).done)
+        with self.assertRaises(McpToolError):
+            manager.submit({"file_name": "c.mp3"})
 
     def test_job_runs_and_saves_a_transcript(self) -> None:
         def runner(params, hooks: JobHooks) -> RunnerOutput:

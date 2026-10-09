@@ -316,7 +316,9 @@ def create_server(
 def run_stdio() -> None:
     """Serve over stdio until the client disconnects. Logs go to PyScribe's log file, never to stdout."""
     LOGGER.info("Starting MCP server on stdio (read roots: %s)", ", ".join(str(r) for r in allowed_roots()))
-    server = create_server()
+    store = TranscriptStore(live_root=_qt_live_root())
+    manager = JobManager(default_runner, store)
+    server = create_server(manager=manager, store=store)
     try:
         server.run()
     except KeyboardInterrupt:
@@ -324,4 +326,5 @@ def run_stdio() -> None:
     except BrokenPipeError:
         pass
     finally:
+        manager.shutdown(2.0)
         LOGGER.info("MCP server stopped")

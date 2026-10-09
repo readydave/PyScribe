@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -22,6 +23,11 @@ READ_ONLY_TOOLS = {
     "list_transcription_models", "get_job", "wait_for_job", "list_transcripts", "get_transcript",
     "list_templates", "get_template",
 }
+
+
+def _assert_no_job_threads() -> None:
+    alive = [t.name for t in threading.enumerate() if t.name == "pyscribe-mcp-jobs" and t.is_alive()]
+    assert not alive, f"JobManager worker threads left running: {alive}"
 
 
 def _text(result) -> str:  # noqa: ANN001
@@ -45,7 +51,13 @@ class InProcessServerTests(unittest.IsolatedAsyncioTestCase):
 
         self.store = TranscriptStore(self.root / "store")
         self.manager = JobManager(runner, self.store)
+        self._expect_no_job_threads(self.manager)
         self.server = create_server(manager=self.manager, store=self.store, roots=[self.root], runner=runner)
+
+    def _expect_no_job_threads(self, manager: JobManager) -> None:
+        # cleanups run last-in first-out: shutdown first, then the thread check
+        self.addCleanup(_assert_no_job_threads)
+        self.addCleanup(manager.shutdown)
 
     async def test_tools_are_registered_with_safe_annotations(self) -> None:
         async with Client(self.server) as client:
@@ -244,6 +256,7 @@ class InProcessServerTests(unittest.IsolatedAsyncioTestCase):
             return RunnerOutput("t", "t", "m", 1.0)
 
         manager = JobManager(slow, self.store)
+        self._expect_no_job_threads(manager)
         server = create_server(manager=manager, store=self.store, roots=[self.root], runner=slow)
         async with Client(server) as client:
             first = (await client.call_tool("start_transcription", {"path": str(self.root / "meeting.mp3")})).structured_content

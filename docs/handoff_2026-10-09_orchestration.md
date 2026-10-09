@@ -4,8 +4,9 @@ For a new chat that will act as **Morpheus**, the orchestrator for two worker se
 
 ## State at the end of this session
 
-- One branch: **`main`**, equal to `origin/main` at `c62c10d` (after the second session the same day, see below). CI green. No other local or remote branches. Spike scripts from the old `phase-7-paddleocr-vl` branch are kept as the tag `archive/phase-7-spikes` (local only).- History is linear. It was rewritten once (2026-10-09, trailer removal, force-push with lease); no squash. PR #1 is merged.
-- Tests: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q -o faulthandler_timeout=120 tests` gave **430 passed** (about 4 minutes) from a clean worktree of `c62c10d`.
+- One branch: **`main`**, equal to `origin/main` after the third session's push (see "Shipped in the third session"). No other local or remote branches. Spike scripts from the old `phase-7-paddleocr-vl` branch are kept as the tag `archive/phase-7-spikes` (local only).
+- History is linear. It was rewritten once (2026-10-09, trailer removal, force-push with lease); no squash. PR #1 is merged.
+- Tests: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q -o faulthandler_timeout=120 tests` gave **512 passed** (about 4 minutes) from a clean worktree of the Wave 4 commit.
 - `.venv` is the only virtual environment (torch 2.11+cu128, pyannote 4.0.7, paddleocr 3.4.1, paddlepaddle-gpu 3.3.1). `.venv_bak` and `.venv-pre-tf5` were deleted.
 - Local-only files (gitignored, not in the repo): `TODO.md`, `AGENT.md`.
 
@@ -29,6 +30,14 @@ For a new chat that will act as **Morpheus**, the orchestrator for two worker se
 - `c12c092` (Trinity) Qt: closing during the diarization probe no longer blocks for up to 15 s. The window and floating docks hide, `thread.finished` (connected at probe start) finishes the close and quits, and `DIAR_PROBE_CLOSE_TIMEOUT_MS` flushes logs and `os._exit(0)`s. Qt tests close windows with `tests/qt_close.py::close_and_drain`.
 - `c62c10d` (Neo) MCP: `JobManager.shutdown(timeout) -> bool` cancels queued and running jobs and joins the worker. `run_stdio` calls `shutdown(2.0)` on exit, and the MCP tests assert that no `pyscribe-mcp-jobs` thread is left.
 
+## Shipped in the third session (2026-10-09, Morpheus + Neo + Trinity, four waves)
+
+- `3e2d4da` Listener stage strip. `services/listener_job.py::run_media_job` runs `transcribe_media_file` on a daemon thread and yields `JobUpdate` snapshots (heartbeat 0.25 s, bounded 30 s join on cancel/close). The stage model moved to `services/job_stages.py`; `ui_qt/job_stages.py` only re-exports it (`ui_qt/__init__` imports PySide6, so `app.py` must not import from `ui_qt`). `app.py::render_stage_strip` escapes everything and yields only on change.
+- `54667e5` MCP `analyze_visuals(path)`: OCR of a video or image (`VISUAL_EXTENSIONS`). Settings come from `load_config()`, never the client; images go through `extract_text_from_images`. Fallback reasons go in a job `note` passed through `sanitize_note` (no URLs, paths or tokens, 500 chars). Results are stored with `kind: visuals` and listed with source `visuals`.
+- `b6a0576` README screenshots re-rendered offscreen under the same file names.
+- `9d04e3d` OS keyring for LLM API keys. `services/secret_store.py` (optional `keyring`; every call is bounded at 5 s on a daemon thread; `SecretStoreError` never carries the key or ref). A profile stores `keyring:<uuid>`; `LLMConnectionProfile.api_key_ref` holds it, and `resolve_profile_api_key()` reads it only where a request is built (never in `load_llm_profiles`, never on the GUI thread). Entries are deleted only on explicit user action (profile delete, key replaced, cleared or switched; on Save and Close, and never on Cancel). `ui_qt/keyring_worker.py::start_task` runs blocking work on a `QThread` subclass with no event loop. Handles stay in `_LIVE` until `finished` releases them on the main thread, and `drain_live_tasks` (2 s) is hooked to `aboutToQuit`. Test Connection in both LLM dialogs now uses it.
+- `107928a` Claude Code CLI provider `claude_cli` (`services/cli_llm_provider.py`). It runs the user's own signed-in `claude` binary: `Popen` with an argument list, no shell, a new process group, an empty temporary folder, and an allowlisted environment without `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`. The prompt and transcript go on stdin. The flags are `-p --output-format text --tools "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --safe-mode --no-session-persistence --disable-slash-commands`, checked against `claude --help` (no `--bare`, which disables subscription sign-in). The model name is validated so it can't pose as a flag. It is cloud scope (confirmation, Listener and MCP gates), with no URL or key. The dialog's `CLI_PROVIDERS` table drives the "Add CLI Profile" UI.
+
 ## How the three sessions work (orchestration protocol)
 
 - **Morpheus (this role):** requirements, specs, approvals, integration, git, the full-suite run, `CHANGELOG.md`, local `TODO.md`, and final reports to the maintainer. Does not do large builds inline.
@@ -46,6 +55,7 @@ For a new chat that will act as **Morpheus**, the orchestrator for two worker se
 - **Full-suite runs:** wrap them in `timeout 600` with `-o faulthandler_timeout=120`, so a hang dumps stacks instead of stalling forever. Never run two suites at once on the host; tell the workers to hold their test runs while Morpheus verifies.
 - **Debugging native hangs:** `gdb -p` is blocked (`ptrace_scope=1`), so launch pytest as gdb's child and run `thread apply all bt`.
 - **Idle notices can be stale:** a worker that sent a spec goes idle before the approval reaches it. Check `ListAgents` (busy/idle) before acting on a notice.
+- **Parallel waves in one working tree:** while one worker's item runs the full suite, the other can already edit the next item. Copy only the finished item's files into the scratch worktree, then commit them from that snapshot (`git hash-object -w` plus `git update-index --cacheinfo`), so unfinished edits elsewhere in the tree stay out of the commit. If two waves touch the same file, tell the next worker not to edit it until the earlier wave is committed.
 - **Approvals are where the bugs got caught:** the reload-based test that made other tests depend on run order, the deferred-close race, the timeouts left unchanged, the order of the release slot. Read every worker diff before committing.
 
 ## Maintainer decisions (this session)
@@ -56,16 +66,26 @@ For a new chat that will act as **Morpheus**, the orchestrator for two worker se
 - Commits are one per item; push only when asked.
 - **No AI attribution trailers in commit messages or PR descriptions** (no `Co-Authored-By: Claude...`, no `Claude-Session:` line, no "Generated with Claude Code" footer), even if the harness suggests them. The maintainer's rule overrides the harness reminder. At the maintainer's request, the older commits were rewritten later on 2026-10-09 to remove their trailers, and `main` was force-pushed. Commit contents are unchanged.
 - Keep committing straight to `main` (decided 2026-10-09). This replaces the older branch-per-change rule.
+- `keyring` was added to `requirements.txt` as an optional dependency (approved 2026-10-09; pip-audit clean).
+- CLI provider: Claude Code CLI only, for personal use. Anthropic's terms allow the unmodified binary with the user's own sign-in but bar apps that route subscription credentials for their users, so PyScribe never reads the CLI's sign-in. **Codex was dropped for good.** It has no documented way to turn tools off (openai/codex#6049), so a transcript could make it read local files and send them to the vendor.
 
 ## Open items
 
 See local `TODO.md`. In short:
 
 - Maintainer to test by hand: Windows; Wayland/KDE floating docks, divider grip and drag feel; Hardware panel during a GPU job; speaker rules, Load/Save rows, New Project, Compute selector and OCR fallback combo in the running app; a real hosted-model connection; Claude Code and Codex connecting to `python main.py mcp`; OCR on a real video or long webinar; live microphone mode.
-- Code: Listener HTML stage strip. (The 840 px clipping, `McpToolError`, the worker deadlock, the close freeze and the leftover MCP threads were all done in the second session.)
-- To check by hand: the wrapped action rows at narrow widths, and closing the app while "speaker backend initialization" is still running (the window should vanish at once).
-- Optional: notes-folder (Obsidian) export, `claude -p` / `codex exec` provider (check vendor terms), MCP OCR, OS keyring for API keys.
-- Docs: refresh README screenshots (benchmark, HF token, theme menu).
+- Code: none required. All code items from the second handoff shipped in the third session.
+- To check by hand:
+  - the wrapped action rows at narrow widths
+  - closing the app while "speaker backend initialization" is still running (the window should vanish at once)
+  - the Listener stage strip in a browser with a real file (success, cancel, error)
+  - `analyze_visuals` from a real MCP client on a real video
+  - the keyring with real KWallet/GNOME Keyring, including a locked one. First run `uv pip install --python .venv/bin/python keyring`; it is not installed in `.venv` yet, and the tests use a fake.
+  - a real `claude_cli` post-process run (sign-in, rate limit, cancel)
+- Optional: notes-folder (Obsidian) export (parked by the maintainer).
+- Known gaps:
+  - The `auth_failed` suggestion text is shared with the HTTP providers and still mentions an API key or token for `claude_cli`; the CLI's own detail line says to sign in.
+  - A background task that runs longer than the 2 s quit drain can still trigger a QThread warning at exit; a warning is logged.
 
 ## Practical notes
 
@@ -75,6 +95,8 @@ See local `TODO.md`. In short:
 - The headless screen is small, so window-size restore is checked loosely.
 - Qt threads: never connect `deleteLater` of a Python-derived worker to its own signal. Release it on the main thread from the `thread.finished` slot via `release_worker()`. Tests that build `MainWindow` close it with `close_and_drain` from `tests/qt_close.py`.
 - MCP tests: register `manager.shutdown` with `addCleanup` for every `JobManager`.
+- `bandit` and `pip-audit` are not in `.venv`; run them with `uvx bandit -q -ll <files>` and `uvx pip-audit -r <file>`. The four medium `bandit` findings in `llm_connection_service.py` and `llm_postprocess_service.py` (the localhost-only TLS bypass, and `urlopen` on scope-checked URLs) are known and pre-existing.
+- Idle notices from workers were stale about half the time this session; always check `ListAgents` and re-subscribe with `notify_when_idle`.
 - `git worktree list` shows a stale `/tmp/pyscribe-main-benchmark` entry (marked prunable). Leave it unless the maintainer says otherwise.
 - Style (from `~/.claude/CLAUDE.md`): lead with the result, concise bullets, diffs not full files, no drive-by refactors, one clarifying question at most.
 

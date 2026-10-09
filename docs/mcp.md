@@ -40,9 +40,27 @@ check your client's MCP documentation for "add a stdio server".
 | `list_transcripts` | Saved transcripts and finished live-recording sessions |
 | `get_transcript` | Read a transcript in pages (follow `next_offset`) |
 | `list_templates` / `get_template` | Your saved summary instructions, for the client to apply |
+| `run_template` | Run a template over a transcript using PyScribe's own LLM connection and return the result |
 
 A typical request: *"Transcribe `~/Recordings/standup.m4a`, then use my meeting-summary template on it."*
 Your live meetings recorded in PyScribe appear in `list_transcripts` automatically once they finish.
+
+## Running a template in PyScribe (`run_template`)
+
+`run_template(transcript_id, template_id, profile?, model?)` applies one of your templates to a stored transcript with
+one of the profiles in PyScribe's **LLM Connections**, and returns the output. Use it when you want the summary made
+by your own local or LAN model instead of by the client's model.
+
+- **Profile.** Name a profile, or omit it when exactly one enabled profile is usable. `model` overrides the profile's
+  default model.
+- **Same rules as the app.** The same scope policy applies (local profiles only reach localhost, LAN profiles only
+  your allowed networks), long transcripts are split and merged, and requests that carry an API key never follow
+  redirects.
+- **Cloud is opt-in.** Cloud profiles (hosted providers) are refused unless the server is started with
+  `PYSCRIBE_MCP_ALLOW_CLOUD=1` in its environment, and the profile itself must also be acknowledged in LLM
+  Connections. A client cannot turn this on from a tool call.
+- **Untrusted text.** The transcript goes to the model as data inside the user message, never in the system prompt,
+  and the returned output is model-generated from it, so the client should treat it as data too.
 
 ## Safety
 

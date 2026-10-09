@@ -21,7 +21,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from collections.abc import Callable
+
 from services import AppConfig, discover_local_networks, load_llm_profiles, scan_lan_for_llm_instances, run_connection_test
+from services import secret_store
+from ui_qt import keyring_worker
+
+KEYRING_PLACEHOLDER = "stored in system keyring"
 
 
 # Hosted providers offered as one-click starting points. Model names are left empty (except Anthropic)
@@ -72,8 +78,18 @@ class LLMConnectionsDialog(QDialog):
         self._suspend_field_events = False
         self._local_networks: list[object] = []
         self._scan_results: list[object] = []
+        self._keyring_available = False
+        self._closed = False
+        self._busy_keyring = False
+        self._availability_handle: keyring_worker.TaskHandle | None = None
+        self._test_handle: keyring_worker.TaskHandle | None = None
+        self._created_refs: set[str] = set()  # keyring entries made in this session (removed if the dialog is cancelled)
+        self._pending_deletes: set[str] = set()  # entries of replaced/deleted keys (removed once the dialog is saved)
 
         self._build_ui()
+        self._availability_handle = keyring_worker.start_task(
+            keyring_worker.check_available(), on_done=self._on_keyring_availability
+        )
         self._on_refresh_networks()
         self._refresh_profile_list()
         self._refresh_default_profile_combo()
@@ -114,6 +130,9 @@ class LLMConnectionsDialog(QDialog):
         self.api_key_input.setEchoMode(QLineEdit.Password)
         self.api_key_input.setPlaceholderText("env:MY_API_KEY (recommended), or a key kept for this session only")
         self.api_key_input.textChanged.connect(self._on_api_key_text_changed)
+        self.keyring_check = QCheckBox("Store in system keyring")
+        self.keyring_check.setToolTip("Keep a typed API key in the operating system keyring instead of for this session only.")
+        self.keyring_check.setVisible(False)  # shown once the keyring is found to be usable
         self.default_model_input = QLineEdit()
         self.timeout_input = QLineEdit()
         self.timeout_input.setPlaceholderText("8.0")
@@ -149,6 +168,7 @@ class LLMConnectionsDialog(QDialog):
         form.addRow("Scope", self.scope_combo)
         form.addRow("Base URL", self.base_url_input)
         form.addRow("API Key", self.api_key_input)
+        form.addRow("", self.keyring_check)
         form.addRow("Default Model", self.default_model_input)
         form.addRow("Timeout (seconds)", self.timeout_input)
         form.addRow("Context tokens", self.context_tokens_input)
@@ -228,7 +248,7 @@ class LLMConnectionsDialog(QDialog):
 
         actions = QHBoxLayout()
         cancel_btn = QPushButton("Cancel")
-        save_btn = QPushButton("Save and Close")
+        self.save_btn = save_btn = QPushButton("Save and Close")
         cancel_btn.clicked.connect(self.reject)
         save_btn.clicked.connect(self._on_save_and_close)
         actions.addStretch(1)
@@ -338,7 +358,8 @@ class LLMConnectionsDialog(QDialog):
     @Slot(str)
     def _on_api_key_text_changed(self, text: str) -> None:
         # An env:NAME reference is not a secret, so show it; anything else stays masked.
-        mode = QLineEdit.Normal if (text or "").strip().lower().startswith("env:") else QLineEdit.Password
+        stripped = (text or "").strip()
+        mode = QLineEdit.Normal if stripped.lower().startswith("env:") or stripped == KEYRING_PLACEHOLDER else QLineEdit.Password
         if self.api_key_input.echoMode() != mode:
             self.api_key_input.setEchoMode(mode)
 
@@ -485,6 +506,7 @@ class LLMConnectionsDialog(QDialog):
         )
         if answer != QMessageBox.Yes:
             return
+        self._schedule_key_delete(secret_store.ref_id_from(self._profiles[row].get("api_key")))
         del self._profiles[row]
         if self._default_profile == name:
             self._default_profile = None
@@ -512,7 +534,9 @@ class LLMConnectionsDialog(QDialog):
             self.base_url_input.setText(str(profile.get("base_url", "")))
             runtime_key = str(profile.get("api_key_runtime", ""))
             persisted_key = str(profile.get("api_key", ""))
-            self.api_key_input.setText(runtime_key or persisted_key)
+            has_ref = secret_store.ref_id_from(persisted_key) is not None and not runtime_key
+            self.api_key_input.setText(KEYRING_PLACEHOLDER if has_ref else (runtime_key or persisted_key))
+            self.keyring_check.setChecked(has_ref)
             self.default_model_input.setText(str(profile.get("default_model", "")))
             timeout = profile.get("timeout_seconds", 8.0)
             self.timeout_input.setText(str(timeout))
@@ -534,9 +558,14 @@ class LLMConnectionsDialog(QDialog):
             self._suspend_field_events = False
 
     @Slot()
-    def _on_apply_profile(self) -> None:
+    def _on_apply_profile(self, _checked: bool = False, then: Callable[[], None] | None = None) -> None:
+        """Validate and apply the form; ``then`` runs after the profile was applied (it may wait for the keyring)."""
+        if self._busy_keyring:
+            return
         row = self.profile_list.currentRow()
         if row < 0 or row >= len(self._profiles):
+            if then is not None:
+                then()
             return
         old_name = str(self._profiles[row].get("name", "")).strip() or f"profile-{row + 1}"
         try:
@@ -577,8 +606,6 @@ class LLMConnectionsDialog(QDialog):
             QMessageBox.warning(self, "Duplicate name", f"A profile named '{new_name}' already exists.")
             return
         entered_api_key = (self.api_key_input.text() or "").strip()
-        persisted_api_key = entered_api_key if entered_api_key.lower().startswith("env:") else ""
-        runtime_api_key = entered_api_key if entered_api_key and not entered_api_key.lower().startswith("env:") else ""
         verify_tls = self.verify_tls_check.isChecked()
         if (
             scope_value == "lan"
@@ -597,8 +624,6 @@ class LLMConnectionsDialog(QDialog):
             "provider": self.provider_combo.currentText().strip(),
             "scope": scope_value,
             "base_url": base_url_value,
-            "api_key": persisted_api_key,
-            "api_key_runtime": runtime_api_key,
             "default_model": (self.default_model_input.text() or "").strip(),
             "timeout_seconds": timeout,
             "verify_tls": verify_tls,
@@ -610,25 +635,112 @@ class LLMConnectionsDialog(QDialog):
             "temperature": temperature,
             "cloud_acknowledged": bool(self.cloud_ack_check.isChecked() and scope_value == "cloud"),
         }
+        old_ref_id = secret_store.ref_id_from(self._profiles[row].get("api_key"))
+        if old_ref_id and entered_api_key == KEYRING_PLACEHOLDER:
+            self._commit_profile(row, old_name, profile, f"keyring:{old_ref_id}", "", then)
+        elif entered_api_key.lower().startswith("env:"):
+            self._schedule_key_delete(old_ref_id)
+            self._commit_profile(row, old_name, profile, entered_api_key, "", then)
+        elif entered_api_key and self.keyring_check.isChecked() and self._keyring_available:
+            self._store_key_then_commit(row, old_name, profile, entered_api_key, old_ref_id, then)
+        else:  # a session-only key, or no key at all
+            self._schedule_key_delete(old_ref_id)
+            self._commit_profile(row, old_name, profile, "", entered_api_key, then)
+
+    def _commit_profile(
+        self,
+        row: int,
+        old_name: str,
+        profile: dict[str, object],
+        persisted_api_key: str,
+        runtime_api_key: str,
+        then: Callable[[], None] | None,
+    ) -> None:
+        profile["api_key"] = persisted_api_key
+        profile["api_key_runtime"] = runtime_api_key
+        new_name = str(profile["name"])
+        scope_value = str(profile["scope"])
+        base_url_value = str(profile["base_url"])
         self._profiles[row] = profile
         if self._default_profile and self._default_profile.strip().lower() == old_name.strip().lower():
             self._default_profile = new_name
         self._refresh_profile_list()
         self.profile_list.setCurrentRow(row)
         self._refresh_default_profile_combo()
-        session_key_note = ""
+        key_note = ""
         if runtime_api_key:
-            session_key_note = " Using a session-only API key (not saved to disk)."
+            key_note = " Using a session-only API key (not saved to disk)."
+        elif secret_store.ref_id_from(persisted_api_key) is not None:
+            key_note = " API key is stored in the system keyring."
         if scope_value == "local" and ("127.0.0.1" in base_url_value or "localhost" in base_url_value):
             self._result_box.setPlainText(
-                f"Profile changes applied. Scope set to local for loopback endpoint.{session_key_note}"
+                f"Profile changes applied. Scope set to local for loopback endpoint.{key_note}"
             )
         else:
-            self._result_box.setPlainText(f"Profile changes applied.{session_key_note}")
+            self._result_box.setPlainText(f"Profile changes applied.{key_note}")
+        if then is not None:
+            then()
+
+    def _store_key_then_commit(
+        self,
+        row: int,
+        old_name: str,
+        profile: dict[str, object],
+        key: str,
+        old_ref_id: str | None,
+        then: Callable[[], None] | None,
+    ) -> None:
+        """Store the key off the GUI thread; the profile only points at the new ref once that succeeded."""
+        self._set_keyring_busy(True)
+        self._result_box.setPlainText("Storing the API key in the system keyring...")
+
+        def done(ref_id: object) -> None:
+            new_ref_id = str(ref_id)
+            if self._closed:  # the dialog went away while the key was being stored: do not leave an orphan
+                keyring_worker.start_task(keyring_worker.delete_key_task(new_ref_id))
+                return
+            self._created_refs.add(new_ref_id)
+            self._set_keyring_busy(False)
+            self._schedule_key_delete(old_ref_id)
+            if not (0 <= row < len(self._profiles)):
+                return
+            self._commit_profile(row, old_name, profile, f"keyring:{new_ref_id}", "", then)
+
+        def failed(message: str) -> None:
+            if self._closed:
+                return
+            self._set_keyring_busy(False)
+            self._result_box.setPlainText(f"The API key was not stored. {message}")
+
+        keyring_worker.start_task(keyring_worker.store_key_task(key), on_done=done, on_error=failed)
+
+    def _schedule_key_delete(self, ref_id: str | None) -> None:
+        """Remove a keyring entry for a replaced, cleared or deleted key (deferred until the dialog is saved)."""
+        if not ref_id:
+            return
+        if ref_id in self._created_refs:  # made in this session and never saved anywhere: safe to remove now
+            self._created_refs.discard(ref_id)
+            keyring_worker.start_task(keyring_worker.delete_key_task(ref_id))
+        else:
+            self._pending_deletes.add(ref_id)
+
+    def _set_keyring_busy(self, busy: bool) -> None:
+        self._busy_keyring = busy
+        for widget in (self.profile_list, self.apply_btn, self.test_btn, self.save_btn, self.delete_btn, self.api_key_input, self.keyring_check):
+            widget.setEnabled(not busy)
+
+    @Slot(object)
+    def _on_keyring_availability(self, available: object) -> None:
+        self._keyring_available = bool(available)
+        self.keyring_check.setVisible(self._keyring_available)
 
     @Slot()
     def _on_test_connection(self) -> None:
-        self._on_apply_profile()
+        if self._test_handle is not None:
+            return
+        self._on_apply_profile(then=self._start_connection_test)
+
+    def _start_connection_test(self) -> None:
         row = self.profile_list.currentRow()
         if row < 0 or row >= len(self._profiles):
             return
@@ -637,11 +749,32 @@ class LLMConnectionsDialog(QDialog):
             self._result_box.setPlainText("Profile is invalid. Check provider/scope/base URL fields.")
             return
         profile = parsed_profiles[0]
+        self._test_button_label = self.test_btn.text()
+        self.test_btn.setText("Testing...")
+        self.test_btn.setEnabled(False)
+        self._result_box.setPlainText("Testing connection...")
         self.setCursor(Qt.WaitCursor)
-        try:
-            result = run_connection_test(profile)
-        finally:
-            self.unsetCursor()
+        self._test_handle = keyring_worker.start_task(
+            lambda: run_connection_test(profile),
+            on_done=self._on_test_finished,
+            on_error=self._on_test_failed,
+        )
+
+    def _end_connection_test(self) -> None:
+        self._test_handle = None
+        self.unsetCursor()
+        self.test_btn.setText(getattr(self, "_test_button_label", "Test Connection"))
+        self.test_btn.setEnabled(self.profile_list.count() > 0 and not self._busy_keyring)
+
+    def _on_test_failed(self, message: str) -> None:
+        self._end_connection_test()
+        self._result_box.setPlainText(f"Connection test could not run. {message}")
+
+    def _on_test_finished(self, result: object) -> None:
+        self._end_connection_test()
+        self._show_test_result(result)
+
+    def _show_test_result(self, result) -> None:  # noqa: ANN001
         lines: list[str] = []
         lines.append(f"Overall: {result.status.upper()}")
         lines.append(f"Provider: {result.provider}")
@@ -676,8 +809,10 @@ class LLMConnectionsDialog(QDialog):
 
     @Slot()
     def _on_save_and_close(self) -> None:
-        # Ensure active edits are applied before saving.
-        self._on_apply_profile()
+        # Ensure active edits are applied (and any keyring write has finished) before saving.
+        self._on_apply_profile(then=self._finish_save)
+
+    def _finish_save(self) -> None:
         if self._default_profile and not any(self._default_profile == str(item.get("name", "")) for item in self._profiles):
             self._default_profile = None
         self.accept()
@@ -769,6 +904,19 @@ class LLMConnectionsDialog(QDialog):
             if not self._is_profile_name_in_use(candidate):
                 return candidate
             idx += 1
+
+    def done(self, result: int) -> None:  # noqa: N802
+        """Detach running tasks without waiting for them, then clean up keyring entries for this outcome."""
+        self._closed = True
+        for handle in (self._availability_handle, self._test_handle):
+            if handle is not None:
+                handle.cancel()
+        refs = self._pending_deletes if result == QDialog.Accepted else self._created_refs
+        for ref_id in list(refs):
+            keyring_worker.start_task(keyring_worker.delete_key_task(ref_id))
+        self._pending_deletes.clear()
+        self._created_refs.clear()
+        super().done(result)
 
     def keyPressEvent(self, event) -> None:  # noqa: ANN001
         if event.key() == Qt.Key_Escape:

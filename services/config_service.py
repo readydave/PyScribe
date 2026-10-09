@@ -280,7 +280,7 @@ def _sanitize_llm_profiles_for_storage(value: object) -> list[dict[str, object]]
             continue
         profile = dict(item)
         api_key = str(profile.get("api_key") or "").strip()
-        if api_key and not api_key.lower().startswith("env:"):
+        if api_key and not api_key.lower().startswith(("env:", "keyring:")):
             profile["api_key"] = ""
         profile.pop("api_key_runtime", None)
         sanitized.append(profile)

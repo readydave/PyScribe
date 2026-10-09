@@ -18,6 +18,9 @@ class ConnectionDialogCloudTests(unittest.TestCase):
         cls._app = QApplication.instance() or QApplication([])
 
     def _dialog(self) -> LLMConnectionsDialog:
+        probe = patch("ui_qt.keyring_worker.secret_store.is_available", return_value=False)
+        probe.start()
+        self.addCleanup(probe.stop)
         dialog = LLMConnectionsDialog(AppConfig())
         self.addCleanup(dialog.deleteLater)
         return dialog

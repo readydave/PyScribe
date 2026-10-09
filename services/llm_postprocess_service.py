@@ -26,9 +26,11 @@ from services.llm_connection_service import (
     openai_endpoint_url,
     openai_max_tokens_field,
     provider_auth_headers,
+    resolve_profile_api_key,
 )
 from services.multimodal_service import extract_text_from_images
 from services.prompt_template_service import PromptTemplate
+from services.secret_store import SecretStoreError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -603,7 +605,11 @@ def _call_model(
 ) -> _CallOutcome:
     """One request to the provider; raises ``_LLMPostprocessException`` on failure."""
     stream = bool(on_output_chunk)
-    headers = provider_auth_headers(profile.provider, profile.api_key)
+    try:
+        api_key = resolve_profile_api_key(profile)
+    except SecretStoreError as exc:
+        raise _LLMPostprocessException("auth_failed", str(exc)) from None
+    headers = provider_auth_headers(profile.provider, api_key)
     if profile.provider == "ollama":
         options: dict[str, Any] = {"num_ctx": limits.context_tokens, "num_predict": limits.output_tokens}
         if limits.temperature is not None:

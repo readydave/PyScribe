@@ -238,7 +238,9 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
   - **Add Cloud Profile** adds a starting point for Claude, OpenAI, Gemini, or OpenRouter. **Test Connection** lists the models your key can use; any model your provider offers can be the default.
   - Cloud profiles must use `https://`, need an API key and a ticked confirmation that transcripts and images are sent to the provider, and always verify TLS.
   - API key field supports `env:VAR_NAME` references for secure persisted config.
-  - Direct API keys are treated as session-only and are not written to disk.
+  - Direct API keys are treated as session-only and are not written to disk, unless you tick **Store in system keyring** (shown only when your system keyring is usable). The key then lives in the operating system keyring and the config file only holds an opaque `keyring:<id>` reference; the field shows "stored in system keyring" instead of the key.
+  - A stored key is removed from the keyring only when you delete the profile, replace or clear the key, or switch the profile to `env:` or a session key, and only once you press **Save and Close** (Cancel keeps the previous state). If the keyring is locked or missing, PyScribe says so and does not save the key anywhere else.
+  - **Test Connection** (here and in LLM Post-Process) runs in the background, so the window stays responsive; the button is disabled while it runs, and you can close the window at any time.
   - **Context tokens**, **Max output tokens**, and **Temperature** are per profile (empty = automatic or provider default).
   - Includes subnet detection and LAN scan utilities to discover reachable local-network endpoints.
   - Shortcut: `Ctrl+Shift+L`

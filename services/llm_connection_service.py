@@ -15,6 +15,8 @@ from urllib import error as urlerror
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
+from services import secret_store
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +77,8 @@ class LLMConnectionProfile:
     temperature: float | None = None
     # Cloud profiles send transcripts off this network; the user must confirm that once.
     cloud_acknowledged: bool = False
+    # "keyring:<id>" reference; the key is fetched only when a request is built (see resolve_profile_api_key).
+    api_key_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -486,7 +490,13 @@ def _test_ollama(profile: LLMConnectionProfile, stages: list[ConnectionStageResu
 
 def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[ConnectionStageResult]) -> ConnectionTestResult:
     models_url = openai_endpoint_url(profile.base_url, "/models", profile.scope)
-    headers = provider_auth_headers(profile.provider, profile.api_key)
+    try:
+        api_key = resolve_profile_api_key(profile)
+    except secret_store.SecretStoreError as exc:
+        return _fail_result(
+            profile=profile, stages=stages, stage="credentials", code="auth_failed", detail=str(exc)
+        )
+    headers = provider_auth_headers(profile.provider, api_key)
     try:
         models_payload = _http_json_get(
             models_url,
@@ -598,14 +608,20 @@ def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[Connecti
 
 
 def _test_anthropic(profile: LLMConnectionProfile, stages: list[ConnectionStageResult]) -> ConnectionTestResult:
-    headers = provider_auth_headers("anthropic", profile.api_key)
-    if not profile.api_key:
+    try:
+        api_key = resolve_profile_api_key(profile)
+    except secret_store.SecretStoreError as exc:
+        return _fail_result(
+            profile=profile, stages=stages, stage="credentials", code="auth_failed", detail=str(exc)
+        )
+    headers = provider_auth_headers("anthropic", api_key)
+    if not api_key:
         return _fail_result(
             profile=profile,
             stages=stages,
             stage="credentials",
             code="auth_failed",
-            detail="No API key is available. Use env:ANTHROPIC_API_KEY or enter a key for this session.",
+            detail="No API key is available. Use env:ANTHROPIC_API_KEY, store a key in the system keyring, or enter a key for this session.",
         )
     try:
         models_payload = _http_json_get(
@@ -792,6 +808,7 @@ def _parse_profile(raw: dict[str, object], *, idx: int) -> LLMConnectionProfile 
         scope=scope,
         base_url=base_url.rstrip("/"),
         api_key=_resolve_profile_api_key(raw),
+        api_key_ref=_profile_key_ref(raw),
         default_model=_as_optional_str(raw.get("default_model")),
         timeout_seconds=timeout_seconds,
         verify_tls=True if is_cloud else _as_bool(raw.get("verify_tls"), default=True),
@@ -865,7 +882,7 @@ def _check_scope_policy(*, profile: LLMConnectionProfile, parsed_url: urlparse.P
             return "policy_cloud_not_remote"
         if not profile.cloud_acknowledged:
             return "policy_cloud_not_acknowledged"
-        if not profile.api_key:
+        if not (profile.api_key or profile.api_key_ref):
             return "policy_cloud_requires_key"
         return None
 
@@ -1244,11 +1261,40 @@ def provider_auth_headers(provider: str, api_key: str | None) -> dict[str, str]:
     return _auth_headers(api_key)
 
 
+def _profile_key_ref(raw: dict[str, object]) -> str | None:
+    """The ``keyring:<id>`` reference of a profile, unless a session key overrides it."""
+    if _as_optional_str(raw.get("api_key_runtime")):
+        return None
+    api_key = _as_optional_str(raw.get("api_key"))
+    return api_key if secret_store.ref_id_from(api_key) else None
+
+
+def resolve_profile_api_key(profile: LLMConnectionProfile) -> str | None:
+    """The profile's API key, reading the OS keyring when it holds a ``keyring:`` reference.
+
+    May block on the keyring (call from a worker thread). Raises ``secret_store.SecretStoreError`` with a
+    plain-language message when the keyring cannot be used or has no entry; the message never holds the key.
+    """
+    if profile.api_key:
+        return profile.api_key
+    ref_id = secret_store.ref_id_from(profile.api_key_ref)
+    if ref_id is None:
+        return None
+    key = secret_store.get_key(ref_id)
+    if key is None:
+        raise secret_store.SecretStoreError(
+            "No API key is stored in the system keyring for this profile. Open LLM Connections and enter the key again."
+        )
+    return key
+
+
 def _resolve_profile_api_key(raw: dict[str, object]) -> str | None:
     runtime_key = _as_optional_str(raw.get("api_key_runtime"))
     if runtime_key:
         return runtime_key
     api_key = _as_optional_str(raw.get("api_key"))
+    if secret_store.ref_id_from(api_key):
+        return None  # resolved lazily, where a request is built
     if api_key and api_key.lower().startswith("env:"):
         env_name = api_key[4:].strip()
         if not env_name:
@@ -1273,7 +1319,7 @@ def _failure_detail(code: str) -> str:
         "policy_cloud_not_acknowledged": (
             "Confirm that transcripts and images will be sent to this provider before using a cloud profile."
         ),
-        "policy_cloud_requires_key": "Cloud profiles need an API key (env:NAME or a session key).",
+        "policy_cloud_requires_key": "Cloud profiles need an API key (env:NAME, a system keyring entry, or a session key).",
         "policy_tls_verification_required": (
             "HTTPS certificate verification can only be bypassed for localhost/loopback development endpoints."
         ),

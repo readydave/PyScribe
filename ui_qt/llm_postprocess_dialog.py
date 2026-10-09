@@ -49,6 +49,7 @@ from services import (
     update_user_prompt_template,
 )
 from ui_qt import theme
+from ui_qt import keyring_worker
 from ui_qt.thread_lifecycle import release_worker
 
 _TEXT_FILE_EXTENSIONS = {".txt", ".md", ".markdown", ".log", ".rtf"}
@@ -261,6 +262,7 @@ class LLMPostprocessDialog(QDialog):
         self._postprocess_worker: LLMPostprocessWorker | None = None
         self._run_control: LLMRunControl | None = None
         self._postprocess_active: bool = False
+        self._refresh_handle: keyring_worker.TaskHandle | None = None
         self._streamed_output_chunks: list[str] = []
         self._close_after_cancel: bool = False
 
@@ -702,19 +704,32 @@ class LLMPostprocessDialog(QDialog):
         if profile is None:
             self.connection_status.setText("No profile selected.")
             return
-        refresh_label = self.refresh_btn.text()
+        if self._refresh_handle is not None:
+            return
+        self._refresh_label = self.refresh_btn.text()
         self.refresh_btn.setText("Testing Connection...")
         self.refresh_btn.setEnabled(False)
         self.connection_status.setText("Testing connection profile...")
-        QApplication.processEvents()
         self.setCursor(Qt.WaitCursor)
-        try:
-            result = run_connection_test(profile)
-        finally:
-            self.unsetCursor()
-            self.refresh_btn.setText(refresh_label)
-            self.refresh_btn.setEnabled(True)
+        self._refresh_handle = keyring_worker.start_task(
+            lambda: run_connection_test(profile),
+            on_done=lambda result: self._on_refresh_finished(profile, result),
+            on_error=self._on_refresh_failed,
+        )
 
+    def _end_refresh(self) -> None:
+        self._refresh_handle = None
+        self.unsetCursor()
+        self.refresh_btn.setText(getattr(self, "_refresh_label", "Refresh Connection + Models"))
+        self.refresh_btn.setEnabled(bool(self._profiles) and not self._postprocess_active)
+
+    def _on_refresh_failed(self, message: str) -> None:
+        self._end_refresh()
+        self._connection_test_state = "fail"
+        self.connection_status.setText(f"Connection test could not run. {message}")
+
+    def _on_refresh_finished(self, profile: LLMConnectionProfile, result) -> None:  # noqa: ANN001
+        self._end_refresh()
         if result.detected_models:
             current_text = (self.model_combo.currentText() or "").strip()
             self.model_combo.clear()
@@ -1232,6 +1247,13 @@ class LLMPostprocessDialog(QDialog):
         resolved_parent = str(Path(path).resolve().parent)
         self._config.last_save_dir = resolved_parent
         self.connection_status.setText(f"Saved output: {os.path.basename(path)}")
+
+    def done(self, result: int) -> None:  # noqa: N802
+        """Drop a running connection test's callbacks; its thread finishes on its own and is released later."""
+        if self._refresh_handle is not None:
+            self._refresh_handle.cancel()
+            self._refresh_handle = None
+        super().done(result)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if not self._postprocess_active:

@@ -200,3 +200,58 @@ def test_valid_model_names_are_passed(fake_claude: Path, good: str) -> None:
     cli.run_claude("hi", model=good, timeout_seconds=20)
     argv = _record(fake_claude)["argv"]
     assert argv[argv.index("--model") + 1] == good
+
+
+def _slow_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    bindir = tmp_path / "slowbin"
+    bindir.mkdir()
+    pidfile = tmp_path / "slow.pid"
+    script = bindir / "claude"
+    script.write_text(
+        f"#!{sys.executable}\nimport os, time\nopen({str(pidfile)!r}, 'w').write(str(os.getpid()))\ntime.sleep(30)\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    return pidfile
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_connection_test_cancel_kills_slow_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pidfile = _slow_claude(tmp_path, monkeypatch)
+    event = threading.Event()
+    results: list[object] = []
+    worker = threading.Thread(target=lambda: results.append(run_connection_test(_profile(), cancel_event=event)))
+    worker.start()
+    deadline = time.monotonic() + 10
+    while not pidfile.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert pidfile.exists()
+    time.sleep(0.2)
+    pid = int(pidfile.read_text())
+    started = time.monotonic()
+    event.set()
+    worker.join(10)
+    assert not worker.is_alive() and time.monotonic() - started < 3
+    result = results[0]
+    assert result.status == "fail" and result.failure_code == "cancelled"
+    assert result.stages[-1].stage == "inference_smoke"
+    for _ in range(20):
+        if not _pid_alive(pid):
+            break
+        time.sleep(0.1)
+    assert not _pid_alive(pid)
+
+
+def test_connection_test_preset_event_launches_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pidfile = _slow_claude(tmp_path, monkeypatch)
+    event = threading.Event()
+    event.set()
+    result = run_connection_test(_profile(), cancel_event=event)
+    assert result.status == "fail" and result.failure_code == "cancelled" and not pidfile.exists()

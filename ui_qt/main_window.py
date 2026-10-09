@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 import logging
 import multiprocessing as mp
@@ -98,6 +99,7 @@ from ui_qt.flow_layout import FlowLayout
 from ui_qt.hw_panel import HardwarePanel
 from ui_qt.job_stages import STAGE_ORDER, Stage, JobTracker
 from ui_qt.job_timeline import JobTimeline, set_state
+from ui_qt import keyring_worker
 from ui_qt.thread_lifecycle import release_worker
 from ui_qt.speaker_highlight import SpeakerHighlighter
 from ui_qt.theme_dialog import ThemeEditorDialog
@@ -4511,10 +4513,27 @@ class MainWindow(QMainWindow):
             LOGGER.warning("Qt config save failed: %s", exc, exc_info=True)
 
 
-def run_qt_app() -> None:
+def _exit_if_tasks_running(exit_code: int, exit_fn: Callable[[int], None], recheck_ms: int = 100) -> None:
+    """Hard-exit when a background task thread is still running after the event loop ended.
+
+    aboutToQuit already gave the tasks their time budget, so this only rechecks briefly. Finished tasks that were
+    never released (there is no event loop any more) do not count; only threads that are really running do.
+    """
+    if keyring_worker.running_task_count() == 0:
+        return
+    keyring_worker.drain_live_tasks(recheck_ms)
+    if keyring_worker.running_task_count() == 0:
+        return
+    LOGGER.warning("A background task is still running at exit; exiting without it.")
+    logging.shutdown()
+    exit_fn(exit_code)
+
+
+def run_qt_app(exit_fn: Callable[[int], None] = os._exit) -> None:
     app = QApplication.instance() or QApplication([])
     win = MainWindow()
     win.show()
     LOGGER.info("Qt app event loop starting")
-    app.exec()
+    exit_code = app.exec()
     LOGGER.info("Qt app event loop exited")
+    _exit_if_tasks_running(int(exit_code or 0), exit_fn)

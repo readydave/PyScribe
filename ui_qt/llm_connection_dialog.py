@@ -983,9 +983,10 @@ class LLMConnectionsDialog(QDialog):
         self._result_box.setPlainText("Testing connection...")
         self.setCursor(Qt.WaitCursor)
         self._test_handle = keyring_worker.start_task(
-            lambda: run_connection_test(profile),
+            lambda cancel_event: run_connection_test(profile, cancel_event=cancel_event),
             on_done=self._on_test_finished,
             on_error=self._on_test_failed,
+            cancel_event_arg=True,
         )
 
     def _end_connection_test(self) -> None:

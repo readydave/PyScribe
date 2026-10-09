@@ -217,7 +217,7 @@ class KeyringDialogTests(_QtCase):
         gate = threading.Event()
         self.addCleanup(gate.set)
 
-        def slow_test(profile):  # noqa: ANN001
+        def slow_test(profile, cancel_event=None):  # noqa: ANN001
             gate.wait(10)
             return _result()
 
@@ -236,7 +236,7 @@ class KeyringDialogTests(_QtCase):
         gate = threading.Event()
         self.addCleanup(gate.set)
 
-        def slow_test(profile):  # noqa: ANN001
+        def slow_test(profile, cancel_event=None):  # noqa: ANN001
             gate.wait(10)
             return _result()
 
@@ -274,6 +274,96 @@ class DrainLiveTasksTests(_QtCase):
         self.drain_tasks()
 
 
+class CooperativeCancelTests(_QtCase):
+    def test_cancel_sets_the_event_the_task_received(self) -> None:
+        seen: list[threading.Event] = []
+        started = threading.Event()
+
+        def task(event: threading.Event) -> None:
+            seen.append(event)
+            started.set()
+            event.wait(10)
+
+        handle = keyring_worker.start_task(task, cancel_event_arg=True)
+        self.assertTrue(started.wait(5))
+        self.assertFalse(seen[0].is_set())
+        handle.cancel()
+        self.assertTrue(seen[0].is_set())
+        self.assertIs(seen[0], handle.cancel_event)
+        self.drain_tasks()
+
+    def test_cancel_aware_slow_task_ends_within_budget_and_drain_returns_true(self) -> None:
+        keyring_worker.start_task(lambda event: event.wait(30), cancel_event_arg=True)
+        start = time.monotonic()
+        self.assertTrue(keyring_worker.drain_live_tasks(timeout_ms=2000))
+        self.assertLess(time.monotonic() - start, 2.0)
+        self.drain_tasks()
+
+    def test_drain_returns_false_for_a_task_that_ignores_cancel(self) -> None:
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        keyring_worker.start_task(lambda: gate.wait(10))
+        with self.assertLogs(keyring_worker.LOGGER, level="WARNING"):
+            self.assertFalse(keyring_worker.drain_live_tasks(timeout_ms=200))
+        self.assertEqual(keyring_worker.running_task_count(), 1)
+        gate.set()
+        self.drain_tasks()
+
+
+class ExitFallbackTests(_QtCase):
+    def test_finished_but_unreleased_task_does_not_trigger_exit(self) -> None:
+        from ui_qt import main_window
+
+        handle = keyring_worker.start_task(lambda: None)
+        handle._thread.wait(5000)  # finished, but no event loop runs here, so it is still in _LIVE
+        self.assertGreaterEqual(keyring_worker.live_task_count(), 1)
+        self.assertEqual(keyring_worker.running_task_count(), 0)
+        exits: list[int] = []
+        main_window._exit_if_tasks_running(0, exits.append)
+        self.assertEqual(exits, [])
+        self.drain_tasks()
+
+    def test_running_task_triggers_exit_with_the_exit_code(self) -> None:
+        from ui_qt import main_window
+
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        keyring_worker.start_task(lambda: gate.wait(10))  # ignores cancel
+        exits: list[int] = []
+        with patch.object(main_window.logging, "shutdown") as shutdown:
+            main_window._exit_if_tasks_running(3, exits.append, recheck_ms=50)
+        self.assertEqual(exits, [3])
+        shutdown.assert_called_once()
+        gate.set()
+        self.drain_tasks()
+
+    def test_cancel_aware_task_stops_in_the_recheck_so_no_exit(self) -> None:
+        from ui_qt import main_window
+
+        keyring_worker.start_task(lambda event: event.wait(30), cancel_event_arg=True)
+        exits: list[int] = []
+        main_window._exit_if_tasks_running(0, exits.append, recheck_ms=1000)
+        self.assertEqual(exits, [])
+        self.drain_tasks()
+
+    def test_run_qt_app_passes_the_exit_code_through(self) -> None:
+        from ui_qt import main_window
+
+        fake_app = SimpleNamespace(exec=lambda: 5)
+        exits: list[int] = []
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        keyring_worker.start_task(lambda: gate.wait(10))
+        with patch.object(main_window, "QApplication") as qapp, patch.object(main_window, "MainWindow"), patch.object(
+            main_window.logging, "shutdown"
+        ):
+            qapp.instance.return_value = fake_app
+            main_window.run_qt_app(exit_fn=exits.append)
+        self.assertEqual(exits, [5])
+        gate.set()
+        self.drain_tasks()
+
+
 class PostprocessRefreshTests(_QtCase):
     def _dialog(self) -> LLMPostprocessDialog:
         config = AppConfig()
@@ -300,7 +390,7 @@ class PostprocessRefreshTests(_QtCase):
         gate = threading.Event()
         self.addCleanup(gate.set)
 
-        def slow_test(profile):  # noqa: ANN001
+        def slow_test(profile, cancel_event=None):  # noqa: ANN001
             gate.wait(10)
             return _result()
 
@@ -316,7 +406,7 @@ class PostprocessRefreshTests(_QtCase):
         gate = threading.Event()
         self.addCleanup(gate.set)
 
-        def slow_test(profile):  # noqa: ANN001
+        def slow_test(profile, cancel_event=None):  # noqa: ANN001
             gate.wait(10)
             return _result()
 

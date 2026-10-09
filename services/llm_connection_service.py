@@ -10,6 +10,7 @@ import logging
 import os
 import socket
 import ssl
+import threading
 from typing import Any
 from urllib import error as urlerror
 from urllib import parse as urlparse
@@ -243,7 +244,9 @@ def scan_lan_for_llm_instances(
     return discovered
 
 
-def run_connection_test(profile: LLMConnectionProfile) -> ConnectionTestResult:
+def run_connection_test(
+    profile: LLMConnectionProfile, *, cancel_event: threading.Event | None = None
+) -> ConnectionTestResult:
     """Run staged diagnostics for an LLM profile and return pass/fail detail."""
     LOGGER.info(
         "llm.test.start provider=%s scope=%s base_url=%s timeout=%.1f",
@@ -261,7 +264,7 @@ def run_connection_test(profile: LLMConnectionProfile) -> ConnectionTestResult:
                 profile=profile, stages=stages, stage="scope_policy", code=cli_error, detail=_failure_detail(cli_error)
             )
         stages.append(ConnectionStageResult(stage="scope_policy", status="pass", code=None, detail="Scope policy passed."))
-        return _test_claude_cli(profile=profile, stages=stages)
+        return _test_claude_cli(profile=profile, stages=stages, cancel_event=cancel_event)
 
     parsed = _parse_base_url(profile.base_url)
     if parsed is None:
@@ -399,6 +402,7 @@ def get_failure_suggestions(code: str, *, provider: str | None = None) -> tuple[
             "Run 'claude' in a terminal and check it starts and is signed in.",
             "Then press Test Connection again.",
         ),
+        "cancelled": ("The test was cancelled before it finished.",),
         "rate_limited": (
             "Wait a moment and try again, or check your plan's rate limits and credit balance.",
         ),
@@ -643,7 +647,11 @@ def _test_openai_compatible(profile: LLMConnectionProfile, stages: list[Connecti
     return result
 
 
-def _test_claude_cli(profile: LLMConnectionProfile, stages: list[ConnectionStageResult]) -> ConnectionTestResult:
+def _test_claude_cli(
+    profile: LLMConnectionProfile,
+    stages: list[ConnectionStageResult],
+    cancel_event: threading.Event | None = None,
+) -> ConnectionTestResult:
     """Check the binary exists, then run a tiny prompt (tools off) to confirm it is signed in."""
     binary = cli_llm_provider.find_binary()
     if binary is None:
@@ -653,12 +661,17 @@ def _test_claude_cli(profile: LLMConnectionProfile, stages: list[ConnectionStage
         return _fail_result(profile=profile, stages=stages, stage="binary", code=error.code, detail=error.detail)
     stages.append(ConnectionStageResult(stage="binary", status="pass", code=None, detail="Claude CLI found."))
     model = profile.default_model or cli_llm_provider.DEFAULT_MODEL
+    if cancel_event is not None and cancel_event.is_set():
+        return _fail_result(
+            profile=profile, stages=stages, stage="inference_smoke", code="cancelled", detail="Test cancelled.", selected_model=model
+        )
     try:
         cli_llm_provider.run_claude(
             "Reply with the single word OK.",
             model=model,
             timeout_seconds=min(profile.timeout_seconds, 60.0),
             binary=binary,
+            cancel_check=cancel_event.is_set if cancel_event is not None else None,
         )
     except cli_llm_provider.CliError as exc:
         return _fail_result(

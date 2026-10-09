@@ -10,6 +10,7 @@ Keys are captured in the task callable only; they never travel in a signal.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -61,11 +62,14 @@ class TaskHandle(QObject):
         fn: Callable[[], Any],
         on_done: Callable[[Any], None] | None,
         on_error: Callable[[str], None] | None,
+        pass_cancel_event: bool = False,
     ) -> None:
         super().__init__()
         self._on_done = on_done
         self._on_error = on_error
-        self._thread: _Job | None = _Job(fn)
+        self.cancel_event = threading.Event()  # set by cancel(); a cooperative task polls it
+        call = (lambda: fn(self.cancel_event)) if pass_cancel_event else fn  # type: ignore[call-arg]
+        self._thread: _Job | None = _Job(call)
         self._thread.succeeded.connect(self._handle_done)
         self._thread.failed.connect(self._handle_error)
         self._thread.finished.connect(self._release)
@@ -77,7 +81,8 @@ class TaskHandle(QObject):
         return self
 
     def cancel(self) -> None:
-        """Drop the callbacks. The thread is not joined; it finishes on its own and is released later."""
+        """Drop the callbacks and ask the task to stop. The thread is not joined; it is released once it ends."""
+        self.cancel_event.set()
         self._on_done = None
         self._on_error = None
 
@@ -108,10 +113,14 @@ def start_task(
     fn: Callable[[], Any],
     on_done: Callable[[Any], None] | None = None,
     on_error: Callable[[str], None] | None = None,
+    cancel_event_arg: bool = False,
 ) -> TaskHandle:
-    """Run ``fn`` on a worker thread; callbacks run on the GUI thread unless the handle is cancelled."""
+    """Run ``fn`` on a worker thread; callbacks run on the GUI thread unless the handle is cancelled.
+
+    With ``cancel_event_arg`` the task is called as ``fn(event)``; the event is set when the handle is cancelled.
+    """
     _hook_app_quit()
-    return TaskHandle(fn, on_done, on_error).start()
+    return TaskHandle(fn, on_done, on_error, pass_cancel_event=cancel_event_arg).start()
 
 
 def _hook_app_quit() -> None:
@@ -124,9 +133,13 @@ def _hook_app_quit() -> None:
     _QUIT_HOOKED = True
 
 
-def drain_live_tasks(timeout_ms: int = 2000) -> None:
-    """Cancel every live task and wait for its thread, sharing one time budget; warn about any still running."""
+def drain_live_tasks(timeout_ms: int = 2000) -> bool:
+    """Cancel every live task and wait for its thread, sharing one time budget.
+
+    Returns True when every thread has stopped; otherwise logs a warning and returns False.
+    """
     deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+    stopped = True
     for handle in list(_LIVE):
         handle.cancel()
         thread = handle._thread
@@ -134,7 +147,15 @@ def drain_live_tasks(timeout_ms: int = 2000) -> None:
             continue
         remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
         if not thread.wait(remaining_ms):
-            LOGGER.warning("A background task was still running at shutdown (waited %d ms).", timeout_ms)
+            stopped = False
+    if not stopped:
+        LOGGER.warning("A background task was still running at shutdown (waited %d ms).", timeout_ms)
+    return stopped
+
+
+def running_task_count() -> int:
+    """Threads that are really still running (finished ones may wait in _LIVE for a release that needs an event loop)."""
+    return sum(1 for handle in list(_LIVE) if handle._thread is not None and handle._thread.isRunning())
 
 
 def live_task_count() -> int:

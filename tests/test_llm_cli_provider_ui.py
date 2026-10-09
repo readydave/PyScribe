@@ -109,7 +109,7 @@ class CliProviderDialogTests(_QtCase):
         failed.failure_detail = "The 'claude' program was not found. Install Claude Code and sign in."
         failed.provider = "claude_cli"
 
-        def fake_test(profile):  # noqa: ANN001
+        def fake_test(profile, cancel_event=None):  # noqa: ANN001
             gate.wait(10)
             return failed
 

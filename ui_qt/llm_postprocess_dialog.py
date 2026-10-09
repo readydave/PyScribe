@@ -712,9 +712,10 @@ class LLMPostprocessDialog(QDialog):
         self.connection_status.setText("Testing connection profile...")
         self.setCursor(Qt.WaitCursor)
         self._refresh_handle = keyring_worker.start_task(
-            lambda: run_connection_test(profile),
+            lambda cancel_event: run_connection_test(profile, cancel_event=cancel_event),
             on_done=lambda result: self._on_refresh_finished(profile, result),
             on_error=self._on_refresh_failed,
+            cancel_event_arg=True,
         )
 
     def _end_refresh(self) -> None:

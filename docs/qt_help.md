@@ -6,7 +6,7 @@
 2. Pick a model in the **Model** dropdown (built-in or custom `owner/repo`).
 3. Choose **Input = File** for the traditional workflow, or **Input = Live** for microphone/loopback capture.
 4. For file mode, choose processing options (**Transcribe audio**, **Speaker Identification**, **Analyze visuals**) and click **Process File**.
-5. For live mode, choose source/device/output folder and click **Start Live**. Use **Pause / Resume** when needed, then **Stop** to run the final post-pass.
+5. For live mode, choose source/device/output folder (and optionally Compute: Auto, CPU or GPU) and click **Start Live**. Use **Pause / Resume** when needed, then **Stop** to run the final post-pass.
 6. Save or copy output when complete.
 
 ## Main Window
@@ -56,7 +56,7 @@
   - **Names / terms** and **Faster GPU decoding**: pre-filled on the Transcription page.
   - **Open files from**: the folder file dialogs open in.
   - **Use current settings as defaults** copies the Transcription page's current model, File/Live choice, names/terms, and decoding option.
-- Remembered automatically: run mode, speaker and visual options (saved when you start a job), live capture source/device/folder/keep-audio, colour theme and mode, panel layout, window size, and whether the left sidebar is collapsed.
+- Remembered automatically: run mode, speaker and visual options (saved when you start a job), live capture source/device/folder/keep-audio/compute choice, colour theme and mode, panel layout, window size, and whether the left sidebar is collapsed.
 
 ## Colour Themes
 

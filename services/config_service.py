@@ -40,6 +40,8 @@ class AppConfig:
     live_input_device_id: str | None = None
     live_output_dir: str | None = None
     live_keep_audio_on_success: bool = True
+    live_device_mode: str = "auto"
+    live_compute_type: str = "auto"
     dock_layout: str | None = None
     dock_locked: bool = False
     setup_advanced_expanded: bool = False
@@ -94,6 +96,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         live_input_device_id=_as_optional_str(data.get("live_input_device_id")),
         live_output_dir=_as_optional_str(data.get("live_output_dir")),
         live_keep_audio_on_success=_as_bool(data.get("live_keep_audio_on_success"), default=True),
+        live_device_mode=_as_choice(data.get("live_device_mode"), ("auto", "cpu", "gpu")),
+        live_compute_type=_as_choice(data.get("live_compute_type"), ("auto", "float16", "int8")),
         dock_layout=_as_optional_str(data.get("dock_layout")),
         dock_locked=_as_bool(data.get("dock_locked"), default=False),
         setup_advanced_expanded=_as_bool(data.get("setup_advanced_expanded"), default=False),
@@ -207,6 +211,12 @@ def _as_live_source_mode(value: object) -> str:
     if normalized in allowed:
         return normalized
     return "microphone"
+
+
+def _as_choice(value: object, allowed: tuple[str, ...]) -> str:
+    """Normalized member of ``allowed``; the first entry (``auto``) for anything else."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in allowed else allowed[0]
 
 
 def _as_backend_list(value: object) -> list[str]:

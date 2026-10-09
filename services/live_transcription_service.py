@@ -21,7 +21,7 @@ import torchaudio.functional as F
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtMultimedia import QAudioFormat, QMediaDevices
 
-from services.model_service import load_model, resolve_transcription_model
+from services.model_service import RuntimeInfo, load_model, resolve_transcription_model
 from services.model_download_service import ensure_model_cached
 from services.nemotron_streaming_service import NemotronStreamSession
 
@@ -40,6 +40,50 @@ LIVE_VAD_PARAMETERS = {"min_silence_duration_ms": 500, "speech_pad_ms": 300}
 LIVE_STREAM_HOP_SECONDS = 0.5
 LIVE_SESSION_ROOT = Path.home() / "PyScribe Live Sessions"
 _LOOPBACK_MARKERS = ("monitor", "loopback", "stereo mix", "what u hear", "monitor of")
+
+
+@dataclass(frozen=True)
+class LiveRuntimeChoice:
+    device: str
+    compute_type: str
+    note: str = ""
+
+
+def resolve_live_runtime(
+    device_mode: str,
+    compute_choice: str,
+    detected: RuntimeInfo,
+    model_name: str = "",
+) -> LiveRuntimeChoice:
+    """Maps the Auto/CPU/GPU and precision selections to a concrete device and compute type.
+
+    Falls back to CPU when GPU is requested but CUDA is unavailable. Nemotron only supports
+    float16 on CUDA and float32 on CPU, so its precision choice is ignored.
+    """
+    mode = str(device_mode or "auto").strip().lower()
+    notes: list[str] = []
+    if mode == "cpu":
+        device = "cpu"
+    elif mode == "gpu":
+        device = "cuda" if detected.device == "cuda" else "cpu"
+        if device == "cpu":
+            notes.append("GPU requested but CUDA is unavailable; using CPU.")
+    else:
+        device = detected.device
+    if model_name and resolve_transcription_model(model_name).backend_kind == "nemotron_streaming":
+        return LiveRuntimeChoice(device, "float16" if device == "cuda" else "float32", " ".join(notes))
+    choice = str(compute_choice or "auto").strip().lower()
+    if choice == "int8":
+        compute = "int8"
+    elif choice == "float16" and device == "cuda":
+        compute = "float16"
+    else:
+        if choice == "float16":
+            notes.append("float16 is not supported on CPU; using int8.")
+        compute = "float16" if device == "cuda" else "int8"
+        if device == detected.device and choice == "auto":
+            compute = detected.compute_type
+    return LiveRuntimeChoice(device, compute, " ".join(notes))
 
 
 @dataclass(frozen=True)

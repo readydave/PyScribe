@@ -31,6 +31,8 @@ class _FakeLiveSession:
             max_speakers=None,
             language=None,
             input_device_name="Test Mic",
+            device="cpu",
+            compute_type="int8",
         )
         self.close_capture_calls = 0
         self.request_final_decode_calls = 0
@@ -641,6 +643,45 @@ class QtLiveModeTests(unittest.TestCase):
             self.assertTrue(win._confirm_live_vram_preflight("large-v3"))
 
         question.assert_not_called()
+
+    def test_live_runtime_choice_persists_and_drives_vram_preflight(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)],
+            AppConfig(live_device_mode="gpu", live_compute_type="int8"),
+        )
+        win.runtime = RuntimeInfo(device="cuda", compute_type="float16", gpu_name="GPU", vram_gb=12.0, cpu_count=8)
+        self.assertEqual(win.live_device_mode_combo.currentData(), "gpu")
+        self.assertEqual(win.live_compute_combo.currentData(), "int8")
+        skipped = LiveVramPreflight(
+            status="skipped", model_name="large-v3", estimated_required_gb=7.5, model_estimate_gb=6.5,
+            safety_buffer_gb=1.0, free_gb=None, total_gb=None, used_gb=None, message="skipped",
+        )
+        with patch("ui_qt.main_window.assess_live_vram_preflight", return_value=skipped) as assess:
+            win._confirm_live_vram_preflight("large-v3")
+            self.assertEqual(assess.call_args.kwargs, {"device": "cuda", "compute_type": "int8"})
+            win.live_device_mode_combo.setCurrentIndex(win.live_device_mode_combo.findData("cpu"))
+            win._confirm_live_vram_preflight("large-v3")
+            self.assertEqual(assess.call_args.kwargs["device"], "cpu")
+
+    def test_final_post_pass_uses_live_session_runtime(self) -> None:
+        win = self._build_window(
+            [SimpleNamespace(id="mic-1", name="Microphone", kind="microphone", available=True)]
+        )
+        win.runtime = RuntimeInfo(device="cuda", compute_type="float16", gpu_name="GPU", vram_gb=12.0, cpu_count=8)
+        session = _FakeLiveSession()
+        win._live_session = session
+        with patch.object(win, "_launch_transcription_worker") as launch_worker:
+            win._start_live_final_pass()
+        override = launch_worker.call_args.kwargs["runtime_override"]
+        self.assertEqual((override.device, override.compute_type), ("cpu", "int8"))
+        win._live_session = None
+
+    def test_precision_combo_hidden_for_nemotron(self) -> None:
+        win = self._build_window([])
+        win._on_model_selection_changed("nvidia/nemotron-speech-streaming-en-0.6b")
+        self.assertTrue(win.live_compute_combo.isHidden())
+        win._on_model_selection_changed("large-v3")
+        self.assertFalse(win.live_compute_combo.isHidden())
 
 
 if __name__ == "__main__":

@@ -85,8 +85,7 @@ See local `TODO.md`. In short:
   - the keyring with real KWallet/GNOME Keyring, including a locked one. First run `uv pip install --python .venv/bin/python keyring`; it is not installed in `.venv` yet, and the tests use a fake.
   - a real `claude_cli` post-process run (sign-in, rate limit, cancel)
 - Optional: notes-folder (Obsidian) export (parked by the maintainer).
-- Known gaps:
-  - A background task that runs longer than the 2 s quit drain can still trigger a QThread warning at exit; a warning is logged.
+- Known gaps: none open. The `claude_cli` hints were fixed in `a66a5fb`, and the quit drain was fixed by cooperative cancel plus a hard exit in `run_qt_app` when a task thread is still running.
 
 ## Practical notes
 

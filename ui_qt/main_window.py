@@ -94,6 +94,7 @@ from services.logging_service import configure_logging, get_log_path
 from services.ui_themes import all_themes
 from ui_qt import theme
 from ui_qt.benchmark_dialog import BenchmarkDialog
+from ui_qt.flow_layout import FlowLayout
 from ui_qt.hw_panel import HardwarePanel
 from ui_qt.job_stages import STAGE_ORDER, Stage, JobTracker
 from ui_qt.job_timeline import JobTimeline, set_state
@@ -674,6 +675,7 @@ class DiarBackendProbeWorker(QObject):
 
 DOCK_LAYOUT_VERSION = 1
 NARROW_WINDOW_WIDTH = 1500
+TRANSCRIPT_MIN_WIDTH = 300
 
 
 class MainWindow(QMainWindow):
@@ -842,7 +844,7 @@ class MainWindow(QMainWindow):
 
         main_surface = QFrame()
         main_surface.setObjectName("MainSurface")
-        main_surface.setMinimumWidth(360)
+        main_surface.setMinimumWidth(TRANSCRIPT_MIN_WIDTH)
         main_layout = QVBoxLayout(main_surface)
         main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(12)
@@ -1139,7 +1141,7 @@ class MainWindow(QMainWindow):
         setup_layout.addWidget(self._wrap_layout(settings_grid))
         setup_layout.addStretch(1)
 
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         self.transcribe_btn = QPushButton("Process File")
         self.transcribe_btn.setProperty("role", "primary")
         self.transcribe_btn.clicked.connect(self.start_transcription)
@@ -1190,13 +1192,11 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.pause_live_btn)
         actions.addWidget(self.cancel_btn)
         actions.addWidget(self.force_stop_btn)
-        actions.addStretch(1)
-        output_actions = QHBoxLayout()
+        output_actions = FlowLayout()
         output_actions.addWidget(self.save_btn)
         output_actions.addWidget(self.rename_with_title_btn)
         output_actions.addWidget(self.open_btn)
         output_actions.addWidget(self.copy_btn)
-        output_actions.addStretch(1)
         main_layout.addLayout(actions)
         main_layout.addLayout(output_actions)
 

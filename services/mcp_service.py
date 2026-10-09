@@ -21,7 +21,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+try:  # mcp is an optional dependency; the service must import without it
+    from mcp.server.mcpserver.exceptions import ToolError
+except ImportError:
+    ToolError = Exception  # type: ignore[misc,assignment]
+
 LOGGER = logging.getLogger(__name__)
+_HTTP_STATUS_RE = re.compile(r"\bHTTP (\d{3})\b")
 
 MEDIA_EXTENSIONS = frozenset(
     {
@@ -43,8 +49,8 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 LIVE_PREFIX = "live-"
 
 
-class McpToolError(Exception):
-    """A problem the AI client should be told about in plain words."""
+class McpToolError(ToolError):
+    """A problem the AI client should be told about in plain words; the MCP SDK returns its text as an error result."""
 
 
 # --- file access ------------------------------------------------------------------------------
@@ -550,7 +556,10 @@ def run_template_on_transcript(
     request = request_cls(transcript_text=text, selected_model=(model or "").strip() or None, include_images=False)
     result = runner(profile, template, request)
     if result.status != "pass":
-        raise McpToolError(f"The LLM run failed ({result.error_code}): {result.error_detail}")
+        status = _HTTP_STATUS_RE.search(str(result.error_detail or ""))
+        LOGGER.debug("run_template LLM failure: code=%s", result.error_code)  # detail may echo provider text; not logged
+        hint = f", HTTP {status.group(1)}" if status else ""
+        raise McpToolError(f"The LLM run failed ({result.error_code or 'error'}{hint}). Check the profile in PyScribe's LLM Connections.")
     return {
         "transcript_id": meta.get("id", transcript_id),
         "template_id": template.id,

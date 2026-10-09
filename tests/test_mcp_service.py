@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from services.mcp_service import (
     MAX_QUEUED_JOBS,
@@ -303,6 +307,19 @@ class JobManagerTests(_TempCase):
         self.assertFalse(waited.done)
         release.set()
         self.assertTrue(manager.wait(job.id, 10).done)
+
+
+class OptionalMcpDependencyTests(unittest.TestCase):
+    def test_service_imports_without_mcp(self) -> None:
+        code = (
+            "import sys; sys.modules['mcp'] = None; import services.mcp_service as s; "
+            "assert issubclass(s.McpToolError, Exception)"
+        )
+        subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parent.parent, check=True, timeout=60)
+
+    def test_error_is_a_toolerror_when_mcp_is_installed(self) -> None:
+        toolerror = pytest.importorskip("mcp.server.mcpserver.exceptions").ToolError
+        self.assertTrue(issubclass(McpToolError, toolerror))
 
 
 if __name__ == "__main__":

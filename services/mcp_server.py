@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 
 from services.mcp_service import (
@@ -297,22 +296,19 @@ def create_server(
         from services.llm_connection_service import load_llm_profiles
 
         templates, _default = pyscribe.load_prompt_templates()
-        try:
-            return await asyncio.to_thread(
-                run_template_on_transcript,
-                store=store,
-                transcript_id=transcript_id,
-                template_id=template_id,
-                profile_name=profile,
-                profiles=(profiles_loader or (lambda: load_llm_profiles(load_config().llm_profiles)))(),
-                templates=templates,
-                runner=template_runner or pyscribe.run_llm_postprocess,
-                request_cls=pyscribe.LLMPostprocessRequest,
-                model=model,
-                allow_cloud=cloud_allowed(),
-            )
-        except McpToolError as exc:
-            raise ToolError(str(exc)) from exc  # the SDK hides other exception messages from the client
+        return await asyncio.to_thread(
+            run_template_on_transcript,
+            store=store,
+            transcript_id=transcript_id,
+            template_id=template_id,
+            profile_name=profile,
+            profiles=(profiles_loader or (lambda: load_llm_profiles(load_config().llm_profiles)))(),
+            templates=templates,
+            runner=template_runner or pyscribe.run_llm_postprocess,
+            request_cls=pyscribe.LLMPostprocessRequest,
+            model=model,
+            allow_cloud=cloud_allowed(),
+        )
 
     return server
 

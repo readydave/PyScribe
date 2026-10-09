@@ -62,6 +62,14 @@ by your own local or LAN model instead of by the client's model.
 - **Untrusted text.** The transcript goes to the model as data inside the user message, never in the system prompt,
   and the returned output is model-generated from it, so the client should treat it as data too.
 
+## Errors
+
+Every tool reports a problem as an error result with a short plain-language message (for example "Unknown job id"),
+prefixed by the SDK with "Error executing tool <name>:". There are no tracebacks, file paths or credentials in it.
+When a template run fails, you get the error code and the HTTP status if there is one (for example
+`auth_failed, HTTP 401`), never the provider's own error text. Unexpected internal failures reach the client only as a
+generic failure; details stay in PyScribe's log.
+
 ## Safety
 
 - **Local only.** The server uses stdio. It opens no network port.

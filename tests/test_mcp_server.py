@@ -192,6 +192,48 @@ class InProcessServerTests(unittest.IsolatedAsyncioTestCase):
             res = await client.call_tool("run_template", {"transcript_id": tid, "template_id": "meeting-summary"})
         self.assertTrue(res.is_error)
 
+    async def test_every_tool_error_path_returns_a_clean_error_result(self) -> None:
+        cases = [
+            ("start_transcription", {"path": str(self.root / "missing.mp3")}, "not found"),
+            ("start_transcription", {"path": str(self.root / "notes.txt")}, "Only audio and video"),
+            ("start_transcription", {"path": str(self.root / "meeting.mp3"), "max_speakers": 99}, "max_speakers"),
+            ("start_transcription", {"path": str(self.root / "meeting.mp3"), "language": "e1!"}, "language"),
+            ("get_job", {"job_id": "nope"}, "Unknown job id"),
+            ("wait_for_job", {"job_id": "nope"}, "Unknown job id"),
+            ("cancel_job", {"job_id": "nope"}, "Unknown job id"),
+            ("list_transcripts", {"source": "bogus"}, "source must be"),
+            ("get_transcript", {"transcript_id": "../../etc/passwd"}, "Unknown transcript id"),
+            ("get_template", {"template_id": "missing"}, "Unknown template id"),
+            ("run_template", {"transcript_id": "../../etc/passwd", "template_id": "meeting-summary"},
+             "Unknown transcript id"),
+            ("run_template", {"transcript_id": "x" * 8, "template_id": "missing"}, "Unknown template id"),
+        ]
+        server, _ = self._template_server([self._profile("home")])
+        async with Client(server) as client:
+            for name, args, expected in cases:
+                res = await client.call_tool(name, args)
+                text = _text(res)
+                self.assertTrue(res.is_error, (name, args))
+                self.assertIn(expected, text, (name, args))
+                for leak in ("Traceback", "File \"", str(self.root), "McpToolError"):
+                    self.assertNotIn(leak, text, (name, args))
+
+    async def test_run_template_llm_failure_keeps_code_and_status_but_hides_detail(self) -> None:
+        from types import SimpleNamespace
+
+        tid = self.store.save(source_name="a.mp3", model="small", text="hi", plain_text="hi", duration_seconds=1.0)
+        fail = SimpleNamespace(status="fail", model="m1", output_text="", info_note=None, error_code="auth_failed",
+                               error_detail="Authentication failed with HTTP 401. Authorization: Bearer sk-secret /home/x/.key")
+        server, _ = self._template_server([self._profile("home")], result=fail)
+        async with Client(server) as client:
+            res = await client.call_tool("run_template", {"transcript_id": tid, "template_id": "meeting-summary"})
+        text = _text(res)
+        self.assertTrue(res.is_error)
+        self.assertIn("auth_failed", text)
+        self.assertIn("HTTP 401", text)
+        for leak in ("sk-secret", "Authorization", "/home/x"):
+            self.assertNotIn(leak, text)
+
     async def test_cancel_job(self) -> None:
         import threading
 

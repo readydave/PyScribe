@@ -355,11 +355,7 @@ def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = No
             border: 1px solid {p.ink};
             border-radius: 4px;
         }}
-        QPushButton#exitButton {{
-            background: transparent;
-            border-color: {p.rule};
-            color: {p.muted};
-        }}
+        QPushButton#exitButton,
         QPushButton#exitButton:hover {{
             background: {p.rubric};
             border-color: {p.rubric};

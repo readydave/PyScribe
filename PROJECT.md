@@ -76,6 +76,8 @@ and practical support for GPU-heavy speech/OCR workloads.
 | 2026-10-04 | Use `community-1` diarization and assign speakers per word; drop the identical `Fast` mode. | End-to-end DER 58.8% -> 32.9% on AMI. | Users must accept the `community-1` terms on Hugging Face. |
 | 2026-10-05 | Sequential decoding by default; batched GPU decoding is opt-in. | On a real interview batching dropped ~15% of words (fillers, short replies) for a ~15 s ASR saving. | "Faster GPU decoding" setting in Qt and Listener. |
 | 2026-10-05 | Set `no_repeat_ngram_size=4` for file transcription. | Whisper repetition loops cost one AMI meeting 66 words (WER 25.7% -> 21.0% with the guard). | Applied in `services/asr_decode.py`. |
+| 2026-10-09 | Keep the OCR model-manifest check refusing when Hugging Face is unreachable; show the reason and let the user pick the fallback OCR backend (`visual_ocr_fallback`). | The check is a deliberate integrity control; silent fallback to RapidOCR cost accuracy (word F1 0.55 vs 0.99). | Auto note says why it fell back; no cache-bypass switch. See `docs/ocr_backend_check_2026-10.md`. |
+| 2026-10-09 | Single `main` branch with linear history; one commit per item. | Many stale local branches; UX/AI/MCP work merged by fast-forward (PR #1). | Old spike scripts kept as tag `archive/phase-7-spikes`. Orchestration protocol is in `docs/handoff_2026-10-09_orchestration.md`. |
 
 
 ## Current Priorities

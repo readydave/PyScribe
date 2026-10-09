@@ -9,19 +9,23 @@ from typing import Callable
 
 
 class Stage(str, Enum):
+    LOAD = "load"
     TRANSCRIBE = "transcribe"
     SPEAKERS = "speakers"
     VISUALS = "visuals"
+    SAVE = "save"
 
 
 STAGE_LABELS: dict[Stage, str] = {
+    Stage.LOAD: "Load model",
     Stage.TRANSCRIBE: "Transcribe",
     Stage.SPEAKERS: "Speakers",
     Stage.VISUALS: "Visuals",
+    Stage.SAVE: "Save",
 }
 
 # Order in which stages are shown.
-STAGE_ORDER: tuple[Stage, ...] = (Stage.TRANSCRIBE, Stage.SPEAKERS, Stage.VISUALS)
+STAGE_ORDER: tuple[Stage, ...] = (Stage.LOAD, Stage.TRANSCRIBE, Stage.SPEAKERS, Stage.VISUALS, Stage.SAVE)
 
 PENDING = "pending"
 ACTIVE = "active"
@@ -53,6 +57,15 @@ class JobTracker:
 
     def info(self, stage: Stage) -> StageInfo:
         return self._stages[stage]
+
+    def start(self, stage: Stage) -> None:
+        """Mark a stage active without a percent (stages that have no progress value)."""
+        info = self._stages[stage]
+        if info.state in (DISABLED, FAILED):
+            return
+        if info.started_at is None:
+            info.started_at = self._clock()
+        info.state = ACTIVE
 
     def progress(self, stage: Stage, percent: int) -> None:
         """Record a progress value (0-100). The first value starts the stage; 100 completes it."""

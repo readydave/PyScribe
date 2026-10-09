@@ -13,7 +13,7 @@ from ui_qt import theme
 
 HISTORY_SECONDS = 60
 COMPACT_WIDTH = 230
-STAGE_NAMES = {"transcribe": "Transcribing", "speakers": "Identifying speakers", "visuals": "Analyzing visuals"}
+STAGE_NAMES = {"load": "Loading model", "save": "Saving", "transcribe": "Transcribing", "speakers": "Identifying speakers", "visuals": "Analyzing visuals"}
 
 
 @dataclass

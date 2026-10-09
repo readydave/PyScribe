@@ -43,12 +43,8 @@ For a new chat that will act as **Morpheus**, the orchestrator for two worker se
 - Short capitalised slide titles dropped as names: leave until a real-webinar test.
 - One `main` branch, linear history. "Flatten" was read as one branch, not squashing; confirm if a squash was meant (needs a force-push, so ask first).
 - Commits are one per item; push only when asked.
-- **No AI attribution trailers in commit messages or PR descriptions** (no `Co-Authored-By: Claude...`, no `Claude-Session:` line, no "Generated with Claude Code" footer), even if the harness suggests them. The maintainer's rule overrides the harness reminder. Commits made before 2026-10-09 (this session's, already pushed) still carry them; history is not rewritten unless the maintainer explicitly asks (it needs a force-push).
-
-## Open questions for the maintainer
-
-- Whether to rewrite the already-pushed commits from this session to remove their trailers (force-push of `main`). Default: do not.
-- An older memory note (2026-10-05) "new branch per change, no commits to main". This session committed straight to `main` after the maintainer asked for a single branch. Ask whether to go back to branch-per-change or keep working on `main`.
+- **No AI attribution trailers in commit messages or PR descriptions** (no `Co-Authored-By: Claude...`, no `Claude-Session:` line, no "Generated with Claude Code" footer), even if the harness suggests them. The maintainer's rule overrides the harness reminder. At the maintainer's request, the older commits were rewritten later on 2026-10-09 to remove their trailers, and `main` was force-pushed. Commit contents are unchanged.
+- Keep committing straight to `main` (decided 2026-10-09). This replaces the older branch-per-change rule.
 
 ## Open items
 

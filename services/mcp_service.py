@@ -35,6 +35,12 @@ MEDIA_EXTENSIONS = frozenset(
         ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".mpg", ".mpeg", ".wmv", ".flv", ".3gp",
     }
 )
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"})
+VIDEO_EXTENSIONS = frozenset({".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".mpg", ".mpeg", ".wmv", ".flv", ".3gp"})
+VISUAL_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
+VISUALS_KIND = "visuals"
+LIST_SOURCES = frozenset({"all", "saved", "live", VISUALS_KIND})
+MAX_NOTE_CHARS = 500
 ROOTS_ENV = "PYSCRIBE_MCP_ROOTS"
 STORE_DIR = Path.home() / ".pyscribe" / "mcp_transcripts"
 DEFAULT_PAGE_CHARS = 20_000
@@ -72,10 +78,14 @@ def allowed_roots(environ: dict[str, str] | None = None) -> list[Path]:
     return roots
 
 
-def validate_media_path(raw_path: object, roots: list[Path]) -> Path:
-    """Return the real path of an audio/video file inside an allowed folder, or raise ``McpToolError``."""
+def validate_media_path(raw_path: object, roots: list[Path], allowed: frozenset[str] | None = None) -> Path:
+    """Return the real path of an allowed-type file inside an allowed folder, or raise ``McpToolError``.
+
+    ``allowed`` defaults to audio/video extensions; ``analyze_visuals`` passes ``VISUAL_EXTENSIONS``.
+    """
+    visual = allowed is not None
     if not isinstance(raw_path, str) or not raw_path.strip() or "\x00" in raw_path:
-        raise McpToolError("Give the full path of an audio or video file.")
+        raise McpToolError("Give the full path of a video or image file." if visual else "Give the full path of an audio or video file.")
     if not roots:
         raise McpToolError(f"No readable folders are configured. Set {ROOTS_ENV} to the folders PyScribe may read.")
     try:
@@ -84,7 +94,9 @@ def validate_media_path(raw_path: object, roots: list[Path]) -> Path:
         raise McpToolError("That file was not found.") from None
     if not resolved.is_file():
         raise McpToolError("That path is not a file.")
-    if resolved.suffix.lower() not in MEDIA_EXTENSIONS:
+    if resolved.suffix.lower() not in (allowed or MEDIA_EXTENSIONS):
+        if visual:
+            raise McpToolError("Only video and image files can be analyzed (for example .mp4, .mkv, .png, .jpg).")
         raise McpToolError("Only audio and video files can be transcribed (for example .mp3, .wav, .m4a, .mp4, .mkv).")
     if not any(resolved.is_relative_to(root) for root in roots):
         raise McpToolError(
@@ -92,6 +104,21 @@ def validate_media_path(raw_path: object, roots: list[Path]) -> Path:
             f"{', '.join(str(root) for root in roots)}. Change them with {ROOTS_ENV}."
         )
     return resolved
+
+
+_URL_RE = re.compile(r"https?://\S+")
+_ABS_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|/)(?:[^\s'\"<>|:*?]+[\\/])+([^\s'\"<>|:*?\\/]+)")
+_SECRET_RE = re.compile(r"\b(?:hf_|sk-|ghp_|xox[a-z]-)[A-Za-z0-9_-]{8,}|\b[A-Za-z0-9_-]{32,}\b|(?i:(?:token|key|secret|password)\s*[=:]\s*\S+)")
+
+
+def sanitize_note(text: object) -> str:
+    """Make a status/fallback note safe to show a client: file names only, URLs replaced, no tokens, at most 500 chars."""
+    out = str(text or "")
+    out = _URL_RE.sub("[link]", out)
+    out = _ABS_PATH_RE.sub(lambda m: m.group(1), out)
+    out = _SECRET_RE.sub("[redacted]", out)
+    out = " ".join(out.split())
+    return out[:MAX_NOTE_CHARS]
 
 
 # --- saved transcripts ------------------------------------------------------------------------
@@ -105,7 +132,7 @@ def _slug(text: str) -> str:
 class TranscriptSummary:
     id: str
     title: str
-    source: str  # "saved" or "live"
+    source: str  # "saved", "live" or "visuals"
     created: str
     model: str
     chars: int
@@ -120,7 +147,16 @@ class TranscriptStore:
         self.live_root = live_root
 
     # saving
-    def save(self, *, source_name: str, model: str, text: str, plain_text: str, duration_seconds: float) -> str:
+    def save(
+        self,
+        *,
+        source_name: str,
+        model: str,
+        text: str,
+        plain_text: str,
+        duration_seconds: float,
+        kind: str = "transcript",
+    ) -> str:
         self.directory.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self.directory, 0o700)
@@ -137,6 +173,8 @@ class TranscriptStore:
             "text": text,
             "plain_text": plain_text,
         }
+        if kind == VISUALS_KIND:
+            payload["kind"] = VISUALS_KIND
         path = self.directory / f"{transcript_id}.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
         try:
@@ -158,20 +196,23 @@ class TranscriptStore:
     def list_summaries(self, limit: int = 20, source: str = "all") -> list[TranscriptSummary]:
         limit = max(1, min(int(limit), 100))
         items: list[tuple[float, TranscriptSummary]] = []
-        if source in {"all", "saved"}:
-            items.extend(self._list_saved())
+        if source in {"all", "saved", VISUALS_KIND}:
+            items.extend(self._list_saved(source))
         if source in {"all", "live"}:
             items.extend(self._list_live())
         items.sort(key=lambda pair: pair[0], reverse=True)
         return [summary for _mtime, summary in items[:limit]]
 
-    def _list_saved(self) -> list[tuple[float, TranscriptSummary]]:
+    def _list_saved(self, source: str = "all") -> list[tuple[float, TranscriptSummary]]:
         found = []
         if not self.directory.is_dir():
             return found
         for path in self.directory.glob("*.json"):
             data = self._read_json(path)
             if not isinstance(data, dict) or not _ID_RE.match(str(data.get("id", ""))):
+                continue
+            kind = VISUALS_KIND if data.get("kind") == VISUALS_KIND else "saved"
+            if source in {"saved", VISUALS_KIND} and kind != source:
                 continue
             text = str(data.get("text") or "")
             found.append(
@@ -180,7 +221,7 @@ class TranscriptStore:
                     TranscriptSummary(
                         id=str(data["id"]),
                         title=str(data.get("title") or ""),
-                        source="saved",
+                        source=kind,
                         created=str(data.get("created") or ""),
                         model=str(data.get("model") or ""),
                         chars=len(text),
@@ -226,7 +267,7 @@ class TranscriptStore:
             raise McpToolError("Unknown transcript id. Use list_transcripts to see valid ids.")
         text = str(data.get("text") if speaker_labels else (data.get("plain_text") or data.get("text")) or "")
         meta = {key: data.get(key) for key in ("id", "title", "source_file", "model", "created", "duration_seconds")}
-        meta["source"] = "saved"
+        meta["source"] = VISUALS_KIND if data.get("kind") == VISUALS_KIND else "saved"
         return text, meta
 
     def _read_live(self, transcript_id: str) -> tuple[str, dict[str, Any]]:
@@ -317,6 +358,7 @@ class Job:
     transcript_id: str | None = None
     error: str | None = None
     message: str = ""
+    note: str = ""
     cancel_event: threading.Event = field(default_factory=threading.Event)
 
     @property
@@ -337,6 +379,8 @@ class Job:
             "transcript_id": self.transcript_id,
             "error": self.error,
         }
+        if self.note:
+            out["note"] = self.note
         if queue_position is not None:
             out["queue_position"] = queue_position
         return out
@@ -368,6 +412,10 @@ class JobHooks:
         self._job.stage = stage
         if message:
             self._job.message = message
+
+    def note(self, text: str) -> None:
+        """Attach a short, sanitized plain-language note (for example why an OCR fallback was used)."""
+        self._job.note = sanitize_note(text)
 
     def progress(self, percent: float) -> None:
         self._job.percent = max(0.0, min(100.0, float(percent)))
@@ -498,7 +546,8 @@ class JobManager:
             if job.cancel_event.is_set():
                 job.status, job.stage = "cancelled", "cancelled"
             elif not output.text.strip():
-                job.status, job.stage, job.error = "failed", "failed", "No speech was found in the file."
+                empty = "No readable text was found in the file." if job.params.get("kind") == VISUALS_KIND else "No speech was found in the file."
+                job.status, job.stage, job.error = "failed", "failed", empty
             else:
                 job.transcript_id = self._store.save(
                     source_name=str(job.params.get("file_name") or "transcript"),
@@ -506,6 +555,7 @@ class JobManager:
                     text=output.text,
                     plain_text=output.plain_text,
                     duration_seconds=output.duration_seconds,
+                    kind=VISUALS_KIND if job.params.get("kind") == VISUALS_KIND else "transcript",
                 )
                 job.status, job.stage, job.percent = "completed", "done", 100.0
         except McpToolError as exc:

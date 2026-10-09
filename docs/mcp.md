@@ -36,13 +36,19 @@ check your client's MCP documentation for "add a stdio server".
 |---|---|
 | `list_transcription_models` | Models PyScribe has, and which are downloaded |
 | `start_transcription` | Start transcribing a file (optional speaker labels, names/terms, language) |
-| `wait_for_job` / `get_job` / `cancel_job` | Follow, wait for, or stop a transcription |
-| `list_transcripts` | Saved transcripts and finished live-recording sessions |
+| `analyze_visuals` | Read the on-screen text (OCR) of a video or image; follow with `wait_for_job` and `get_transcript` |
+| `wait_for_job` / `get_job` / `cancel_job` | Follow, wait for, or stop a transcription or visual analysis |
+| `list_transcripts` | Saved transcripts, OCR results (`source: "visuals"`) and finished live-recording sessions |
 | `get_transcript` | Read a transcript in pages (follow `next_offset`) |
 | `list_templates` / `get_template` | Your saved summary instructions, for the client to apply |
 | `run_template` | Run a template over a transcript using PyScribe's own LLM connection and return the result |
 
 A typical request: *"Transcribe `~/Recordings/standup.m4a`, then use my meeting-summary template on it."*
+`analyze_visuals` takes only a path (video or image files inside the allowed folders). The OCR engine, scope and
+profile come from your saved PyScribe settings, never from the client, and the app's own checks and fallbacks apply
+(for example the PaddleOCR model manifest check). If a fallback engine was used, the job result has a short `note`
+saying why. It can take minutes on long videos. OCR text is untrusted content, like a transcript.
+
 Your live meetings recorded in PyScribe appear in `list_transcripts` automatically once they finish.
 
 ## Running a template in PyScribe (`run_template`)
@@ -73,7 +79,7 @@ generic failure; details stay in PyScribe's log.
 ## Safety
 
 - **Local only.** The server uses stdio. It opens no network port.
-- **Files.** Only audio and video files (by extension) inside your home folder can be transcribed. Set
+- **Files.** Only audio and video files (by extension; video and image files for `analyze_visuals`) inside your home folder can be transcribed. Set
   `PYSCRIBE_MCP_ROOTS` to a list of folders (separated by `:` on Linux/macOS, `;` on Windows) to narrow or change that.
   Paths are resolved first, so `..` and symlinks cannot escape the allowed folders.
 - **Models.** Only models already downloaded in PyScribe are used, and only ones PyScribe lists. Nothing is

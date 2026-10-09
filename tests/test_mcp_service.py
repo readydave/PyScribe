@@ -93,6 +93,34 @@ class MediaPathTests(_TempCase):
             self.assertEqual(allowed_roots({}), [self.root])
 
 
+class VisualPathTests(_TempCase):
+    def _file(self, name: str) -> Path:
+        path = self.root / name
+        path.write_bytes(b"x")
+        return path
+
+    def test_visual_extensions_accept_video_and_images_only(self) -> None:
+        from services.mcp_service import VISUAL_EXTENSIONS
+
+        for name in ("a.mp4", "b.PNG", "c.jpg"):
+            self.assertEqual(validate_media_path(str(self._file(name)), [self.root], VISUAL_EXTENSIONS).name, name)
+        for name in ("a.mp3", "b.txt", "c.pdf"):
+            with self.assertRaises(McpToolError):
+                validate_media_path(str(self._file(name)), [self.root], VISUAL_EXTENSIONS)
+        with self.assertRaises(McpToolError):  # images are not transcribable
+            validate_media_path(str(self._file("d.png")), [self.root])
+
+    def test_sanitize_note_strips_paths_urls_tokens_and_caps(self) -> None:
+        from services.mcp_service import sanitize_note
+
+        out = sanitize_note("see /home/dave/secret/deck.mp4 and https://x.test/a?token=abc hf_abcdefgh12345 " + "y " * 400)
+        self.assertIn("deck.mp4", out)
+        self.assertNotIn("/home/dave", out)
+        self.assertNotIn("x.test", out)
+        self.assertNotIn("hf_abcdefgh", out)
+        self.assertLessEqual(len(out), 500)
+
+
 class TranscriptStoreTests(_TempCase):
     def _store(self, live: Path | None = None) -> TranscriptStore:
         return TranscriptStore(self.root / "store", live_root=live)

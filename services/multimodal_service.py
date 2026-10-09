@@ -526,6 +526,27 @@ def _extract_sampled_frames(
     return frames
 
 
+_OCR_DISPLAY_NAMES = {"paddleocr": "PaddleOCR", "rapidocr": "RapidOCR", "pytesseract": "Tesseract", "surya": "Surya"}
+_UNREACHABLE_HINTS = ("cannot reach", "offline mode", "connecterror", "connection", "timed out", "getaddrinfo", "name or service")
+
+
+def _brief_failure_reason(reason: str | None, *, limit: int = 110) -> str:
+    """One short, credential-free line describing why an OCR backend could not be used."""
+    text = " ".join(str(reason or "backend unavailable").split())
+    lowered = text.lower()
+    if lowered.startswith("install"):
+        return "not installed"
+    if any(hint in lowered for hint in _UNREACHABLE_HINTS):
+        return "model manifest check failed (Hugging Face unreachable)"
+    if "verif" in lowered and "model" in lowered:
+        return "model verification failed"
+    text = re.sub(r"^\w+ (?:init/runtime )?error:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"https?://\S+", "[url]", text)
+    text = re.sub(r"(?:~|/)[\w.\-~]*(?:/[\w.\-~ ]+)+", "[path]", text)
+    text = re.sub(r"(?i)\b(?:hf_|sk-|bearer\s+)[\w\-.]{6,}", "[redacted]", text)
+    return text[:limit].rstrip(" .;:,") or "backend unavailable"
+
+
 def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long_video: bool = False) -> OcrBuildResult:
     requested = (backend or "auto").strip().lower()
     attempts: list[str] = []
@@ -566,13 +587,18 @@ def _build_ocr_fn(backend: str, *, on_status: StatusCallback | None = None, long
                     f"Requested backend '{requested}' unavailable: {fallback_reason}. "
                     f"Using '{name}' fallback."
                 )
-            elif on_status and requested == "auto" and (name != order[0] or long_video):
-                on_status(f"Using '{name}' OCR backend.")
-                fallback_note = (
-                    f"Auto mode selected '{name}' for long-video OCR runtime."
-                    if long_video
-                    else f"Auto mode selected '{name}' (higher-priority backends unavailable)."
-                )
+            elif requested == "auto" and (name != order[0] or long_video):
+                if on_status:
+                    on_status(f"Using '{name}' OCR backend.")
+                failed = [(n, attempt_reason_by_backend[n]) for n in order if n in attempt_reason_by_backend]
+                if failed:
+                    first, first_reason = failed[0]
+                    fallback_note = (
+                        f"{_OCR_DISPLAY_NAMES.get(first, first)} unavailable: "
+                        f"{_brief_failure_reason(first_reason)}; using {_OCR_DISPLAY_NAMES.get(name, name)}."
+                    )
+                else:
+                    fallback_note = f"Auto mode selected '{name}' for long-video OCR runtime."
             return fn, name, None, fallback_note
         attempt_reason_by_backend[name] = reason or "backend unavailable"
         attempts.append(f"{name}: {reason}")

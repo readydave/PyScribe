@@ -80,21 +80,21 @@ Real `_choose_paddle_device`, stubbed builders, so no models were loaded.
 | Cause | Observed | Visible to the user? |
 |---|---|---|
 | Free VRAM below 1.5 GB, or no CUDA Paddle build / no GPU | `auto` picks RapidOCR by design | Report says "OCR engine used: rapidocr"; no reason |
-| Hugging Face unreachable (`HF_HUB_OFFLINE=1`), models fully cached | `auto` silently ends on RapidOCR | Note says only "higher-priority backends unavailable"; the reason is dropped |
+| Hugging Face unreachable (`HF_HUB_OFFLINE=1`), models fully cached | `auto` silently ends on RapidOCR | Now names the reason (see finding B) |
 | Paddle import / init error | Falls back to RapidOCR, same note | Same |
 
 ## Findings that need a decision
 
-A. **Offline use silently loses PaddleOCR.** `_prepare_verified_paddle_ocr_model_dirs` calls
-`ensure_hf_repo_local_dir_verified`, which fetches the model manifest from Hugging Face on every cold start to verify
-cached files. With the network down it raises, `_build_paddle_ocr_fn` returns `(None, "PaddleOCR init/runtime error")`,
-and `auto` falls to RapidOCR (slide F1 about 0.55 instead of 0.99). The verify step is a deliberate security check, so
-this is a policy choice, not a clear bug. Option: when the manifest cannot be fetched and the local files are complete,
-use the cache and log a warning.
+A. **Offline use loses PaddleOCR (decision recorded, reason now surfaced).** The model-manifest check against
+Hugging Face is a deliberate security check and stays strict: with the network down and models fully cached, `auto`
+still falls to RapidOCR (slide F1 about 0.55 instead of 0.99). Decision (2026-10-09): keep refusing, but say why.
 
-B. **The fallback reason is lost in `auto` mode.** `_build_ocr_fn` stores each backend's failure reason but the `auto`
-note says only "higher-priority backends unavailable". Including the stored reason (for example "PaddleOCR: could not
-verify models offline") would make this diagnosable from the report.
+B. **Resolved: the fallback reason is no longer lost in `auto` mode.** `_build_ocr_fn` now builds the note from the
+failed backend's stored reason through `_brief_failure_reason` (one line, URLs, paths and token-like strings removed).
+With Hugging Face unreachable the note reads "PaddleOCR unavailable: model manifest check failed (Hugging Face
+unreachable); using RapidOCR." The note is also produced when no status callback is passed. Regression tests:
+`tests/test_multimodal_service.py` (`test_auto_fallback_note_names_the_real_failure_reason`,
+`test_brief_failure_reason_is_one_clean_line`). The backend order and the manifest verification are unchanged.
 
 C. **Slide titles are dropped.** Two- or three-word capitalised titles ("Quarterly Review", "Migration Plan",
 "Security Checklist") never appear in the slides-only report, with either backend. `_is_low_value_slide_line` and

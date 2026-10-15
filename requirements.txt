@@ -1,0 +1,52 @@
+# For GPU support, it is highly recommended to install PyTorch manually first
+# using the --index-url that matches your system's CUDA toolkit.
+# Example for CUDA 12.8:
+# pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+
+# Use the PyTorch CUDA 12.8 wheels (keep this line so pip finds the GPU builds)
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# Core dependencies (pinned to CUDA 12.8 GPU builds; driver >= 570 recommended)
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128
+torchcodec>=0.11,<0.12  # needed by pyannote.audio 4.x; requires FFmpeg 4-8 shared libs on the system
+faster-whisper==1.2.1
+ffmpeg-python==0.2.0
+numpy
+pyperclip
+opencv-python<4.12
+rapidocr-onnxruntime==1.4.4
+
+# Hardware Monitoring
+psutil
+nvidia-ml-py
+
+gradio
+mcp>=2.3,<3  # `python main.py mcp` (MCP server for Claude Code, Codex, ...)
+PySide6>=6.7
+requests
+keyring  # optional: OS keyring for LLM API keys
+tqdm
+PyYAML
+Pillow
+hf_xet  # Optional accelerator for Hugging Face Xet storage; speeds up model downloads
+transformers>=5.13  # Transformers 5 (needed by the planned Nemotron streaming backend; Granite verified on 5.18)
+peft>=0.14.0
+pytesseract>=0.3.10  # Optional multimodal OCR (requires OS package: tesseract-ocr)
+paddleocr>=3.0  # Optional multimodal OCR backend (app code targets the 3.x API)
+paddlepaddle>=3.3.0  # Required runtime for PaddleOCR backend (CPU build; for GPU run scripts/install_paddle_gpu.sh afterwards)
+
+
+# Additional pinned packages added after environment sync
+# (these are required by the app at runtime or by faster-whisper/hf tooling)
+huggingface-hub[hf_xet]>=1.0  # required by transformers 5; services/hf_auth_service.py uses get_token()/login() (HfFolder was removed in 1.0)
+ctranslate2>=4.6.1
+typing_extensions==4.15.0
+# Optional: speaker diarization
+pyannote.audio>=4.0.7
+librosa  # required by the Nemotron streaming feature extractor (nvidia/nemotron-speech-streaming-en-0.6b)
+soundfile  # required by diarization.py audio loading (no longer a pyannote 4 dependency)
+
+# Optional: evaluation harness (scripts/evaluate.py)
+jiwer

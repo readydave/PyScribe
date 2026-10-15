@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "id": "librivox-sherlock-holmes-en",
+      "audio": "assets/benchmark-sherlock-holmes-en.mp3",
+      "language": "en",
+      "reference_text": "evaluation/references/sherlock-holmes-en.txt"
+    },
+    {
+      "id": "librivox-napoleon-es",
+      "audio": "assets/benchmark-napoleon-es.mp3",
+      "language": "es",
+      "reference_text": "evaluation/references/napoleon-es.txt"
+    }
+  ]
+}

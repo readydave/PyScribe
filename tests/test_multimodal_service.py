@@ -1,0 +1,344 @@
+"""Tests for visual OCR helper logic."""
+
+from __future__ import annotations
+
+from collections import Counter
+from pathlib import Path
+import sys
+import tempfile
+import types
+import unittest
+from unittest.mock import patch
+
+from services import multimodal_service as mm
+from services.live_vram_service import GpuMemoryInfo
+from services.multimodal_service import (
+    analyze_video_stream,
+    _format_visual_report,
+    _is_ui_noise_line,
+    _is_low_value_chat_line,
+    _is_low_value_slide_line,
+    _paddle_ocr_model_name_kwargs,
+    _prepare_verified_paddle_ocr_model_dirs,
+    _looks_like_person_name,
+    _resolve_effective_sample_seconds,
+)
+
+
+class MultimodalServiceTests(unittest.TestCase):
+    def test_paddle_ocr_model_name_kwargs_follow_model_dirs(self) -> None:
+        names = _paddle_ocr_model_name_kwargs(
+            {
+                "text_detection_model_dir": "/cache/official_models/PP-OCRv5_server_det",
+                "text_recognition_model_dir": "/cache/official_models/en_PP-OCRv5_mobile_rec/",
+                "doc_unwarping_model_dir": "/cache/official_models/UVDoc",
+            }
+        )
+        self.assertEqual(
+            names,
+            {
+                "text_detection_model_name": "PP-OCRv5_server_det",
+                "text_recognition_model_name": "en_PP-OCRv5_mobile_rec",
+            },
+        )
+        self.assertEqual(_paddle_ocr_model_name_kwargs({}), {})
+
+    def test_resolve_effective_sample_seconds_spreads_sampling_across_full_video(self) -> None:
+        self.assertEqual(
+            _resolve_effective_sample_seconds(
+                requested_sample_seconds=1.0,
+                max_frames=180,
+                media_duration_seconds=2232.0,
+            ),
+            12.4,
+        )
+
+    def test_long_video_uses_lower_frame_budget_by_default(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_extract(**kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch("services.multimodal_service._has_video_stream", return_value=True), patch(
+            "services.multimodal_service._get_video_duration_seconds",
+            return_value=8 * 60 * 60,
+        ), patch(
+            "services.multimodal_service._build_ocr_fn",
+            return_value=(lambda image, mode="slide": "", "rapidocr", None, None),
+        ), patch(
+            "services.multimodal_service._extract_sampled_frames",
+            side_effect=_fake_extract,
+        ):
+            analyze_video_stream("webinar.mp4", visual_profile="accurate", visual_scope="slides_only")
+
+        self.assertEqual(captured["max_frames"], 180)
+        self.assertEqual(captured["sample_seconds"], 160.0)
+        self.assertEqual(
+            _resolve_effective_sample_seconds(
+                requested_sample_seconds=4.0,
+                max_frames=360,
+                media_duration_seconds=900.0,
+            ),
+            4.0,
+        )
+
+    def test_name_like_lines_are_filtered_more_aggressively(self) -> None:
+        self.assertTrue(_looks_like_person_name("Allison M. Owens"))
+        self.assertTrue(_is_low_value_slide_line("Paul C. Phelps"))
+        self.assertTrue(_is_low_value_chat_line("1359"))
+        self.assertTrue(_is_low_value_chat_line("Billy l.Stuecken"))
+        self.assertFalse(_is_low_value_slide_line("Visits per DVM Day [0.07, 0.43]"))
+        self.assertFalse(_is_low_value_chat_line("Ralph: I thought Kir was a troubleshooter."))
+
+    def test_meeting_ui_chrome_is_filtered_as_noise(self) -> None:
+        self.assertTrue(_is_ui_noise_line("app.zoom.us/wc/86754168572/join?ref_from=launch"))
+        self.assertTrue(_is_ui_noise_line("Who can see your messages? Recording On"))
+        self.assertTrue(_is_ui_noise_line("You are viewing Raghuveer Nishtala's screen"))
+        self.assertTrue(_is_ui_noise_line("SearXNG LMI M G A FB H GMaps Y! EN EN Routes IkonGPS"))
+        self.assertTrue(_is_ui_noise_line("0 of 7 answered Submit"))
+        self.assertFalse(_is_ui_noise_line("Day 1: Foundations of AI and Prompt Engineering"))
+
+    def test_visual_report_prefers_meaningful_slide_and_chat_lines(self) -> None:
+        canonical_lines = {
+            "allison m owens": "Allison M. Owens",
+            "metric": "Visits per DVM Day [0.07, 0.43]",
+            "pareto": "Pareto Chart: Euthanasia Reasons (Excluding Other)",
+            "clock": "1359",
+            "chatmsg": "Ralph: I thought Kir was a troubleshooter.",
+        }
+        line_counts = Counter(
+            {
+                "allison m owens": 20,
+                "metric": 11,
+                "pareto": 10,
+                "clock": 30,
+                "chatmsg": 8,
+            }
+        )
+        line_source = {
+            "allison m owens": "slide",
+            "metric": "slide",
+            "pareto": "slide",
+            "clock": "chat",
+            "chatmsg": "chat",
+        }
+
+        report = _format_visual_report(
+            partial=False,
+            sample_seconds=12.4,
+            frames_scanned=180,
+            visual_profile="fast",
+            requested_backend="auto",
+            ocr_name="rapidocr",
+            backend_note=None,
+            ocr_calls_slide=30,
+            ocr_calls_chat=6,
+            dedupe_skipped_slide=150,
+            dedupe_skipped_chat=174,
+            canonical_lines=canonical_lines,
+            line_counts=line_counts,
+            line_source=line_source,
+            total_frames=180,
+            timeline=[],
+        )
+
+        self.assertIn("Visits per DVM Day [0.07, 0.43]", report)
+        self.assertIn("- Visual scope: slides_only", report)
+        self.assertIn("Ralph: I thought Kir was a troubleshooter.", report)
+        self.assertNotIn("Allison M. Owens", report)
+        self.assertNotIn("1359", report)
+
+    def test_prepare_verified_paddle_ocr_model_dirs_uses_expected_hf_repos(self) -> None:
+        class _FakePaddleOCR:
+            @staticmethod
+            def _get_ocr_model_names(_self, lang, ppocr_version):
+                self.assertEqual(lang, "en")
+                self.assertIsNone(ppocr_version)
+                return "PP-OCRv5_server_det", "en_PP-OCRv5_mobile_rec"
+
+        verified_calls: list[tuple[str, str]] = []
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            "os.environ",
+            {
+                "PADDLE_PDX_MODEL_SOURCE": "huggingface",
+                "PADDLE_PDX_CACHE_HOME": temp_dir,
+            },
+            clear=False,
+        ), patch(
+            "services.multimodal_service.ensure_hf_repo_local_dir_verified",
+            side_effect=lambda repo_id, local_dir, **_: verified_calls.append((repo_id, local_dir)) or str(local_dir),
+        ):
+            kwargs = _prepare_verified_paddle_ocr_model_dirs(_FakePaddleOCR)
+
+        base_dir = Path(temp_dir) / "official_models"
+        self.assertEqual(kwargs["doc_orientation_classify_model_dir"], str(base_dir / "PP-LCNet_x1_0_doc_ori"))
+        self.assertEqual(kwargs["doc_unwarping_model_dir"], str(base_dir / "UVDoc"))
+        self.assertEqual(kwargs["text_detection_model_dir"], str(base_dir / "PP-OCRv5_server_det"))
+        self.assertEqual(kwargs["textline_orientation_model_dir"], str(base_dir / "PP-LCNet_x1_0_textline_ori"))
+        self.assertEqual(kwargs["text_recognition_model_dir"], str(base_dir / "en_PP-OCRv5_mobile_rec"))
+        self.assertEqual(
+            [repo_id for repo_id, _ in verified_calls],
+            [
+                "PaddlePaddle/PP-LCNet_x1_0_doc_ori",
+                "PaddlePaddle/UVDoc",
+                "PaddlePaddle/PP-OCRv5_server_det",
+                "PaddlePaddle/PP-LCNet_x1_0_textline_ori",
+                "PaddlePaddle/en_PP-OCRv5_mobile_rec",
+            ],
+        )
+
+
+def _fake_paddle(*, cuda: bool, devices: int = 1) -> types.ModuleType:
+    module = types.ModuleType("paddle")
+    module.is_compiled_with_cuda = lambda: cuda  # type: ignore[attr-defined]
+    module.device = types.SimpleNamespace(cuda=types.SimpleNamespace(device_count=lambda: devices))  # type: ignore[attr-defined]
+    return module
+
+
+def _vram(free_gb: float) -> GpuMemoryInfo:
+    return GpuMemoryInfo(total_gb=24.0, free_gb=free_gb, used_gb=24.0 - free_gb, source="test")
+
+
+class PaddleDeviceTests(unittest.TestCase):
+    def test_gpu_when_cuda_build_and_enough_vram(self) -> None:
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=True)}), patch.object(mm, "get_gpu_memory_info", return_value=_vram(10.0)):
+            self.assertEqual(mm._choose_paddle_device(), "gpu:0")
+
+    def test_gpu_when_vram_unknown(self) -> None:
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=True)}), patch.object(mm, "get_gpu_memory_info", return_value=None):
+            self.assertEqual(mm._choose_paddle_device(), "gpu:0")
+
+    def test_cpu_when_vram_low(self) -> None:
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=True)}), patch.object(mm, "get_gpu_memory_info", return_value=_vram(1.0)):
+            self.assertEqual(mm._choose_paddle_device(), "cpu")
+
+    def test_cpu_when_cpu_only_build_or_no_device(self) -> None:
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=False)}):
+            self.assertEqual(mm._choose_paddle_device(), "cpu")
+        with patch.dict(sys.modules, {"paddle": _fake_paddle(cuda=True, devices=0)}):
+            self.assertEqual(mm._choose_paddle_device(), "cpu")
+
+    def test_init_retries_on_cpu_when_gpu_init_fails(self) -> None:
+        created: list[str] = []
+
+        class FakePaddleOCR:
+            def __init__(self, **kwargs: object) -> None:
+                created.append(str(kwargs["device"]))
+                if str(kwargs["device"]).startswith("gpu"):
+                    raise RuntimeError("CUDA out of memory")
+
+        statuses: list[str] = []
+        with (
+            patch.object(mm, "_choose_paddle_device", return_value="gpu:0"),
+            patch.object(mm, "_PADDLE_OCR", None),
+            patch.object(mm, "_PADDLE_OCR_DEVICE", "cpu"),
+            patch.object(mm, "_PADDLE_OCR_MODEL_DIR_KWARGS", {}),
+        ):
+            mm._init_paddle_ocr(FakePaddleOCR, on_status=statuses.append)
+            self.assertEqual(mm._PADDLE_OCR_DEVICE, "cpu")
+        self.assertEqual(created, ["gpu:0", "cpu"])
+        self.assertTrue(any("retrying on CPU" in text for text in statuses))
+
+    def test_init_raises_when_cpu_init_fails(self) -> None:
+        class BrokenPaddleOCR:
+            def __init__(self, **kwargs: object) -> None:
+                raise RuntimeError("broken")
+
+        with patch.object(mm, "_choose_paddle_device", return_value="cpu"), patch.object(mm, "_PADDLE_OCR_MODEL_DIR_KWARGS", {}):
+            with self.assertRaises(RuntimeError):
+                mm._init_paddle_ocr(BrokenPaddleOCR)
+
+    def test_auto_prefers_paddleocr_only_on_gpu(self) -> None:
+        fake_fn = lambda image, mode="slide": ""  # noqa: E731
+        for gpu, long_video, expected in (
+            (True, False, "paddleocr"),
+            (True, True, "paddleocr"),
+            (False, False, "rapidocr"),
+            (False, True, "rapidocr"),
+        ):
+            with (
+                patch.object(mm, "_paddle_will_use_gpu", return_value=gpu),
+                patch.object(mm, "_build_paddle_ocr_fn", return_value=(fake_fn, None)),
+                patch.object(mm, "_build_rapid_ocr_fn", return_value=(fake_fn, None)),
+            ):
+                _fn, name, _err, _note = mm._build_ocr_fn("auto", long_video=long_video)
+            self.assertEqual(name, expected, f"gpu={gpu} long_video={long_video}")
+
+    def test_auto_fallback_note_names_the_real_failure_reason(self) -> None:
+        fake_fn = lambda image, mode="slide": ""  # noqa: E731
+        offline = (
+            "PaddleOCR init/runtime error: Cannot reach https://huggingface.co/api/models/PaddlePaddle/UVDoc"
+            "?token=hf_abcdef123456: offline mode is enabled."
+        )
+        with (
+            patch.object(mm, "_paddle_will_use_gpu", return_value=True),
+            patch.object(mm, "_build_paddle_ocr_fn", return_value=(None, offline)),
+            patch.object(mm, "_build_rapid_ocr_fn", return_value=(fake_fn, None)),
+        ):
+            _fn, name, _err, note = mm._build_ocr_fn("auto")
+        self.assertEqual(name, "rapidocr")
+        self.assertEqual(
+            note,
+            "PaddleOCR unavailable: model manifest check failed (Hugging Face unreachable); using RapidOCR.",
+        )
+
+    def _auto(self, fallback: str, *, paddle_ok: bool, rapid_ok: bool, tess_ok: bool, requested: str = "auto"):
+        fake_fn = lambda image, mode="slide": ""  # noqa: E731
+        offline = "PaddleOCR init/runtime error: Cannot reach https://huggingface.co/x: offline mode is enabled."
+        with (
+            patch.object(mm, "_configured_fallback", return_value=fallback),
+            patch.object(mm, "_paddle_will_use_gpu", return_value=True),
+            patch.object(mm, "_build_paddle_ocr_fn", return_value=(fake_fn, None) if paddle_ok else (None, offline)),
+            patch.object(mm, "_build_rapid_ocr_fn", return_value=(fake_fn, None) if rapid_ok else (None, "Install RapidOCR")),
+            patch.object(mm, "_build_tesseract_ocr_fn", return_value=(fake_fn, None) if tess_ok else (None, "Install Tesseract")),
+        ):
+            _fn, name, _err, note = mm._build_ocr_fn(requested)
+        return name, note
+
+    def test_default_fallback_keeps_existing_order(self) -> None:
+        name, note = self._auto("auto", paddle_ok=False, rapid_ok=True, tess_ok=True)
+        self.assertEqual(name, "rapidocr")
+        self.assertEqual(
+            note, "PaddleOCR unavailable: model manifest check failed (Hugging Face unreachable); using RapidOCR."
+        )
+
+    def test_chosen_fallback_is_used_and_explained(self) -> None:
+        name, note = self._auto("pytesseract", paddle_ok=False, rapid_ok=True, tess_ok=True)
+        self.assertEqual(name, "pytesseract")
+        self.assertEqual(
+            note,
+            "PaddleOCR unavailable: model manifest check failed (Hugging Face unreachable); "
+            "using Tesseract (your chosen fallback).",
+        )
+
+    def test_missing_chosen_fallback_falls_through_with_reason(self) -> None:
+        name, note = self._auto("pytesseract", paddle_ok=False, rapid_ok=True, tess_ok=False)
+        self.assertEqual(name, "rapidocr")
+        self.assertIn("your chosen fallback Tesseract is unavailable too (not installed)", note)
+        self.assertTrue(note.endswith("using RapidOCR."))
+
+    def test_chosen_fallback_not_used_when_paddle_works(self) -> None:
+        name, note = self._auto("pytesseract", paddle_ok=True, rapid_ok=True, tess_ok=True)
+        self.assertEqual(name, "paddleocr")
+        self.assertIsNone(note)
+
+    def test_configured_fallback_defaults_to_auto_on_error(self) -> None:
+        with patch("services.config_service.load_config", side_effect=OSError("boom")):
+            self.assertEqual(mm._configured_fallback(), "auto")
+
+    def test_brief_failure_reason_is_one_clean_line(self) -> None:
+        self.assertEqual(mm._brief_failure_reason("Install PaddleOCR: pip install paddleocr"), "not installed")
+        text = mm._brief_failure_reason(
+            "PaddleOCR init/runtime error: CUDA failed at /home/me/.cache/x/y.bin with hf_secret123456 "
+            "see https://example.com/a?token=abc " + "x" * 300
+        )
+        self.assertNotIn("/home/me", text)
+        self.assertNotIn("hf_secret", text)
+        self.assertNotIn("example.com", text)
+        self.assertLessEqual(len(text), 110)
+        self.assertNotIn("\n", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

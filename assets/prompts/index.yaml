@@ -1,0 +1,23 @@
+version: 1
+default_template_id: meeting-summary
+templates:
+  - id: meeting-summary
+    file: templates/meeting-summary.yaml
+    built_in: true
+    enabled: true
+  - id: action-items
+    file: templates/action-items.yaml
+    built_in: true
+    enabled: true
+  - id: decision-log
+    file: templates/decision-log.yaml
+    built_in: true
+    enabled: true
+  - id: customer-call-summary
+    file: templates/customer-call-summary.yaml
+    built_in: true
+    enabled: true
+  - id: incident-summary
+    file: templates/incident-summary.yaml
+    built_in: true
+    enabled: true

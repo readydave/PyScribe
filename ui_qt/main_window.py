@@ -96,7 +96,7 @@ from services.logging_service import configure_logging, get_log_path
 from services.project_store import ENV_PROJECTS_DIR, ProjectStore, resolve_projects_root, sanitize_segments
 from services.ui_themes import all_themes
 from ui_qt import theme
-from ui_qt.components import AppButton, Drawer, NavRail, SegmentedControl
+from ui_qt.components import AppButton, Chip, Drawer, NavRail, SegmentedControl
 from ui_qt.job_status import ACTIVE_PHRASES, JobStatusBar
 from ui_qt.components import tokens as component_tokens
 from ui_qt.views.projects_home import ProjectsHome
@@ -925,6 +925,8 @@ class MainWindow(QMainWindow):
         title.setProperty("type", "title")
         subtitle = QLabel("Choose a recording, pick a model and process it.")
         subtitle.setProperty("type", "caption")
+        self.page_title = title
+        self.page_subtitle = subtitle
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         title_row.addLayout(title_col, 1)
@@ -956,7 +958,14 @@ class MainWindow(QMainWindow):
         live_layout = QVBoxLayout(live_card)
         live_layout.setContentsMargins(12, 12, 12, 12)
         live_layout.setSpacing(8)
-        live_layout.addWidget(QLabel("Live Capture"))
+        live_header = QHBoxLayout()
+        live_heading = QLabel("Live capture")
+        live_heading.setProperty("type", "heading")
+        live_header.addWidget(live_heading, 1)
+        self.live_state_chip = Chip("Ready", "neutral")
+        self.live_state_chip.setAccessibleName("Recording state")
+        live_header.addWidget(self.live_state_chip)
+        live_layout.addLayout(live_header)
         live_grid = QGridLayout()
         live_grid.setHorizontalSpacing(8)
         live_grid.setVerticalSpacing(6)
@@ -973,7 +982,37 @@ class MainWindow(QMainWindow):
         self.live_device_combo = QComboBox()
         self.live_device_combo.currentIndexChanged.connect(self._on_live_device_changed)
         live_grid.addWidget(self.live_device_combo, 1, 1)
-        live_grid.addWidget(QLabel("Output Folder"), 2, 0)
+        live_grid.addWidget(QLabel("Session Title"), 2, 0)
+        self.live_title_input = QLineEdit()
+        self.live_title_input.setPlaceholderText("Optional title for filenames")
+        self.live_title_input.textChanged.connect(self._on_live_title_changed)
+        live_grid.addWidget(self.live_title_input, 2, 1)
+        live_grid.addWidget(QLabel("Timer"), 3, 0)
+        self.live_timer_label = QLabel("00:00:00")
+        self.live_timer_label.setObjectName("metricsLabel")
+        live_grid.addWidget(self.live_timer_label, 3, 1)
+        live_layout.addLayout(live_grid)
+        self.live_guidance_label = QLabel("")
+        self.live_guidance_label.setObjectName("hint")
+        self.live_guidance_label.setWordWrap(True)
+        live_layout.addWidget(self.live_guidance_label)
+
+        self.live_advanced_toggle = QToolButton()
+        self.live_advanced_toggle.setObjectName("detailsToggle")
+        self.live_advanced_toggle.setCheckable(True)
+        self.live_advanced_toggle.setText("More live options")
+        self.live_advanced_toggle.setToolTip("Output folder, compute device, precision and keeping the recording")
+        self.live_advanced_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        live_layout.addWidget(self.live_advanced_toggle, 0, Qt.AlignLeft)
+        self.live_advanced_body = QWidget()
+        self.live_advanced_body.setObjectName("Transparent")
+        live_advanced = QVBoxLayout(self.live_advanced_body)
+        live_advanced.setContentsMargins(0, 0, 0, 0)
+        live_advanced.setSpacing(8)
+        live_options = QGridLayout()
+        live_options.setHorizontalSpacing(8)
+        live_options.setVerticalSpacing(6)
+        live_options.addWidget(QLabel("Output Folder"), 0, 0)
         live_output_row = QHBoxLayout()
         self.live_output_dir_input = QLineEdit(self.config.live_output_dir or default_live_output_dir())
         self.live_output_dir_input.textChanged.connect(self._on_live_output_dir_changed)
@@ -981,48 +1020,36 @@ class MainWindow(QMainWindow):
         self.live_output_dir_btn = QPushButton("Browse...")
         self.live_output_dir_btn.clicked.connect(self._browse_live_output_dir)
         live_output_row.addWidget(self.live_output_dir_btn)
-        live_grid.addLayout(live_output_row, 2, 1)
-
-        live_grid.addWidget(QLabel("Session Title"), 3, 0)
-        self.live_title_input = QLineEdit()
-        self.live_title_input.setPlaceholderText("Optional title for filenames")
-        self.live_title_input.textChanged.connect(self._on_live_title_changed)
-        live_grid.addWidget(self.live_title_input, 3, 1)
-
-        live_grid.addWidget(QLabel("Timer"), 4, 0)
-        self.live_timer_label = QLabel("00:00:00")
-        self.live_timer_label.setObjectName("metricsLabel")
-        live_grid.addWidget(self.live_timer_label, 4, 1)
-        live_grid.addWidget(QLabel("Compute"), 5, 0)
+        live_options.addLayout(live_output_row, 0, 1)
+        live_options.addWidget(QLabel("Compute"), 1, 0)
         self.live_device_mode_combo = QComboBox()
         for label, value in (("Auto", "auto"), ("CPU", "cpu"), ("GPU", "gpu")):
             self.live_device_mode_combo.addItem(label, value)
         self.live_device_mode_combo.setCurrentIndex(max(self.live_device_mode_combo.findData(self.config.live_device_mode), 0))
         self.live_device_mode_combo.setToolTip("Device for live transcription and its final post-pass.")
-        live_grid.addWidget(self.live_device_mode_combo, 5, 1)
+        live_options.addWidget(self.live_device_mode_combo, 1, 1)
         self.live_compute_label = QLabel("Precision")
-        live_grid.addWidget(self.live_compute_label, 6, 0)
+        live_options.addWidget(self.live_compute_label, 2, 0)
         self.live_compute_combo = QComboBox()
         for label, value in (("Auto", "auto"), ("float16", "float16"), ("int8", "int8")):
             self.live_compute_combo.addItem(label, value)
         self.live_compute_combo.setCurrentIndex(max(self.live_compute_combo.findData(self.config.live_compute_type), 0))
         self.live_compute_combo.setToolTip("Ignored for Nemotron, which always uses float16 on GPU and float32 on CPU.")
-        live_grid.addWidget(self.live_compute_combo, 6, 1)
+        live_options.addWidget(self.live_compute_combo, 2, 1)
         self.live_device_mode_combo.currentIndexChanged.connect(self._on_live_runtime_changed)
         self.live_compute_combo.currentIndexChanged.connect(self._on_live_runtime_changed)
-        live_layout.addLayout(live_grid)
+        live_advanced.addLayout(live_options)
         self.live_keep_audio_checkbox = QCheckBox("Keep recorded audio after completion")
         self.live_keep_audio_checkbox.setChecked(bool(self.config.live_keep_audio_on_success))
         self.live_keep_audio_checkbox.toggled.connect(self._on_live_keep_audio_toggled)
-        live_layout.addWidget(self.live_keep_audio_checkbox)
+        live_advanced.addWidget(self.live_keep_audio_checkbox)
         self.live_path_hint_label = QLabel("")
         self.live_path_hint_label.setObjectName("hint")
         self.live_path_hint_label.setWordWrap(True)
-        live_layout.addWidget(self.live_path_hint_label)
-        self.live_guidance_label = QLabel("")
-        self.live_guidance_label.setObjectName("hint")
-        self.live_guidance_label.setWordWrap(True)
-        live_layout.addWidget(self.live_guidance_label)
+        live_advanced.addWidget(self.live_path_hint_label)
+        live_layout.addWidget(self.live_advanced_body)
+        self.live_advanced_toggle.toggled.connect(self._on_live_advanced_toggled)
+        self._on_live_advanced_toggled(False)
         live_card.setVisible(False)
         setup_layout.addWidget(live_card)
         self.live_card = live_card
@@ -1063,7 +1090,9 @@ class MainWindow(QMainWindow):
         self.input_mode_combo.currentIndexChanged.connect(self._on_input_mode_changed)
         self.input_mode_combo.setVisible(False)
         general_layout.addWidget(self.input_mode_combo)
-        setup_layout.insertWidget(0, self._build_input_segment())
+        self.input_segment_box = self._build_input_segment()
+        self.input_segment_box.setVisible(False)  # File and Live are chosen from the navigation rail now
+        setup_layout.insertWidget(0, self.input_segment_box)
 
         self.transcribe_checkbox = QCheckBox("Transcribe audio")
         start_mode = str(self.config.run_mode or "full").strip().lower()
@@ -1436,6 +1465,11 @@ class MainWindow(QMainWindow):
         self.advanced_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         if getattr(self, "_ui_ready", False):
             self._save_config(setup_advanced_expanded=expanded)
+
+    @Slot(bool)
+    def _on_live_advanced_toggled(self, expanded: bool) -> None:
+        self.live_advanced_body.setVisible(expanded)
+        self.live_advanced_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
 
     @Slot(bool)
     def _on_queue_toggled(self, expanded: bool) -> None:
@@ -2683,6 +2717,24 @@ class MainWindow(QMainWindow):
         self.stop_live_btn.setVisible(live_mode)
         self.pause_live_btn.setVisible(live_mode)
         self.transcribe_btn.setText("Start Live" if live_mode else "Process File")
+        self.page_title.setText("Live capture" if live_mode else "New transcription")
+        self.page_subtitle.setText(
+            "Record from a microphone or system audio and read the transcript as it arrives."
+            if live_mode
+            else "Choose a recording, pick a model and process it."
+        )
+        if self._live_finalizing:
+            self.live_state_chip.setText("Finalizing")
+            self.live_state_chip.set_variant("accent")
+        elif self._live_capture_active and self._live_paused:
+            self.live_state_chip.setText("Paused")
+            self.live_state_chip.set_variant("neutral")
+        elif self._live_capture_active:
+            self.live_state_chip.setText("Recording")
+            self.live_state_chip.set_variant("danger")
+        else:
+            self.live_state_chip.setText("Ready")
+            self.live_state_chip.set_variant("neutral")
         recording = bool(self._live_capture_active and not self._live_paused)
         set_state(self.live_timer_label, "recording" if recording else "idle")
         self.stop_live_btn.setProperty("role", "primary" if self._live_capture_active else "")

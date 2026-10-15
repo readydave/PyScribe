@@ -400,6 +400,57 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(win.status_label.text(), "Exported notes.srt")
         self.assertEqual(win.statusBar().currentMessage(), "Exported notes.srt")
 
+    # --- live screen -----------------------------------------------------------------------------------
+
+    def test_live_screen_has_its_own_title_and_hides_the_file_live_switch(self) -> None:
+        win, _ = self._build_window()
+        self.assertEqual(win.page_title.text(), "New transcription")
+        self.assertFalse(win.input_segment_box.isVisibleTo(win.transcription_scroll))
+        win.nav_rail.set_current("live")
+        self.assertEqual(win.page_title.text(), "Live capture")
+        self.assertTrue(win.live_card.isVisibleTo(win.transcription_scroll))
+        self.assertFalse(win.drop_card.isVisibleTo(win.transcription_scroll))
+        win.nav_rail.set_current("transcribe")
+        self.assertEqual(win.page_title.text(), "New transcription")
+
+    def test_live_state_chip_follows_the_session(self) -> None:
+        win, _ = self._build_window()
+        win.nav_rail.set_current("live")
+        self.assertEqual((win.live_state_chip.text(), win.live_state_chip.property("chip")), ("Ready", "neutral"))
+        win._live_capture_active = True
+        self.addCleanup(setattr, win, "_live_capture_active", False)
+        win._update_live_mode_ui()
+        self.assertEqual((win.live_state_chip.text(), win.live_state_chip.property("chip")), ("Recording", "danger"))
+        win._live_paused = True
+        self.addCleanup(setattr, win, "_live_paused", False)
+        win._update_live_mode_ui()
+        self.assertEqual((win.live_state_chip.text(), win.live_state_chip.property("chip")), ("Paused", "neutral"))
+        win._live_paused = False
+        win._live_finalizing = True
+        self.addCleanup(setattr, win, "_live_finalizing", False)
+        win._update_live_mode_ui()
+        self.assertEqual((win.live_state_chip.text(), win.live_state_chip.property("chip")), ("Finalizing", "accent"))
+
+    def test_live_screen_leads_with_device_and_title_and_hides_tuning(self) -> None:
+        win, _ = self._build_window()
+        win.nav_rail.set_current("live")
+        scroll = win.transcription_scroll
+        self.assertTrue(win.live_source_combo.isVisibleTo(scroll))
+        self.assertTrue(win.live_device_combo.isVisibleTo(scroll))
+        self.assertTrue(win.live_title_input.isVisibleTo(scroll))
+        self.assertTrue(win.live_timer_label.isVisibleTo(scroll))
+        for hidden in (win.live_output_dir_input, win.live_device_mode_combo, win.live_compute_combo, win.live_keep_audio_checkbox):
+            self.assertFalse(hidden.isVisibleTo(scroll))
+        win.live_advanced_toggle.setChecked(True)
+        for shown in (win.live_output_dir_input, win.live_device_mode_combo, win.live_compute_combo, win.live_keep_audio_checkbox):
+            self.assertTrue(shown.isVisibleTo(scroll))
+
+    def test_live_runtime_choices_are_saved_without_error(self) -> None:
+        win, saved = self._build_window()
+        win.live_device_mode_combo.setCurrentIndex(win.live_device_mode_combo.findData("cpu"))
+        win.live_compute_combo.setCurrentIndex(win.live_compute_combo.findData("int8"))
+        self.assertEqual((saved[-1].live_device_mode, saved[-1].live_compute_type), ("cpu", "int8"))
+
 
 if __name__ == "__main__":
     unittest.main()

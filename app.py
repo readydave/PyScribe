@@ -96,8 +96,8 @@ def _theme_palettes(theme_id: str | None = None, custom_themes: list[dict] | Non
 
 def _token_css(light: Palette, dark: Palette) -> str:
     return f"""
-:root {{ --pyscribe-bar-active: {light.bar_active}; --pyscribe-bar-done: {light.done}; --pyscribe-rule: {light.rule}; --pyscribe-ink: {light.ink}; }}
-body.dark, .dark {{ --pyscribe-bar-active: {dark.bar_active}; --pyscribe-bar-done: {dark.done}; --pyscribe-rule: {dark.rule}; --pyscribe-ink: {dark.ink}; }}
+:root {{ --pyscribe-bar-active: {light.bar_active}; --pyscribe-bar-done: {light.done}; --pyscribe-rule: {light.rule}; --pyscribe-ink: {light.ink}; --pyscribe-muted: {light.muted}; }}
+body.dark, .dark {{ --pyscribe-bar-active: {dark.bar_active}; --pyscribe-bar-done: {dark.done}; --pyscribe-rule: {dark.rule}; --pyscribe-ink: {dark.ink}; --pyscribe-muted: {dark.muted}; }}
 """
 
 
@@ -245,6 +245,7 @@ html { font-size: calc(16px * var(--pyscribe-text-scale, 1)); }
 #pyscribe-text-size button:hover { background: #8883; }
 #pyscribe-text-size button:disabled { opacity: 0.4; cursor: default; }
 #pyscribe-text-size [data-role="value"] { min-width: 44px; }
+.pyscribe-footer { text-align: center; color: var(--pyscribe-muted, inherit); font-size: var(--text-sm); }
 """
 
 
@@ -1009,24 +1010,6 @@ def create_interface() -> gr.Blocks:
             Drop an audio/video file to transcribe on this host machine.
             """
         )
-        with gr.Accordion("About models and LLM post-processing", open=False):
-            gr.Markdown(
-                """
-                **Model tips:** use built-in choices or a custom Hugging Face repo ID (`owner/repo`).
-                If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
-                For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
-                Granite Speech (4.0 and 4.1) is available as an experimental backend and does not support speaker identification in PyScribe yet.
-                Nemotron Speech Streaming (`nvidia/nemotron-speech-streaming-en-0.6b`) is an experimental English-only backend; Names / terms are applied as a spelling-correction pass on the final transcript (live text shows raw output until then).
-                Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
-                """
-            )
-            gr.Markdown(
-                """
-                **LLM post-processing:** configure profiles in Qt (`Tools > LLM Connections...`) and then use
-                the Listener's **LLM Post-Processing** section for connection tests and template-based summarization.
-                """
-            )
-
         with gr.Row():
             with gr.Column(scale=1):
                 audio_input = gr.File(
@@ -1036,25 +1019,26 @@ def create_interface() -> gr.Blocks:
 
                 submit_btn = gr.Button("Transcribe", variant="primary")
 
-                with gr.Accordion("Transcription settings", open=True):
-                    model_dropdown = gr.Dropdown(
-                        choices=ALL_MODELS,
-                        value=APP_CONFIG.last_model if APP_CONFIG.last_model in ALL_MODELS else RECOMMENDED_MODEL,
-                        label="Select Transcription Model",
-                        info=f"Recommended for your hardware ({DEVICE.upper()}): {RECOMMENDED_MODEL}",
-                        allow_custom_value=True,
-                        visible=initial_allow_transcription,
-                    )
+                model_dropdown = gr.Dropdown(
+                    choices=ALL_MODELS,
+                    value=APP_CONFIG.last_model if APP_CONFIG.last_model in ALL_MODELS else RECOMMENDED_MODEL,
+                    label="Select Transcription Model",
+                    info=f"Recommended for your hardware ({DEVICE.upper()}): {RECOMMENDED_MODEL}",
+                    allow_custom_value=True,
+                    visible=initial_allow_transcription,
+                )
+                diar_checkbox = gr.Checkbox(
+                    label="Identify speakers",
+                    value=APP_CONFIG.use_diarization,
+                    visible=initial_allow_transcription,
+                )
+
+                with gr.Accordion("Advanced", open=False):
                     run_mode_dropdown = gr.Dropdown(
                         choices=["full", "transcribe_only", "visual_only"],
                         value=initial_run_mode,
                         label="Run mode",
                         info="full = transcript + optional OCR, transcribe_only = transcript only, visual_only = OCR only",
-                    )
-                    diar_checkbox = gr.Checkbox(
-                        label="Identify speakers",
-                        value=APP_CONFIG.use_diarization,
-                        visible=initial_allow_transcription,
                     )
                     default_backend = (
                         APP_CONFIG.diar_backend
@@ -1118,95 +1102,116 @@ def create_interface() -> gr.Blocks:
             with gr.Column(scale=2):
                 status_output = gr.Textbox(label="Status", interactive=False)
                 stage_strip_output = gr.HTML(value="", label="Stages")
-                transcript_output = gr.Textbox(
-                    label="Transcription",
-                    interactive=True,
-                    lines=24,
-                    max_lines=24,
-                )
-                with gr.Row():
-                    copy_btn = gr.Button("Copy to Clipboard")
-                    save_btn = gr.Button("Save Transcript")
-                download_file = gr.File(label="Download Transcript", interactive=False)
-                final_status_output = gr.Textbox(label="", interactive=False)
+                with gr.Tabs():
+                    with gr.Tab("Transcript"):
+                        transcript_output = gr.Textbox(
+                            label="Transcription",
+                            interactive=True,
+                            lines=24,
+                            max_lines=24,
+                        )
+                        with gr.Row():
+                            copy_btn = gr.Button("Copy to Clipboard")
+                            save_btn = gr.Button("Save Transcript")
+                        download_file = gr.File(label="Download Transcript", interactive=False)
+                        final_status_output = gr.Textbox(label="", interactive=False)
+                    with gr.Tab("AI summary"):
+                        llm_profile_dropdown = gr.Dropdown(
+                            choices=llm_profile_choices,
+                            value=default_llm_profile,
+                            label="LLM profile",
+                            info="Configure profiles in Qt Tools > LLM Connections...",
+                        )
+                        llm_template_dropdown = gr.Dropdown(
+                            choices=llm_template_choices,
+                            value=default_template_id,
+                            label="Prompt template",
+                        )
+                        llm_model_dropdown = gr.Dropdown(
+                            choices=[],
+                            value="",
+                            allow_custom_value=True,
+                            label="LLM model override (optional)",
+                        )
+                        with gr.Row():
+                            llm_test_btn = gr.Button("Test LLM Connection")
+                            llm_preview_btn = gr.Button("Preview Payload")
+                            llm_run_btn = gr.Button("Run LLM Post-Process", variant="primary")
+                        llm_source_mode = gr.Radio(
+                            choices=["Current transcript", "Upload/paste transcript"],
+                            value="Current transcript",
+                            label="Transcript source",
+                        )
+                        llm_transcript_file = gr.File(
+                            label="Upload transcript text file (.txt/.md)",
+                            file_types=[".txt", ".md"],
+                            visible=False,
+                        )
+                        llm_transcript_paste = gr.Textbox(
+                            label="Paste transcript text",
+                            lines=8,
+                            max_lines=12,
+                            visible=False,
+                        )
+                        llm_include_images_checkbox = gr.Checkbox(
+                            label="Include image attachments",
+                            value=bool(APP_CONFIG.llm_include_images_default),
+                        )
+                        llm_image_files = gr.File(
+                            label="Attach screenshots/images (optional)",
+                            file_types=["image"],
+                            file_count="multiple",
+                        )
+                        llm_image_ocr_backend = gr.Dropdown(
+                            choices=["auto", "rapidocr", "paddleocr", "surya", "pytesseract"],
+                            value="auto",
+                            label="Image OCR backend (fallback)",
+                        )
+                        llm_image_ocr_fallback = gr.Checkbox(
+                            label="Use OCR fallback when model is text-only",
+                            value=bool(APP_CONFIG.llm_ocr_fallback_for_images_default),
+                        )
+                        llm_ocr_file = gr.File(
+                            label="Upload OCR/context text file (optional)",
+                            file_types=[".txt", ".md"],
+                        )
+                        llm_notes_input = gr.Textbox(
+                            label="Additional notes/context (optional)",
+                            lines=4,
+                            max_lines=8,
+                        )
+                        llm_extra_context_input = gr.Textbox(
+                            label="Pasted context (optional)",
+                            lines=4,
+                            max_lines=8,
+                        )
+                        llm_status_output = gr.Textbox(label="LLM status", interactive=False, lines=6, max_lines=12)
+                        llm_payload_preview_output = gr.Textbox(label="LLM payload preview", interactive=True, lines=10, max_lines=16)
+                        llm_output = gr.Textbox(label="LLM output", interactive=True, lines=12, max_lines=18)
+                        with gr.Row():
+                            llm_copy_btn = gr.Button("Copy LLM Output")
+                            llm_save_btn = gr.Button("Save LLM Output")
+                        llm_download_file = gr.File(label="Download LLM Output", interactive=False)
 
-                with gr.Accordion("LLM Post-Processing (Beta)", open=False):
-                    llm_profile_dropdown = gr.Dropdown(
-                        choices=llm_profile_choices,
-                        value=default_llm_profile,
-                        label="LLM profile",
-                        info="Configure profiles in Qt Tools > LLM Connections...",
-                    )
-                    llm_template_dropdown = gr.Dropdown(
-                        choices=llm_template_choices,
-                        value=default_template_id,
-                        label="Prompt template",
-                    )
-                    llm_model_dropdown = gr.Dropdown(
-                        choices=[],
-                        value="",
-                        allow_custom_value=True,
-                        label="LLM model override (optional)",
-                    )
-                    with gr.Row():
-                        llm_test_btn = gr.Button("Test LLM Connection")
-                        llm_preview_btn = gr.Button("Preview Payload")
-                        llm_run_btn = gr.Button("Run LLM Post-Process", variant="primary")
-                    llm_source_mode = gr.Radio(
-                        choices=["Current transcript", "Upload/paste transcript"],
-                        value="Current transcript",
-                        label="Transcript source",
-                    )
-                    llm_transcript_file = gr.File(
-                        label="Upload transcript text file (.txt/.md)",
-                        file_types=[".txt", ".md"],
-                        visible=False,
-                    )
-                    llm_transcript_paste = gr.Textbox(
-                        label="Paste transcript text",
-                        lines=8,
-                        max_lines=12,
-                        visible=False,
-                    )
-                    llm_include_images_checkbox = gr.Checkbox(
-                        label="Include image attachments",
-                        value=bool(APP_CONFIG.llm_include_images_default),
-                    )
-                    llm_image_files = gr.File(
-                        label="Attach screenshots/images (optional)",
-                        file_types=["image"],
-                        file_count="multiple",
-                    )
-                    llm_image_ocr_backend = gr.Dropdown(
-                        choices=["auto", "rapidocr", "paddleocr", "surya", "pytesseract"],
-                        value="auto",
-                        label="Image OCR backend (fallback)",
-                    )
-                    llm_image_ocr_fallback = gr.Checkbox(
-                        label="Use OCR fallback when model is text-only",
-                        value=bool(APP_CONFIG.llm_ocr_fallback_for_images_default),
-                    )
-                    llm_ocr_file = gr.File(
-                        label="Upload OCR/context text file (optional)",
-                        file_types=[".txt", ".md"],
-                    )
-                    llm_notes_input = gr.Textbox(
-                        label="Additional notes/context (optional)",
-                        lines=4,
-                        max_lines=8,
-                    )
-                    llm_extra_context_input = gr.Textbox(
-                        label="Pasted context (optional)",
-                        lines=4,
-                        max_lines=8,
-                    )
-                    llm_status_output = gr.Textbox(label="LLM status", interactive=False, lines=6, max_lines=12)
-                    llm_payload_preview_output = gr.Textbox(label="LLM payload preview", interactive=True, lines=10, max_lines=16)
-                    llm_output = gr.Textbox(label="LLM output", interactive=True, lines=12, max_lines=18)
-                    with gr.Row():
-                        llm_copy_btn = gr.Button("Copy LLM Output")
-                        llm_save_btn = gr.Button("Save LLM Output")
-                    llm_download_file = gr.File(label="Download LLM Output", interactive=False)
+        with gr.Accordion("About models and LLM post-processing", open=False):
+            gr.Markdown(
+                """
+                **Model tips:** use built-in choices or a custom Hugging Face repo ID (`owner/repo`).
+                If not cached, PyScribe estimates size (best-effort), asks for confirmation, then downloads with progress.
+                For private/gated repos, authenticate with an HF token and accept model terms on Hugging Face.
+                Granite Speech (4.0 and 4.1) is available as an experimental backend and does not support speaker identification in PyScribe yet.
+                Nemotron Speech Streaming (`nvidia/nemotron-speech-streaming-en-0.6b`) is an experimental English-only backend; Names / terms are applied as a spelling-correction pass on the final transcript (live text shows raw output until then).
+                Optional multimodal mode can OCR sampled video frames (slides/chat text) and append highlights to the output.
+                """
+            )
+            gr.Markdown(
+                """
+                **LLM post-processing:** configure profiles in Qt (`Tools > LLM Connections...`) and then use
+                the Listener's **AI summary** tab for connection tests and template-based summarization.
+                """
+            )
+
+        gr.Markdown("All processing happens on the machine running this Listener.", elem_classes=["pyscribe-footer"])
 
         completion_btn = gr.Button("Cancel", variant="stop", visible=False)
 

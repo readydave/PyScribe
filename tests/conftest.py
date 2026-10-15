@@ -30,3 +30,9 @@ def pytest_make_collect_report(collector: pytest.Collector):
     if match and not _is_repo_module(match.group(1)):
         report.outcome = "skipped"
         report.longrepr = (str(collector.path), 0, f"Skipped: optional dependency '{match.group(1)}' not installed")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_projects_dir(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never let a test write projects into the real ``~/.pyscribe/projects``."""
+    monkeypatch.setenv("PYSCRIBE_PROJECTS_DIR", str(tmp_path_factory.mktemp("projects")))

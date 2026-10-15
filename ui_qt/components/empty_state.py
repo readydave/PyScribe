@@ -23,6 +23,8 @@ class EmptyState(QWidget):
         self.message_label.setProperty("type", "caption")
         self.message_label.setAlignment(Qt.AlignCenter)
         self.message_label.setWordWrap(True)
+        self.message_label.setFixedWidth(380)
+        self.message_label.setMinimumHeight(self.message_label.heightForWidth(380))
         layout.addWidget(self.title_label)
         layout.addWidget(self.message_label)
         self.action_button: AppButton | None = None

@@ -53,6 +53,7 @@ class AppConfig:
     sidebar_collapsed: bool = False
     window_geometry: str | None = None
     reduced_motion: str = "auto"
+    projects_dir: str | None = None
     transcript_font_px: int = 16
 
 
@@ -112,6 +113,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         sidebar_collapsed=_as_bool(data.get("sidebar_collapsed"), default=False),
         window_geometry=_as_optional_str(data.get("window_geometry")),
         reduced_motion=_as_choice(data.get("reduced_motion"), ("auto", "on", "off")),
+        projects_dir=_as_optional_str(data.get("projects_dir")),
         transcript_font_px=_as_clamped_int(data.get("transcript_font_px"), 16, 12, 28),
     )
 

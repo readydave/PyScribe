@@ -92,9 +92,12 @@ from services import (
     transcribe_media_file,
 )
 from services.logging_service import configure_logging, get_log_path
+from services.project_store import ProjectStore, resolve_projects_root, sanitize_segments
 from services.ui_themes import all_themes
 from ui_qt import theme
+from ui_qt.components import NavRail
 from ui_qt.components import tokens as component_tokens
+from ui_qt.views.projects_home import ProjectsHome
 from ui_qt.benchmark_dialog import BenchmarkDialog
 from ui_qt.flow_layout import FlowLayout
 from ui_qt.hw_panel import HardwarePanel
@@ -301,6 +304,15 @@ class DropLabel(QFrame):
         super().mousePressEvent(event)
 
 
+def _slim_segments(segments: list[dict]) -> list[dict]:
+    """Timed speaker segments without per-word data (keeps the child-to-GUI message small)."""
+    return [
+        {"start": seg.get("start"), "end": seg.get("end"), "speaker": seg.get("speaker"), "text": seg.get("text")}
+        for seg in segments or []
+        if isinstance(seg, dict)
+    ]
+
+
 def _transcription_process_entry(
     media_path: str,
     model_name: str,
@@ -371,6 +383,7 @@ def _transcription_process_entry(
                 "transcript": result.transcript,
                 "transcript_only": result.transcript_only,
                 "visual_report": result.visual_report,
+                "segments": _slim_segments(result.segments),
                 "transcription_seconds": result.transcription_seconds,
                 "diarization_seconds": result.diarization_seconds,
                 "visual_analysis_seconds": result.visual_analysis_seconds,
@@ -425,6 +438,7 @@ class TranscriptionWorker(QObject):
         self.visual_sample_seconds: float = visual_sample_seconds
         self.language: str | None = language
         self.runtime: RuntimeInfo = runtime_override or detect_runtime()
+        self.last_segments: list[dict] = []
         self._lock: LockType = threading.Lock()
         self._cancel_requested: bool = False
         self._force_stop_requested: bool = False
@@ -493,6 +507,19 @@ class TranscriptionWorker(QObject):
             return not proc.is_alive()
         except Exception:
             return True
+
+    def _emit_finished(self, value: dict, latest_transcript: str) -> None:
+        # Set before the signal so the GUI slot (queued on the main thread) always sees the segments.
+        self.last_segments = list(value.get("segments") or [])
+        self.finished.emit(
+            bool(value.get("cancelled")),
+            str(value.get("transcript", latest_transcript)),
+            str(value.get("transcript_only", latest_transcript)),
+            str(value.get("visual_report", "")),
+            float(value.get("transcription_seconds", 0.0)),
+            float(value.get("diarization_seconds", 0.0)),
+            float(value.get("visual_analysis_seconds", 0.0)),
+        )
 
     @Slot()
     def run(self) -> None:
@@ -573,15 +600,7 @@ class TranscriptionWorker(QObject):
                     elif etype == "finished":
                         terminal_emitted = True
                         LOGGER.info("Qt worker: finished event cancelled=%s", bool(value.get("cancelled")))
-                        self.finished.emit(
-                            bool(value.get("cancelled")),
-                            str(value.get("transcript", latest_transcript)),
-                            str(value.get("transcript_only", latest_transcript)),
-                            str(value.get("visual_report", "")),
-                            float(value.get("transcription_seconds", 0.0)),
-                            float(value.get("diarization_seconds", 0.0)),
-                            float(value.get("visual_analysis_seconds", 0.0)),
-                        )
+                        self._emit_finished(value, latest_transcript)
                     elif etype == "error":
                         terminal_emitted = True
                         LOGGER.error("Qt worker: error event from child: %s", value)
@@ -619,15 +638,7 @@ class TranscriptionWorker(QObject):
                 elif etype == "finished" and not terminal_emitted:
                     terminal_emitted = True
                     LOGGER.info("Qt worker: late finished event cancelled=%s", bool(value.get("cancelled")))
-                    self.finished.emit(
-                        bool(value.get("cancelled")),
-                        str(value.get("transcript", latest_transcript)),
-                        str(value.get("transcript_only", latest_transcript)),
-                        str(value.get("visual_report", "")),
-                        float(value.get("transcription_seconds", 0.0)),
-                        float(value.get("diarization_seconds", 0.0)),
-                        float(value.get("visual_analysis_seconds", 0.0)),
-                    )
+                    self._emit_finished(value, latest_transcript)
                 elif etype == "error" and not terminal_emitted:
                     terminal_emitted = True
                     LOGGER.error("Qt worker: late error event from child: %s", value)
@@ -697,6 +708,9 @@ class MainWindow(QMainWindow):
 
         self.runtime: RuntimeInfo = detect_runtime()
         self.config: AppConfig = load_config()
+        self.project_store = ProjectStore(resolve_projects_root(self.config.projects_dir))
+        self._active_project_id: str | None = None
+        self._docks_sized_on_show = False
         self.media_path: str | None = None
         self.last_open_dir: str = self.config.last_open_dir or os.path.expanduser("~")
         self.last_save_dir: str | None = self.config.last_save_dir
@@ -789,58 +803,56 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        self.sidebar_frame = QFrame()
-        self.sidebar_frame.setObjectName("Sidebar")
-        self.sidebar_frame.setFixedWidth(230)
-        sidebar_layout = QVBoxLayout(self.sidebar_frame)
-        sidebar_layout.setContentsMargins(14, 14, 14, 14)
-        sidebar_layout.setSpacing(10)
-
-        brand_row = QHBoxLayout()
-        self.sidebar_brand_label = QLabel("PyScribe")
-        self.sidebar_brand_label.setObjectName("SidebarBrand")
-        brand_font = QFont(self.font())
-        brand_font.setPointSize(14)
-        brand_font.setBold(True)
-        self.sidebar_brand_label.setFont(brand_font)
+        self.nav_rail = NavRail(
+            [
+                ("projects", "Projects"),
+                ("transcribe", "Transcribe"),
+                ("live", "Live"),
+                ("templates", "Templates"),
+                ("settings", "Settings"),
+            ]
+        )
+        self.sidebar_frame = self.nav_rail  # the collapse logic and tests use this name
+        self.sidebar_brand_label = self.nav_rail.brand_label
         self.sidebar_toggle_btn = QToolButton()
         self.sidebar_toggle_btn.setObjectName("sidebarToggleButton")
         self.sidebar_toggle_btn.setText("◀")
         self.sidebar_toggle_btn.setToolTip("Hide left panel")
         self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar_collapsed)
-        brand_row.addWidget(self.sidebar_brand_label)
-        brand_row.addStretch(1)
-        brand_row.addWidget(self.sidebar_toggle_btn)
-        sidebar_layout.addLayout(brand_row)
+        self.nav_rail.header.addWidget(self.sidebar_toggle_btn)
 
         self.new_project_btn = QPushButton("+  New Project")
+        self.new_project_btn.setProperty("variant", "secondary")
         self.new_project_btn.setToolTip("Clear the current file and transcript and start fresh. Settings and the batch queue are kept.")
         self.new_project_btn.clicked.connect(self._on_new_project)
-        sidebar_layout.addWidget(self.new_project_btn)
-
-        self.nav_list = QListWidget()
-        self.nav_list.setObjectName("SidebarNav")
-        for name in ("Transcription", "LLM", "Settings"):
-            item = QListWidgetItem(name)
-            self.nav_list.addItem(item)
-        self.nav_list.currentRowChanged.connect(self._on_nav_item_changed)
-        sidebar_layout.addWidget(self.nav_list, 1)
+        self.nav_rail.footer.addWidget(self.new_project_btn)
 
         self.exit_btn = QPushButton("Exit")
-        self.exit_btn.setObjectName("exitButton")
+        self.exit_btn.setProperty("variant", "ghost")
         self.exit_btn.clicked.connect(self.close)
-        sidebar_layout.addWidget(self.exit_btn)
-
-        root_layout.addWidget(self.sidebar_frame)
+        self.nav_rail.footer.addWidget(self.exit_btn)
+        self.nav_rail.selected.connect(self._on_nav_selected)
+        root_layout.addWidget(self.nav_rail)
 
         self.main_stack = QStackedWidget()
         self.main_stack.setObjectName("MainStack")
+        self.projects_home = ProjectsHome()
+        self.projects_home.file_chosen.connect(self._on_home_file_chosen)
+        self.projects_home.browse_requested.connect(self._on_home_browse)
+        self.projects_home.live_requested.connect(self._on_home_live)
+        self.projects_home.import_folder_requested.connect(self._on_home_import_folder)
+        self.projects_home.open_project_requested.connect(self._open_project)
+        self.projects_home.rename_project_requested.connect(self._rename_project)
+        self.projects_home.reveal_project_requested.connect(self._reveal_project)
+        self.projects_home.delete_project_requested.connect(self._delete_project)
+        self.main_stack.addWidget(self.projects_home)
         self.main_stack.addWidget(self._build_transcription_view())
-        self.main_stack.addWidget(self._build_llm_workspace_view())
+        self.main_stack.addWidget(self._build_llm_workspace_view())  # Templates, until it gets its own view
         self.main_stack.addWidget(self._build_settings_view())
         root_layout.addWidget(self.main_stack, 1)
 
-        self.nav_list.setCurrentRow(0)
+        self._refresh_projects()
+        self.nav_rail.set_current("projects")
         self.setCentralWidget(root)
 
     def _build_transcription_view(self) -> QWidget:
@@ -1448,8 +1460,8 @@ class MainWindow(QMainWindow):
         self.transcription_scroll.setFocusPolicy(Qt.NoFocus)
         chain: list[QWidget] = [
             self.sidebar_toggle_btn,
+            *self.nav_rail.buttons(),
             self.new_project_btn,
-            self.nav_list,
             *self.input_segment_buttons,
             self.live_source_combo,
             self.live_device_combo,
@@ -1714,15 +1726,182 @@ class MainWindow(QMainWindow):
             return
         self._save_config(window_geometry=geometry)
 
-    @Slot(int)
-    def _on_nav_item_changed(self, index: int) -> None:
-        if index < 0:
+    _VIEW_INDEX = {"projects": 0, "transcribe": 1, "live": 1, "templates": 2, "settings": 3}
+
+    @Slot(str)
+    def _on_nav_selected(self, key: str) -> None:
+        self.main_stack.setCurrentIndex(self._VIEW_INDEX.get(key, 0))
+        if key in ("transcribe", "live"):
+            if not self._docks_sized_on_show:
+                # The dock defaults were queued while this page was still hidden, so size them once it is showing.
+                self._docks_sized_on_show = True
+                QTimer.singleShot(0, self._apply_default_dock_sizes)
+            self._set_input_mode("live" if key == "live" else "file")
+        elif key == "projects":
+            self._refresh_projects()
+
+    def _set_input_mode(self, mode: str) -> None:
+        """Switch between file and live input, unless a job or capture is in progress."""
+        if self._is_transcription_running() or not self.input_mode_combo.isEnabled():
             return
-        self.main_stack.setCurrentIndex(index)
+        index = self.input_mode_combo.findData(mode)
+        if index >= 0 and index != self.input_mode_combo.currentIndex():
+            self.input_mode_combo.setCurrentIndex(index)
 
     @Slot()
     def _switch_to_transcription_view(self) -> None:
-        self.nav_list.setCurrentRow(0)
+        self.nav_rail.set_current("transcribe")
+
+    # --- Projects Home ---------------------------------------------------------------------
+
+    def _refresh_projects(self) -> None:
+        try:
+            self.projects_home.set_projects(self.project_store.list_summaries())
+        except OSError:
+            LOGGER.warning("Could not list projects.", exc_info=True)
+
+    def _home_blocked(self) -> bool:
+        if not self._is_transcription_running():
+            return False
+        QMessageBox.information(self, "Job running", "A job is running. Wait for it to finish or cancel it first.")
+        return True
+
+    @Slot(str)
+    def _on_home_file_chosen(self, path: str) -> None:
+        if self._home_blocked():
+            return
+        self.set_media_path(path)
+        if self.media_path == path:
+            self._switch_to_transcription_view()
+
+    @Slot()
+    def _on_home_browse(self) -> None:
+        if self._home_blocked():
+            return
+        path = self._pick_media_file()
+        if path:
+            self._on_home_file_chosen(path)
+
+    @Slot()
+    def _on_home_live(self) -> None:
+        if not self._home_blocked():
+            self.nav_rail.set_current("live")
+
+    @Slot()
+    def _on_home_import_folder(self) -> None:
+        if self._home_blocked():
+            return
+        before = self.batch_queue_model.rowCount()
+        self._on_import_folder()
+        if self.batch_queue_model.rowCount() > before:
+            self._switch_to_transcription_view()
+
+    @Slot(str)
+    def _open_project(self, project_id: str) -> None:
+        if self._home_blocked():
+            return
+        project = self.project_store.load(project_id)
+        if project is None:
+            QMessageBox.warning(self, "Project unavailable", "This project could not be read.")
+            self._refresh_projects()
+            return
+        self.media_path = None
+        self.transcript_text = project.transcript_text
+        self.transcript_only_text = project.transcript_text
+        self.visual_report_text = project.visual_report
+        self.text_area.setPlainText(project.transcript_text or project.visual_report)
+        self.path_label.setText(project.media_path or project.title)
+        has_text = bool(project.transcript_text or project.visual_report)
+        self.save_btn.setEnabled(has_text)
+        self.copy_btn.setEnabled(has_text)
+        self._switch_to_transcription_view()
+        self.status_label.setText(f"Opened project: {project.title}")
+
+    @Slot(str)
+    def _rename_project(self, project_id: str) -> None:
+        project = self.project_store.load(project_id)
+        if project is None:
+            return
+        title, accepted = QInputDialog.getText(self, "Rename project", "Title:", text=project.title)
+        if not accepted or not title.strip():
+            return
+        try:
+            self.project_store.rename(project_id, title)
+        except (OSError, ValueError):
+            LOGGER.warning("Could not rename project.", exc_info=True)
+        self._refresh_projects()
+
+    @Slot(str)
+    def _reveal_project(self, project_id: str) -> None:
+        try:
+            open_folder(str(self.project_store.project_dir(project_id)))
+        except (OSError, ValueError):
+            LOGGER.warning("Could not open the project folder.", exc_info=True)
+
+    @Slot(str)
+    def _delete_project(self, project_id: str) -> None:
+        project = self.project_store.load(project_id)
+        if project is None:
+            self._refresh_projects()
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete project",
+            f"Delete \"{project.title}\" from your projects?\n\nThe original recording is not touched.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            self.project_store.delete(project_id)
+        except (OSError, ValueError):
+            LOGGER.warning("Could not delete project.", exc_info=True)
+        self._refresh_projects()
+
+    # --- project records for jobs ------------------------------------------------------------
+
+    def _project_title(self, kind: str, media_path: str) -> str:
+        if kind == "live":
+            title = self.live_title_input.text().strip()
+            return title or datetime.datetime.now().strftime("Live session %b %d, %H:%M")
+        return os.path.splitext(os.path.basename(media_path))[0] or "Untitled"
+
+    def _begin_project(self, media_path: str, model_name: str) -> None:
+        kind = "live" if self._live_finalizing else "batch" if self._batch_active else "file"
+        try:
+            project = self.project_store.create(
+                title=self._project_title(kind, media_path), kind=kind, media_path=media_path, model=model_name
+            )
+        except (OSError, ValueError):
+            LOGGER.warning("Could not create a project record.", exc_info=True)
+            self._active_project_id = None
+            return
+        self._active_project_id = project.id
+        self._refresh_projects()
+
+    def _finish_project(self, status: str, *, transcript: str = "", visual_report: str = "") -> None:
+        """Store the result on the active project; a failed or cancelled job with nothing to reopen is dropped."""
+        project_id, self._active_project_id = self._active_project_id, None
+        if project_id is None:
+            return
+        raw_segments = self.worker.last_segments if self.worker is not None else []
+        segments = sanitize_segments(raw_segments)
+        try:
+            if status != "completed" and not (transcript or visual_report or segments):
+                self.project_store.delete(project_id)
+            else:
+                self.project_store.update(
+                    project_id,
+                    status=status,
+                    transcript_text=transcript,
+                    visual_report=visual_report,
+                    segments=segments,
+                    duration_s=max((seg["end"] for seg in segments), default=0.0),
+                )
+        except (OSError, ValueError):
+            LOGGER.warning("Could not save the project result.", exc_info=True)
+        self._refresh_projects()
 
     @Slot()
     def _on_new_project(self) -> None:
@@ -1772,23 +1951,12 @@ class MainWindow(QMainWindow):
         self._sidebar_collapsed = not self._sidebar_collapsed
         if getattr(self, "_ui_ready", False):
             self._save_config(sidebar_collapsed=self._sidebar_collapsed)
-        if self._sidebar_collapsed:
-            self.sidebar_frame.setFixedWidth(52)
-            self.sidebar_brand_label.setText("PS")
-            self.new_project_btn.setVisible(False)
-            self.nav_list.setVisible(False)
-            self.exit_btn.setVisible(False)
-            self.sidebar_toggle_btn.setText("▶")
-            self.sidebar_toggle_btn.setToolTip("Show left panel")
-            self._update_transcription_card_columns()
-            return
-        self.sidebar_frame.setFixedWidth(230)
-        self.sidebar_brand_label.setText("PyScribe")
-        self.new_project_btn.setVisible(True)
-        self.nav_list.setVisible(True)
-        self.exit_btn.setVisible(True)
-        self.sidebar_toggle_btn.setText("◀")
-        self.sidebar_toggle_btn.setToolTip("Hide left panel")
+        collapsed = self._sidebar_collapsed
+        self.nav_rail.set_collapsed(collapsed)
+        self.new_project_btn.setVisible(not collapsed)
+        self.exit_btn.setVisible(not collapsed)
+        self.sidebar_toggle_btn.setText("▶" if collapsed else "◀")
+        self.sidebar_toggle_btn.setToolTip("Show left panel" if collapsed else "Hide left panel")
         self._update_transcription_card_columns()
 
     def _append_terminal_log(self, text: str) -> None:
@@ -2273,10 +2441,14 @@ class MainWindow(QMainWindow):
             # but actually start_transcription updates self.path_label too.
             pass
 
-    @Slot()
-    def on_browse(self) -> None:
+    def _pick_media_file(self) -> str:
         start_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else os.path.expanduser("~")
         path, _ = QFileDialog.getOpenFileName(self, "Select Media File", start_dir, AUDIO_VIDEO_FILTER)
+        return path
+
+    @Slot()
+    def on_browse(self) -> None:
+        path = self._pick_media_file()
         if path:
             self.set_media_path(path)
 
@@ -3238,6 +3410,7 @@ class MainWindow(QMainWindow):
         batched: bool = False,
         runtime_override: RuntimeInfo | None = None,
     ) -> None:
+        self._begin_project(media_path, model_name)
         self.worker_thread = QThread()
         self.worker = TranscriptionWorker(
             media_path,
@@ -3427,6 +3600,8 @@ class MainWindow(QMainWindow):
             self._append_terminal_log(done)
             self._update_live_mode_ui()
 
+        self._finish_project("cancelled" if cancelled else "completed", transcript=display_text, visual_report=visual_report)
+
         # Batch handling
         if self._batch_active and self._current_batch_index != -1:
             status = "canceled" if cancelled else "completed"
@@ -3474,6 +3649,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Error")
         self._append_terminal_log(f"Error: {error_msg}")
         self.job_tracker.fail_active()
+        self._finish_project("failed")
         self._sync_timeline()
         self.transcription_time_label.setText("--")
         self.diar_time_label.setText("--")
@@ -3509,6 +3685,8 @@ class MainWindow(QMainWindow):
     def _on_transcription_progress(self, value: int) -> None:
         self.progress_bar.setValue(value)
         self.job_tracker.progress(Stage.TRANSCRIBE, value)
+        if self._active_project_id:
+            self.projects_home.set_progress(self._active_project_id, value)
         self._sync_timeline()
 
     @Slot(int)

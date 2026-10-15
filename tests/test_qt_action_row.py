@@ -30,6 +30,7 @@ class ActionRowFitTests(unittest.TestCase):
             item.start()
             self.addCleanup(item.stop)
         window = MainWindow()
+        window.main_stack.setCurrentIndex(1)  # Transcribe page (the app opens on Projects)
         window.show()
         self.addCleanup(close_and_drain, window)
         return window

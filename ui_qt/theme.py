@@ -356,12 +356,6 @@ def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = No
             border: 1px solid {p.ink};
             border-radius: 4px;
         }}
-        QPushButton#exitButton,
-        QPushButton#exitButton:hover {{
-            background: {p.rubric};
-            border-color: {p.rubric};
-            color: {p.rubric_text};
-        }}
         QLineEdit, QComboBox, QPlainTextEdit, QTextEdit {{
             background: {p.input_bg};
             border: 1px solid {p.rule};
@@ -618,6 +612,19 @@ def _component_qss(p: Palette) -> str:
             color: {p.disabled_text};
             border-color: {p.disabled_bg};
         }}
+        QToolButton#sidebarToggleButton {{
+            background: transparent;
+            color: {p.muted};
+            border: 2px solid transparent;
+        }}
+        QToolButton#sidebarToggleButton:hover {{
+            background: {p.surface};
+            color: {p.ink};
+            border-color: transparent;
+        }}
+        QToolButton#sidebarToggleButton:focus {{
+            border: 2px solid {p.ink};
+        }}
         #NavRail {{
             background: {p.sidebar};
             border-right: 1px solid {p.rule};
@@ -674,6 +681,13 @@ def _component_qss(p: Palette) -> str:
         }}
         QFrame[studioCard="true"][selected="true"] {{
             border: 2px solid {p.accent};
+        }}
+        QFrame[studioCard="true"][primaryAction="true"] {{
+            border: 2px dashed {p.accent};
+        }}
+        QFrame[studioCard="true"][primaryAction="true"][selected="true"] {{
+            border: 2px solid {p.accent};
+            background: {p.surface};
         }}
         #Drawer {{
             background: {p.surface};

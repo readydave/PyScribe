@@ -201,6 +201,7 @@ class ProjectsHome(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setFocusPolicy(Qt.NoFocus)  # the cards inside are the tab stops
         content = QWidget()
         scroll.setWidget(content)
         page = QVBoxLayout(self)

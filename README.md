@@ -7,6 +7,7 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 
 - `docs/user_guide.md` - full feature guide for Qt, Listener, CLI, and environment settings.
 - `docs/qt_help.md` - in-app Qt help content.
+- `docs/ui_redesign_2026-10.md` - the October 2026 UX/UI redesign: structure, decisions, shortcuts, how to regenerate screenshots, and what still needs a check on real hardware.
 - `docs/mcp.md` - using PyScribe as an MCP server from Claude Code, Codex, and other clients.
 - `docs/handoff_2026-10-08_ux-ai-mcp.md` - state of the UX/theme/AI/MCP work, open items, and notes for the next session.
 - `docs/handoff_2026-10-09_orchestration.md` - latest handoff: what shipped in the third session, maintainer decisions, open items, and the multi-session workflow.
@@ -23,27 +24,30 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Experimental Granite Speech file transcription (`granite-4.0-1b-speech` and `granite-speech-4.1-2b`; 4.1 returns punctuated, capitalized text and honours the Names / terms field)
 - Hardware-aware model recommendations
 - Qt desktop mode and Gradio listener mode
-- Qt unified dashboard layout with left navigation and stacked workspaces
-- Qt Transcription page built from movable panels (Setup, Progress, Hardware, Batch queue): drag, tab, float, resize, close, lock, or reset them from View > Panels; the layout is remembered
+- Qt studio layout: a small navigation rail (Projects, Transcribe, Live, Templates, Settings) around two main experiences, a **Projects Home** for starting and resuming work and a **Transcript Studio** for reviewing it
+- Every finished job is saved automatically as a project (transcript, timed speaker segments, speaker names, AI outputs) on this device
+- Transcript Studio: speaker-badged transcript with the playing line highlighted, click-to-seek, inline editing, search with match count (`Ctrl+F`), a waveform and playback bar (seek, skip, speed), an inspector (Summary, Action items, Speakers, Visuals) and export to text, Markdown, SRT, WebVTT or JSON
+- Calm while working: a slim job status bar (stage, elapsed time, cancel) appears only while work is active; the stage timeline, event log and hardware traces sit behind Details and Performance drawers
 - Light and dark themes that follow the system colour scheme, with a bundled font so Linux and Windows look the same
-- Start-up defaults you control from the Settings page (model, File/Live, names/terms, faster decoding, open-files folder); window size, sidebar, panel layout, theme, and last-used run options are remembered
+- Settings in sections: appearance and accessibility (theme, colours, transcript text size, reduce motion), privacy and storage (projects folder), AI connections, start-up defaults and diagnostics; window size, rail state, theme and last-used run options are remembered
+- Templates page for browsing, previewing and managing the prompt templates used for summaries and action items
 - MCP server (`python main.py mcp`): Claude Code, Codex, and other MCP clients can transcribe audio, run OCR on a video or image (`analyze_visuals`), read your transcripts, and run a saved template through your own LLM profile (`run_template`; cloud profiles are refused unless `PYSCRIBE_MCP_ALLOW_CLOUD=1`), with your own subscription doing the AI work (see [docs/mcp.md](docs/mcp.md))
 - AI summaries and action items from local, LAN, or hosted models (Claude via the native API; OpenAI, Gemini, OpenRouter and other OpenAI-compatible services), with automatic splitting of long transcripts and per-connection token and temperature settings
 - Optional Claude Code CLI provider (`claude_cli`, personal use only): post-processing through your own signed-in `claude` program instead of an API key
 - LLM API keys can be kept in the operating system keyring (optional `keyring` package) instead of only for the session
-- Colour themes: four presets (Iron-gall, Verdigris, Ochre, Graphite) plus your own, with a palette editor, live preview, automatic contrast fixes, and import/export; the Listener uses the same choice
+- Colour themes: five presets (Graphite Studio, the default, plus Iron-gall, Verdigris, Ochre, Graphite) and your own, with a palette editor, live preview, automatic contrast fixes, and import/export; the Listener uses the same choice
 - One job timeline showing each stage (Load model, Transcribe, Speakers, Visuals, Save) with its state and elapsed time; the Listener shows the same stages as a stage strip under Status
-- Hardware panel with 60-second CPU, memory, GPU, and VRAM traces coloured by the running stage
+- Performance drawer with 60-second CPU, memory, GPU, and VRAM traces coloured by the running stage
 - Qt live transcription mode for microphone or loopback capture (Linux-first)
 - Qt batch transcription queue for sequential processing of multiple files or entire folders
 - Batch queue support for same-named files from different folders
 - Live pause/resume during Qt capture without breaking the current session folder
-- Responsive setup cards (two columns when the Setup panel is wide, one when narrow)
-- Hide/show control for the left navigation panel
+- Hide/show control for the left navigation rail
+- Keyboard-reachable controls with visible focus and selected states, and a reduce-motion setting
 - Optional speaker diarization with selectable backend
 - Optional visual analysis (OCR on sampled video frames)
 - Live status, progress, and transcript updates
-- Pipeline log in Qt under the Progress panel's Details toggle
+- Pipeline log in Qt in the Job details drawer
 - Qt controls for pause, cancel, and force stop
 - Save modes: combined output, transcript-only, OCR-only
 - Optional Hugging Face token support for gated/private model access
@@ -51,28 +55,48 @@ It supports both a Qt desktop UI and a Gradio listener UI, with optional speaker
 - Qt LLM post-processing for current transcript or previously saved transcript files
 - Qt LLM split workspace with configuration/attachments panel and structured context/preview/output panes
 - LLM generation cancel flow with confirmation and safe close behavior while generation is active
-- Listener LLM post-processing panel for template-based processing of current or uploaded transcripts
+- Listener with the same hierarchy: basics up front, an Advanced section, and Transcript / AI summary tabs; template-based LLM processing of current or uploaded transcripts
 - User template management (custom prompt templates) and payload preview before send
 - Optional screenshot/image attachments with multimodal send or OCR fallback for text-only models
 - LLM connection manager with subnet detection + LAN scan and explicit LM Studio provider support
 
 ## Screenshots
 
-> **Note:** All screenshots show the October 2026 redesign. They are rendered offscreen with Qt, so they contain no personal transcripts or file names.
+> **Note:** All screenshots show the October 2026 redesign. They are rendered offscreen with Qt using synthetic data (`scripts/capture_screenshots.py`), so they contain no personal transcripts or file names.
 
-### Qt Desktop Main Window
+### Projects Home
 
-![PyScribe Qt main window, light theme](assets/images/2026-10-08-qt-main-light.png)
+![PyScribe Projects Home, dark theme](assets/images/2026-10-15-qt-home-dark.png)
 
-![PyScribe Qt main window, dark theme](assets/images/2026-10-08-qt-main-dark.png)
+![PyScribe Projects Home, light theme](assets/images/2026-10-15-qt-home-light.png)
 
-### Qt Colour Themes
+### Transcript Studio
 
-Pick a theme under **View > Colour theme**; **Edit themes...** opens the editor.
+![PyScribe Transcript Studio, dark theme](assets/images/2026-10-15-qt-studio-dark.png)
 
-![PyScribe Qt, Ochre theme (light)](assets/images/2026-10-08-qt-theme-ochre-light.png)
+![PyScribe Transcript Studio, light theme](assets/images/2026-10-15-qt-studio-light.png)
 
-![PyScribe Qt, Graphite theme (dark)](assets/images/2026-10-08-qt-theme-graphite-dark.png)
+### Transcribe
+
+![PyScribe Transcribe page](assets/images/2026-10-15-qt-transcribe-light.png)
+
+### Live Capture
+
+![PyScribe Live capture while recording](assets/images/2026-10-15-qt-live-dark.png)
+
+### Templates
+
+![PyScribe Templates page](assets/images/2026-10-15-qt-templates-light.png)
+
+### Settings and Colour Themes
+
+![PyScribe Settings, appearance and privacy](assets/images/2026-10-15-qt-settings-light.png)
+
+Pick a theme under **Settings > Appearance & accessibility** (or **View > Colour theme**); **Edit themes...** opens the editor.
+
+![PyScribe Studio, Ochre theme (light)](assets/images/2026-10-15-qt-theme-ochre-light.png)
+
+![PyScribe Studio, Graphite theme (dark)](assets/images/2026-10-15-qt-theme-graphite-dark.png)
 
 ### Qt Tools: Hugging Face Token
 
@@ -82,21 +106,15 @@ Pick a theme under **View > Colour theme**; **Edit themes...** opens the editor.
 
 ![PyScribe Qt benchmark dialog](assets/images/2026-10-15-qt-benchmark-dialog.png)
 
-### Qt View: Theme Menu
-
-![PyScribe Qt View menu with the Colour theme submenu](assets/images/2026-10-15-qt-view-menu.png)
-
-### Qt Live Mode
-
-![PyScribe Qt live mode with Compute and Precision selectors](assets/images/2026-10-15-qt-live-light.png)
-
 ### Qt Tools: LLM Connections
 
 ![PyScribe Qt LLM Connections dialog with a Claude Code CLI profile](assets/images/2026-10-15-qt-llm-connections.png)
 
 ### Listener (Gradio Web UI)
 
-![PyScribe Listener web UI](assets/images/2026-10-08-listener-light.png)
+![PyScribe Listener web UI, light theme](assets/images/2026-10-15-listener-light.png)
+
+![PyScribe Listener web UI, dark theme](assets/images/2026-10-15-listener-dark.png)
 
 Use the **A− / A+** widget in the top-right corner to change the Listener text size (80%–200%); click the percentage to reset. The size is remembered per browser.
 
@@ -104,13 +122,14 @@ Use the **A− / A+** widget in the top-right corner to change the Listener text
 
 See `CHANGELOG.md` for the full unreleased change list. Notable current updates include:
 
+- UX/UI redesign: Projects Home and Transcript Studio, a navigation rail, a job status bar with Details and Performance drawers, a sectioned Settings page, a Templates page, a Live page with a clear recording state, the Graphite Studio default theme, and the same hierarchy in the Listener. The movable dock panels are gone (`docs/ui_redesign_2026-10.md`).
 - Qt live transcription with microphone/loopback capture, rolling ASR, autosaved session folders, final post-pass cleanup, **Pause / Resume**, confirmed cancel, VRAM preflight warnings, and session-title-based naming/rename support.
 - Qt batch queue support for sequential processing of files or folders, including same-named files from different folders.
 - Safer pyannote diarization through spawned subprocess isolation, `soundfile` audio-loading fallbacks, CUDA-to-CPU retry, and plain transcript fallback when no speaker segments are produced.
 - Shared listener security/auth validation, restricted non-local/public listener exposure, and rejection of legacy `--auth-pass` CLI secrets.
 - Consolidated `pyscribe.log` logging with timestamped archive rotation.
 - Qt dashboard/sidebar refresh, responsive transcription cards, hide/show side panels, clickable drop zone, and terminal-style live pipeline logs.
-- Qt dashboard rebuilt as movable panels with a job-stage timeline, hardware traces, light/dark themes with four colour presets and a theme editor, speaker-coloured transcripts, working start-up defaults, and a refreshed Listener look (see `CHANGELOG.md`).
+- A job-stage timeline, hardware traces, light/dark themes with colour presets and a theme editor, speaker-coloured transcripts, working start-up defaults, and a refreshed Listener look (see `CHANGELOG.md`); the Qt layout around them was then redesigned (above).
 - Hosted AI providers (Claude, OpenAI, Gemini, OpenRouter) alongside local and LAN models, with automatic splitting of long transcripts, and an MCP server for Claude Code, Codex, and other clients (`docs/mcp.md`).
 - MCP `analyze_visuals` (OCR of a video or image) and `run_template` tools, an optional Claude Code CLI provider (`claude_cli`), OS keyring storage for LLM API keys, a Listener stage strip, Load model and Save rows in the Qt timeline, a live-mode Compute/Precision selector, an OCR fallback setting, and a working New Project button.
 - Qt and Listener LLM post-processing with prompt templates, user template management, payload preview, optional image attachments, OCR fallback, and safe cancellation.

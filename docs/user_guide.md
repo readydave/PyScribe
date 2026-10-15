@@ -33,27 +33,53 @@ If you run `python main.py` with no mode, you get an interactive launcher menu. 
 
 ### Layout + Navigation
 
-- The main Qt window uses a left navigation sidebar and a content stack:
-  - **Transcription**
-  - **LLM**
-  - **Settings**
-- **New Project** clears the current file, transcript and progress and returns to the Transcription screen (it asks first if there is a transcript, and is blocked while a job runs). Settings and the batch queue are kept.
-- Left sidebar can be collapsed/expanded with the small toggle button in the sidebar header. The choice is remembered.
-- The Transcription screen is built from movable panels around the transcript:
-  - **Setup** (File/Live switch, drop zone, model, **More options**), **Progress**, **Hardware**, and **Batch queue**.
-  - Drag a panel by its title bar to move, tab, or float it; drag the visible divider bars between panels (they highlight on hover) to resize them, also while **Lock layout** is on; the title-bar buttons float or close a panel.
-  - **View > Panels** re-opens closed panels, **Lock layout** stops accidental moves, and **Reset layout** restores the default.
-  - The layout (including panel sizes), window size, and sidebar state are saved shortly after you change them and when you close the app. A narrow Setup panel scrolls sideways instead of clipping its controls. On windows narrower than 1500 px the Hardware panel starts as a tab beside Setup.
-- **Progress** shows one row per stage (Load model while the model loads or downloads, Transcribe, Speakers, Visuals, and Save when a job auto-saves two or more outputs) with state and elapsed time; **Details** opens the event log.
-- **Hardware** shows 60-second CPU, memory, GPU, and VRAM traces while a job runs, coloured by the running stage.
-- Speaker labels in the transcript are colour-coded per speaker, each speaker gets a coloured rule in the left margin, and timestamps use a monospace font in the muted theme colour. While recording live, the timer and Stop button turn red.
-- The app opens sized to the available screen area and remains fully resizable.
+- The Qt window has a left navigation rail and a content area. The rail has five destinations:
+  - **Projects**: start or resume work (Projects Home). Opening a project shows the Transcript Studio under this entry.
+  - **Transcribe**: choose a recording, pick a model and process it.
+  - **Live**: record from a microphone or system audio and read the transcript as it arrives.
+  - **Templates**: browse and manage the prompt templates used for summaries and action items.
+  - **Settings**: appearance, privacy, AI connections, start-up defaults and diagnostics.
+- The app opens on **Projects**. The rail can be collapsed with the small button in its header; the choice is remembered. **New Project** (bottom of the rail) clears the current file, transcript and progress and returns to Transcribe (it asks first if there is a transcript, and is blocked while a job runs). Settings and the batch queue are kept.
+- While a job is running, a slim **status bar** appears above the content on every page: the current stage in words (Loading model, Transcribing, Identifying speakers, Analyzing visuals, Saving, or Recording), elapsed time, a progress bar, **Details** and **Cancel**. It disappears when the work ends.
+- **Details** opens the **Job details** drawer on the right: one row per stage with state and elapsed time, the pipeline event log, and **Force stop**. **Show performance** (or **View > Performance**, `Ctrl+Shift+H`) opens the **Performance** drawer with 60-second CPU, memory, GPU and VRAM traces coloured by the running stage. **View > Job details** is `Ctrl+Shift+J`. Only one drawer is open at a time; `Esc` closes the one with focus.
+- The status line (for example "Selected: meeting.wav" or "Transcription complete.") sits under the file path on the Transcribe page, and messages from the Studio also appear in the status bar at the bottom of the window.
+- Speaker labels in the transcript are colour-coded per speaker. While recording live, the timer and Stop button turn red.
+- The app opens sized to the available screen area and remains resizable. It is designed for 1366×768 and larger; below about 900 px wide the setup column on Transcribe scrolls sideways instead of clipping its controls (collapse the rail to give it room back).
+- Keyboard: every control can be reached with Tab; focus is drawn as a visible outline and selected items (rail entry, inspector tab, project card) have their own highlight. **Reduce motion** in Settings turns off sliding panels and the busy-bar animation.
+
+### Projects Home
+
+- A greeting, then one large **New transcription** card (drop a media file on it, or click it to choose one), and two smaller cards: **Live capture** and **Import folder** (queues every media file in a folder).
+- **Recent projects** shows your latest six as cards: title, duration, speaker count, a waveform cue, status (Completed, Transcribing with a percentage, Failed, Cancelled) and last activity. **View all** shows every project. The **...** menu on a card offers Open, Rename, Show in folder and Delete (the original recording is never touched).
+- With no projects yet, the page explains what you can import and offers the primary action.
+- A small line at the bottom says all processing is local by default.
+- This page shows no model, compute, OCR or hardware settings; those live on Transcribe, Live and Settings.
+
+### Projects (saved automatically)
+
+- Every finished file, batch or live job is saved as a project in `~/.pyscribe/projects` (change the folder under **Settings > Privacy & storage**; new projects go to the new folder and older ones stay where they were). A project holds the transcript, its timed speaker segments, any visual (OCR) text, speaker names you set, and AI outputs you generated. Files are private to your account (mode 0600).
+- A job that fails or is cancelled with nothing to reopen is not kept. A cancelled job with partial text is kept and marked Cancelled.
+- `PYSCRIBE_PROJECTS_DIR` overrides the folder (the setting is then read-only).
+
+### Transcript Studio
+
+- Opens when you open a project, and automatically when a single-file or live job finishes. **Projects** (top left) goes back.
+- **Transcript**: one block per segment with a timestamp, a speaker badge and name, and the text at 16 px by default (change it under Settings; 12-28 px). The line being played is highlighted. Click a line, or select it and press `Enter`, to jump playback there; `Space` plays or pauses. Double-click a line (or press `F2`) to edit it; `Enter` saves, `Esc` cancels. Edits are saved shortly after, when you leave the Studio, and when you close the app.
+- **Search** (`Ctrl+F`) highlights matches in the transcript and shows the count ("2 / 5"); `Enter` and the arrow buttons step through them; `Esc` clears the search.
+- **Playback bar** (bottom): play/pause, back and forward 10 seconds, current time, a waveform you can click or drag to seek (Left/Right arrows move 5 seconds when it has focus), and speed (0.75x to 2x). Text, waveform and keyboard stay in sync. If the recording is gone (for example a live session saved without audio), the transcript can still be read and exported and a note explains why playback is off.
+- **Inspector** (right; collapse it with the » button for more transcript width; one tab open at a time):
+  - **Summary** and **Action items**: show what you generated for this project. **Generate...** opens the same LLM dialog as Tools > LLM Post-Process with the right template selected, so connection scope rules, the cloud confirmation and payload preview work exactly as before. Nothing is sent anywhere until you run it. The result is kept with the project.
+  - **Speakers**: give each speaker a name (it appears in the transcript, exports and AI prompts), with turns and speaking time.
+  - **Visuals**: the OCR text from slides or chat, when visual analysis was on.
+- **Export** (top right): plain text, Markdown, SubRip (`.srt`), WebVTT (`.vtt`) or JSON. Exports use your speaker names and never include the path of the recording.
+- The **Local only** badge means transcription ran on this device; AI actions only send text where your connection profile points.
+- Long recordings are fine: a three-hour transcript (about 3,000 segments) opens in well under two seconds.
 
 ### File Selection
 
 - **Browse Files** (inside drop zone): open file picker for media.
 - **Clickable Drop Zone**: clicking anywhere within the dashed drop area will also open the file browser.
-- **Drag-and-drop zone**: drop a media file directly.
+- **Drag-and-drop zone**: drop a media file directly, on Transcribe or on the New transcription card of Projects Home.
 - **Open Folder**: open selected file directory (or last-used folder if no file selected).
 
 ### Batch Queue
@@ -65,9 +91,10 @@ If you run `python main.py` with no mode, you get an interactive launcher menu. 
 
 ### Input Modes
 
-- **File / Live** switch (top of the Setup panel):
-  - `File`: existing file-based transcription workflow.
-  - `Live`: Qt-only live capture workflow (Linux-first).
+- **Transcribe** and **Live** in the navigation rail choose the mode:
+  - `File` (Transcribe): file-based transcription workflow.
+  - `Live` (Live): Qt-only live capture workflow (Linux-first).
+- The Live page shows a state chip (Ready, Recording, Paused, Finalizing), the source, device and optional session title first, and keeps the output folder, compute device, precision and "keep recorded audio" behind **More live options**.
 - Live mode hides the drop zone and disables visual OCR controls.
 - Live mode supports one source per session:
   - **Microphone**
@@ -173,9 +200,9 @@ Fallback behavior:
 - **Pause / Resume** (live mode): temporarily suspend or resume live capture while keeping the same session folder and timestamped live capture file.
 - **Stop** (live mode): stop capture cleanly, finalize the rolling draft, and start the final post-pass on the saved recording.
   - After a successful final post-pass, live mode remains ready for another live session and restores the Live Capture controls.
-- **Cancel**: cooperative cancellation.
+- **Cancel** (job status bar, visible while work is active): cooperative cancellation.
   - In live mode, cancel asks for confirmation, then stops capture immediately, skips the final post-pass, and preserves the session folder and recorded audio.
-- **Force Stop**: immediate process termination if cancellation stalls; Qt escalates from terminate to kill when needed.
+- **Force stop** (Job details drawer): immediate process termination if cancellation stalls; Qt escalates from terminate to kill when needed.
   - In live mode, force stop preserves the live session folder and recorded audio.
 - **Exit**: close app.
 
@@ -198,19 +225,20 @@ Fallback behavior:
 
 ### Status + Timing
 
-- Main status label shows current stage and results.
-- Transcription view includes a terminal-style live event log panel.
+- The status line under the file path shows the current stage and results.
+- The job status bar and the Job details drawer (see Layout + Navigation) show stage, elapsed time, the per-stage timeline and a terminal-style event log.
   - Live mode logs device selection, recording start/pause/resume/stop, final post-pass handoff, and preserved session paths on cancel/failure.
 - HF token status (`configured` / `not configured`) is shown in the status bar at the bottom of the window.
-- The Progress panel's job timeline shows a progress bar, state, and elapsed time for each stage (Load model, Transcribe, Speakers, Visuals, Save).
-- The Hardware panel shows CPU/RAM and GPU/VRAM traces when available.
+- The Performance drawer shows CPU/RAM and GPU/VRAM traces when available.
+
+### Batch queue section
+
+- On Transcribe, **Batch queue** is a collapsible section under the settings. It stays closed until you add files, then opens and shows the item count.
 
 ### Responsive Behavior
 
-- The Setup panel's General settings and **More options** cards render in:
-  - two columns when the panel is wide
-  - one stacked column when it is narrow
-- Both transcription center content and settings page content use scroll areas for smaller displays.
+- The setup column and the Settings page scroll when the window is short; the transcript keeps at least 300 px of width.
+- Panels that were movable in earlier versions are gone. Old saved dock layouts are ignored.
 
 ### Menus
 
@@ -247,15 +275,15 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 
 ### View
 
-- **Panels**
-  - Toggle each panel, **Lock layout**, and **Reset layout** (see Layout + Navigation).
+- **Job details** (`Ctrl+Shift+J`) and **Performance** (`Ctrl+Shift+H`)
+  - Open or close the drawers described in Layout + Navigation.
 - **Theme**
   - `System`
   - `Light`
   - `Dark`
   - Theme preference is persisted across launches.
 - **Colour theme**
-  - Four presets (Iron-gall, Verdigris, Ochre, Graphite), each with light and dark versions, plus your own.
+  - Five presets (Graphite Studio, the default, plus Iron-gall, Verdigris, Ochre, Graphite), each with light and dark versions, plus your own. Existing choices are kept.
   - **Edit themes...** opens the editor: click a swatch to change a colour with live preview; text colours that would be hard to read are adjusted automatically; presets can't be changed, so editing one saves a copy; custom themes can be duplicated, renamed, deleted, exported, and imported (`.json`).
   - The Listener uses the same colour theme when it starts.
 
@@ -284,6 +312,7 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 - Scope policy is enforced at run time (not only during connection tests).
 - Open **Tools > LLM Post-Process...** for the current transcript, or
   **Tools > Process Existing Transcript...** to load a saved transcript file.
+- From the **Templates** page, pick a template and press **Use on a transcript...**; from the Transcript Studio, **Generate...** on the Summary or Action items tab does the same for the open project and stores the result with it.
 - The dialog uses a split workspace:
   - Left: configuration + attachments
   - Right: input context, payload preview, and output panes
@@ -305,11 +334,20 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
   - A reply that stops at the output limit is flagged so you know it may be cut off.
 - The Listener hides cloud profiles unless `llm_allow_cloud_in_listener` is `true` in `~/.pyscribe_config.json` (anyone who can open the Listener could otherwise use your key).
 
-### Settings and start-up defaults
+### Templates page
 
-- **Settings > Start-up defaults**: default model (empty = last model used), start in File or Live, names/terms, faster GPU decoding, and the folder file dialogs open in. **Use current settings as defaults** copies the Transcription page's current choices.
-- Remembered automatically: run mode, speaker and visual options (saved when a job starts), live capture choices, theme and colour theme, panel layout, window size, and sidebar state.
-- **Settings > AI connections** opens the LLM Connections dialog. API keys are set per connection.
+- Lists built-in and your own prompt templates with a preview of the system and user prompts, output format and tags.
+- **New template...** creates one; **Edit...** and **Delete...** work on your own templates (built-ins are read-only); **Set as default** picks which of your templates is preselected; **AI connections...** opens the connections dialog.
+- Templates are stored as before: built-ins in `assets/prompts/`, yours in `~/.pyscribe/prompts`.
+
+### Settings
+
+- **Appearance & accessibility**: theme mode (System, Light, Dark), colour theme with **Edit themes...**, transcript text size (12-28 px) and **Reduce motion** (Automatic follows the `PYSCRIBE_REDUCED_MOTION` environment variable, On, Off).
+- **Privacy & storage**: where projects are saved, with **Change...**, **Reset** and **Open**.
+- **AI connections** opens the LLM Connections dialog. API keys are set per connection.
+- **Start-up defaults**: default model (empty = last model used), start in File or Live, names/terms, faster GPU decoding, and the folder file dialogs open in. **Use current settings as defaults** copies the Transcribe page's current choices.
+- **Diagnostics**: the Performance panel, **Run benchmark...**, the Hugging Face token dialog, and the logs folder. None of it is needed for everyday transcription.
+- Remembered automatically: run mode, speaker and visual options (saved when a job starts), live capture choices, theme and colour theme, text size, reduce-motion choice, window size, and whether the rail is collapsed.
 
 ### MCP server
 
@@ -333,14 +371,16 @@ Qt menu bar includes **Tools**, **View**, and **Help**.
 
 ### Listener UI Inputs
 
-- **Upload Audio/Video File**
+The page follows the same hierarchy as the desktop app: the basics first, tuning behind **Advanced**.
+
+- **Upload Audio/Video File** and **Transcribe**
 - **Select Transcription Model** (editable)
-- **Run mode**
-  - `full`
-  - `transcribe_only`
-  - `visual_only`
-- **Identify speakers** + diarization controls
-- **Analyze visuals** + visual mode/backend/sample interval controls
+- **Identify speakers**
+- **Advanced** (closed by default):
+  - **Run mode**: `full`, `transcribe_only` or `visual_only`
+  - diarization mode and maximum speakers
+  - names / terms and faster GPU decoding
+  - **Analyze visuals** + visual mode/backend/sample interval controls
 
 Visibility of controls adapts to run mode and toggles.
 
@@ -348,9 +388,8 @@ Visibility of controls adapts to run mode and toggles.
 
 - **Transcribe**: starts run.
 - **Cancel** (shown during active run): sets cancellation flag.
-- **Copy to Clipboard**
-- **Save Transcript**: prepares downloadable text file.
-- **LLM Post-Processing (Beta)**:
+- **Transcript** tab: **Copy to Clipboard** and **Save Transcript** (prepares a downloadable text file).
+- **AI summary** tab (LLM post-processing, beta):
   - Pick configured LLM profile + prompt template.
   - Test connection and fetch model list.
   - Choose transcript source (`Current transcript` or `Upload/paste transcript`).
@@ -358,6 +397,7 @@ Visibility of controls adapts to run mode and toggles.
   - Enable/disable image include and OCR fallback behavior for text-only models.
   - Preview final request payload before sending to the configured model.
   - Run post-processing and save/copy generated output.
+- A footer notes that processing happens on the machine running the Listener. The model tips and LLM help are in the **About models and LLM post-processing** section at the bottom.
 
 ### Listener Outputs
 

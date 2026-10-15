@@ -137,6 +137,7 @@ class SpeakersPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFocusPolicy(Qt.NoFocus)
         host = QWidget()
         self._rows = QVBoxLayout(host)
         self._rows.setContentsMargins(0, 0, 0, 0)

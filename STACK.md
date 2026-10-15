@@ -237,10 +237,16 @@ gitleaks detect --source . --redact
 - `services/secret_store.py` - optional OS keyring access for LLM API keys
 - `services/mcp_server.py`, `services/mcp_service.py` - MCP server (stdio) and its job/transcript/path-policy logic
 - `services/job_stages.py`, `services/listener_job.py` - job stage model shared by Qt and the Listener; Listener job thread
+- `services/project_store.py` - saved projects (`~/.pyscribe/projects`, or `projects_dir` / `PYSCRIBE_PROJECTS_DIR`)
+- `services/export_service.py` - text, Markdown, SRT, WebVTT and JSON export of a project
+- `services/waveform_service.py` - waveform peaks via `soundfile`, with an `ffmpeg` fallback
 
 ### UI
 
-- `ui_qt/main_window.py` - Qt main window and transcription workspace
+- `ui_qt/main_window.py` - Qt main window: navigation rail, page stack, job workers, live capture
+- `ui_qt/components/` - reusable widgets (tokens, buttons, cards, chips, drawer, inspector tabs, nav rail)
+- `ui_qt/views/` - Projects Home, Templates, and the Transcript Studio (`studio/`)
+- `ui_qt/job_status.py` - status bar shown while work is active
 - `ui_qt/benchmark_dialog.py` - benchmark dialog
 - `ui_qt/llm_connection_dialog.py` - LLM profile management and diagnostics
 - `ui_qt/llm_postprocess_dialog.py` - LLM post-processing workflow
@@ -295,6 +301,7 @@ gitleaks detect --source . --redact
 - OCR/image attachment handling
 - Shell execution or helper scripts
 - Config persistence and sanitization
+- Project store file handling (ids, permissions, symlinks) and export paths
 
 ### Performance-Sensitive Areas
 
@@ -314,7 +321,9 @@ gitleaks detect --source . --redact
 - Some diarization backends require CUDA.
 - Granite remains file-only. Nemotron streaming (`nvidia/nemotron-speech-streaming-en-0.6b`) supports Qt live mode and file mode, needs `transformers>=5.13` and `librosa`, and is English-only.
 - Qt live transcription is Linux-first.
-- Qt tests that build `MainWindow` need `QT_QPA_PLATFORM=offscreen` and patch `ui_qt.main_window.load_config`/`save_config` so they do not touch `~/.pyscribe_config.json` (see `tests/test_qt_docks.py`).
+- Qt tests that build `MainWindow` need `QT_QPA_PLATFORM=offscreen` and patch `ui_qt.main_window.load_config`/`save_config` so they do not touch `~/.pyscribe_config.json` (see `tests/test_qt_layout.py`). Close windows with `tests/qt_close.py::close_and_drain`, which also destroys them; `tests/conftest.py` sets `PYSCRIBE_PROJECTS_DIR` to a temporary folder for every test.
+- Environment variables: `PYSCRIBE_PROJECTS_DIR` (projects folder override), `PYSCRIBE_REDUCED_MOTION=1` (the `auto` reduce-motion setting). README screenshots: `QT_QPA_PLATFORM=offscreen .venv/bin/python scripts/capture_screenshots.py`.
+- Studio playback uses `QtMultimedia` (FFmpeg backend, bundled with PySide6 6.7+); the headless test environment can open files and seek but is not expected to produce sound.
 - Windows without Bash may need Git Bash or WSL for `bash -n scripts/run_listener.sh`.
 
 ## Documentation Update Expectations

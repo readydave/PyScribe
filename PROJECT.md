@@ -33,8 +33,8 @@ and practical support for GPU-heavy speech/OCR workloads.
 
 - `main.py` is the primary entry point. It handles the interactive launcher, Qt mode, listener mode, logging setup, runtime environment setup, and listener security validation.
 - `app.py` builds the Gradio listener UI. It uses lazy runtime initialization so importing listener code does not immediately load heavyweight ML dependencies.
-- `ui_qt/` contains the PySide6 desktop UI: the main window (movable dock panels), `theme.py` (QSS, bundled font, light/dark), `theme_dialog.py` (colour theme editor), `job_stages.py` and `job_timeline.py` (progress timeline), `hw_panel.py` (hardware traces), `speaker_highlight.py`, `flow_layout.py` (wrapping action rows), `thread_lifecycle.py` and `keyring_worker.py` (background workers), the benchmark dialog, the LLM connection dialog, and the LLM post-process dialog.
-- `services/` contains shared business logic for both frontends. Important services include transcription, live transcription, model/runtime selection, model downloads, config persistence, prompt templates, LLM profiles, LLM post-processing (local, LAN, and hosted providers; long-transcript splitting), colour themes (`ui_themes.py`, `ui_tokens.py`; Qt-free so the Listener can use them), the MCP server (`mcp_server.py`, `mcp_service.py`), the Claude Code CLI provider (`cli_llm_provider.py`), the optional OS keyring for API keys (`secret_store.py`), the job stage model shared by Qt and the Listener (`job_stages.py`, `listener_job.py`), listener security, logging, and OCR/multimodal helpers.
+- `ui_qt/` contains the PySide6 desktop UI. `main_window.py` is the controller: it owns the navigation rail, the page stack (Projects Home, Transcribe/Live, Templates, Settings, Transcript Studio), the job workers and live-capture state. `components/` is the reusable widget library (tokens, buttons, cards, chips, drawer, inspector tabs, nav rail, mini waveform) styled by `theme.py` (QSS, bundled font, light/dark). `views/` holds the screens: `projects_home.py`, `templates_view.py` and `studio/` (segment model, transcript list, waveform, transport bar, inspector, view, and `controller.py` for loading, edit saving, export, AI outputs and waveform peaks). `job_status.py` is the status bar shown while work is active; `job_stages.py`, `job_timeline.py` and `hw_panel.py` fill the Job details and Performance drawers. Also `theme_dialog.py` (colour theme editor), `speaker_highlight.py`, `flow_layout.py`, `thread_lifecycle.py` and `keyring_worker.py` (background workers), the benchmark dialog, the LLM connection dialog, and the LLM post-process dialog.
+- `services/` contains shared business logic for both frontends. Important services include transcription, live transcription, model/runtime selection, model downloads, config persistence, prompt templates, LLM profiles, LLM post-processing (local, LAN, and hosted providers; long-transcript splitting), colour themes (`ui_themes.py`, `ui_tokens.py`; Qt-free so the Listener can use them), the project store (`project_store.py`: saved jobs with timed segments, speaker names and AI outputs), exports (`export_service.py`), waveform peaks (`waveform_service.py`), the MCP server (`mcp_server.py`, `mcp_service.py`), the Claude Code CLI provider (`cli_llm_provider.py`), the optional OS keyring for API keys (`secret_store.py`), the job stage model shared by Qt and the Listener (`job_stages.py`, `listener_job.py`), listener security, logging, and OCR/multimodal helpers.
 - \`diarization.py\` and \`diar_backends.py\` contain diarization diagnostics and backend integration for pyannote.
 
 - `models.py` defines curated speech model tiers, labels, and hardware-aware ranking helpers.
@@ -46,6 +46,7 @@ and practical support for GPU-heavy speech/OCR workloads.
 
 - Desktop transcription: `python main.py qt` starts the Qt UI, users select media/model/options, and shared services perform transcription, diarization, OCR, and output saving.
 - Batch transcription: Qt batch queue supports drag-and-drop or folder selection for multiple media files, processing them sequentially with status tracking and overall progress visualization.
+- Projects and review: every finished file, batch or live job is saved as a project (`~/.pyscribe/projects`); Projects Home lists them and the Transcript Studio opens one for playback, search, editing, speaker naming, AI outputs and export. Finishing a single-file or live job opens it in the Studio.
 - Live desktop transcription: Qt live mode records microphone or loopback audio into a recoverable session, shows rolling transcript updates, supports pause/resume, and runs a final cleanup pass on stop. **Session titles** can be provided to automatically name output folders and files.
 - Listener transcription: `python main.py serve --port 7860` starts the Gradio listener. Localhost is the default; LAN/public exposure requires explicit flags and authentication.
 - LLM post-processing: users configure local, LAN, or hosted (cloud) LLM profiles, choose prompt templates, add optional text/image context, preview payloads, and process current or saved transcripts.
@@ -62,6 +63,9 @@ and practical support for GPU-heavy speech/OCR workloads.
 - Local config is additive and persisted under user-home paths; plaintext LLM API keys are stripped before config writes unless stored as `env:VAR_NAME` references or, with the optional `keyring` package, as an opaque `keyring:<id>` reference to the OS keyring.
 - Qt background workers (Python `QObject`s moved to a `QThread`) are released on the main thread from the `thread.finished` slot (`ui_qt/thread_lifecycle.py::release_worker`), never `deleteLater`'d from their own signals. Destroying one on its worker thread can deadlock against the GUI thread (Qt signal/slot mutex vs the GIL).
 - Prompt templates are split between repo-provided templates in `assets/prompts/` and user templates under `~/.pyscribe/prompts`.
+- Project ids are generated by the store (`YYYYmmdd-HHMMSS-<8 hex>`) and validated on every access, so a caller-supplied id can never leave the projects folder; loading sanitises every field; symlinked project folders are ignored and never deleted. Listing reads only a small `summary.json` per project.
+- The Studio's `QMediaPlayer`/`QAudioOutput` are created when a recording is loaded and freed on unload, so windows that never play audio hold no audio device. A seek issued while a file is still opening is applied once it has loaded.
+- AI outputs in the Studio go through the existing LLM post-process dialog (new `initial_template_id` argument and output accessors), not a second code path, so scope rules, the cloud confirmation and payload preview stay in one place.
 
 ## Decision Log
 
@@ -81,6 +85,10 @@ and practical support for GPU-heavy speech/OCR workloads.
 | 2026-10-09 | Single `main` branch with linear history; one commit per item. | Many stale local branches; UX/AI/MCP work merged by fast-forward (PR #1). | Old spike scripts kept as tag `archive/phase-7-spikes`. Orchestration protocol is in `docs/handoff_2026-10-09_orchestration.md`. |
 | 2026-10-09 | CLI provider is the Claude Code CLI only, for personal use; Codex was dropped for good. Keyring (`keyring`) added as an optional dependency. | Anthropic's terms allow the user's own sign-in in the unmodified CLI but not routing it for others, so PyScribe never reads the CLI's sign-in. Codex has no documented way to turn tools off, so a transcript could make it read local files. | `claude_cli` is cloud scope (confirmation, hidden from the Listener and MCP unless allowed). See `docs/handoff_2026-10-09_orchestration.md`. |
 | 2026-10-09 | Release Qt workers on the main thread; defer the window close while the uncancellable diarization probe runs. | An intermittent GIL/Qt mutex deadlock (about 1 in 7 test runs, possible in the app) and a close that blocked the UI for up to 15 s. | `release_worker()` pattern for all `QThread` workers; closing hides the window at once and force-exits after 15 s. |
+| 2026-10-15 | Redesign the Qt UI around Projects Home and a Transcript Studio; remove the movable dock panels; save every finished job as a local project. | The October 2026 UX/UI specification: transcript-first workspace, calm during work, telemetry and tuning behind contextual drawers. | Navigation rail (Projects, Transcribe, Live, Templates, Settings); `services/project_store.py`; `ui_qt/components/`, `ui_qt/views/`; `dock_layout`/`dock_locked` config keys ignored. See `docs/ui_redesign_2026-10.md`. |
+| 2026-10-15 | New default colour theme Graphite Studio; existing saved choices unchanged. | Spec: dark graphite surfaces, indigo accent, teal for success. | `DEFAULT_THEME_ID` changed; tests assert the constant, not the name. |
+| 2026-10-15 | Studio AI actions reuse `LLMPostprocessDialog`. | One place for scope policy, cloud confirmation and payload preview. | Dialog gained `initial_template_id`, `output_text()`, `output_template_id()`, `output_profile_name()`. |
+| 2026-10-15 | Test windows are destroyed after each test. | Closed-but-alive windows were restyled on every theme reset, growing the suite from 28 to 41 minutes and stalling it. | `tests/qt_close.py::close_and_drain` deletes the window; full suite about 4.5 minutes. |
 
 
 ## Current Priorities
@@ -107,7 +115,7 @@ Private or short-term working items belong in local `TODO.md`.
 - Improve packaging/distribution for non-developer installs.
 - Add more structured diagnostics for GPU/OCR/model availability problems.
 - Broaden LLM profile/provider ergonomics without weakening endpoint-scope policy (cloud scope is opt-in per profile, https only, with a confirmation).
-- Finish the deferred UX items: an optional notes-folder (Obsidian) export (parked), and on-device checks (Windows, Wayland floating docks, GPU hardware panel). The Load/Save timeline rows and the Listener stage strip have shipped.
+- Finish the deferred UX items: an optional notes-folder (Obsidian) export (parked), and on-device checks of the redesign (Windows rendering, high-DPI scaling, real audio playback on Windows and Wayland, the GPU traces in the Performance drawer, and a first-time-user walkthrough). The Load/Save timeline rows, the Listener stage strip and the redesign itself have shipped.
 
 ## Known Risks / Fragile Areas
 
@@ -120,6 +128,8 @@ Private or short-term working items belong in local `TODO.md`.
 - LLM network policy: local vs LAN vs cloud profile scope, CIDR restrictions, TLS verification behavior (always on for cloud), credential-bearing requests never follow redirects, cloud profiles hidden from the Listener by default, and concurrent local workload checks.
 - MCP server: `python main.py mcp` (stdio only). File access is limited to audio/video inside allowed folders, only downloaded models are used, and transcript text returned to a client is untrusted content.
 - UI regressions: Qt layout resizing, live mode state transitions, and dialog close/cancel behavior.
+- Project store: `services/project_store.py` (id validation, private permissions, atomic writes, symlink handling) and `ui_qt/views/studio/controller.py` (edit saving, export paths).
+- Playback: codec support differs between Windows and Linux Qt multimedia backends; without a playable recording the Studio degrades to read, edit and export.
 
 ## Security Notes
 

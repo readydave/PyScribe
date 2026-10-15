@@ -72,17 +72,17 @@ class SegmentDelegate(QStyledItemDelegate):
         doc.setDefaultFont(font)
         doc.setDocumentMargin(0)
         doc.setTextWidth(max(80, width))
-        doc.setHtml(f'<span style="color:{palette.ink}">{self._highlight(text, query, palette.accent)}</span>')
+        doc.setHtml(f'<span style="color:{palette.ink}">{self._highlight(text, query, palette.accent, palette.accent_text)}</span>')
         return doc
 
     @staticmethod
-    def _highlight(text: str, query: str, color: str) -> str:
+    def _highlight(text: str, query: str, background: str, foreground: str) -> str:
         if not query:
             return html.escape(text)
         out, lower, needle, start = [], text.casefold(), query.casefold(), 0
         while needle and (found := lower.find(needle, start)) != -1:
             out.append(html.escape(text[start:found]))
-            out.append(f'<span style="background-color:{color}; color:#ffffff">{html.escape(text[found:found + len(needle)])}</span>')
+            out.append(f'<span style="background-color:{background}; color:{foreground}">{html.escape(text[found:found + len(needle)])}</span>')
             start = found + len(needle)
         out.append(html.escape(text[start:]))
         return "".join(out)

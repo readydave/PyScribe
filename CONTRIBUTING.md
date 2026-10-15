@@ -57,8 +57,8 @@ If you are on Windows without Bash, run this check in Git Bash/WSL or skip it lo
 ## Tests and Screenshots
 
 - Full suite (slow; needs the project `.venv`): `QT_QPA_PLATFORM=offscreen python -m pytest -q -o faulthandler_timeout=120 tests`. CI installs only a few packages, so a test that imports a heavy or optional module (`ffmpeg`, `mcp`, `gradio`) needs `pytest.importorskip`.
-- Qt tests that build `MainWindow` patch `ui_qt.main_window.load_config` / `save_config` (see `tests/test_qt_docks.py`) and close it with `tests/qt_close.py::close_and_drain`.
-- README screenshots go in `assets/images/` named `YYYY-MM-DD-<slug>.png`. Render widgets offscreen (`widget.grab().save(...)`) with config patched as above, so no personal transcripts, keys, or file names appear.
+- Qt tests that build `MainWindow` patch `ui_qt.main_window.load_config` / `save_config` (see `tests/test_qt_layout.py`) and close it with `tests/qt_close.py::close_and_drain`, which also destroys the window (a closed but live window is still restyled on every theme change and slows later tests). `tests/conftest.py` points `PYSCRIBE_PROJECTS_DIR` at a temporary folder for every test, so nothing is written to `~/.pyscribe/projects`.
+- README screenshots go in `assets/images/` named `YYYY-MM-DD-<slug>.png`. `QT_QPA_PLATFORM=offscreen .venv/bin/python scripts/capture_screenshots.py` renders the Qt ones with synthetic data and patched config, so no personal transcripts, keys, user names or file paths appear. Capture the Listener with a headless browser against `python main.py serve` using a temporary `HOME`.
 
 ## Security Checks
 

@@ -2,41 +2,51 @@
 
 ## Quick Start
 
-1. Use **Browse Files** in the drop zone (or drag and drop a media file) to select audio/video.
-2. Pick a model in the **Model** dropdown (built-in or custom `owner/repo`).
-3. Choose **Input = File** for the traditional workflow, or **Input = Live** for microphone/loopback capture.
-4. For file mode, choose processing options (**Transcribe audio**, **Speaker Identification**, **Analyze visuals**) and click **Process File**.
-5. For live mode, choose source/device/output folder (and optionally Compute: Auto, CPU or GPU) and click **Start Live**. Use **Pause / Resume** when needed, then **Stop** to run the final post-pass.
-6. Save or copy output when complete.
+1. On **Projects**, drop a recording on **New transcription** (or click it to choose a file). **Live capture** starts a recording and **Import folder** queues a whole folder.
+2. On **Transcribe**, pick a model in the **Model** dropdown (built-in or custom `owner/repo`) and click **Process File**. Speaker identification, names/terms and visual analysis are under **More options**.
+3. For a live recording, open **Live**, check the source and device (optionally add a session title) and click **Start Live**. Use **Pause / Resume** when needed, then **Stop** to run the final post-pass. Output folder, compute and precision are under **More live options**.
+4. When the job finishes, the **Transcript Studio** opens with the result. Search, play, edit, name the speakers, generate a summary and export from there. The project is saved automatically and is always on **Projects**.
 
-## Main Window
+## Navigation
 
-- **Navigation sidebar**: switch between **Transcription**, **LLM**, and **Settings** screens.
-- **New Project**: clears the selected file, transcript, and progress (asks first if there is a transcript; blocked while a job runs). Settings and the batch queue are kept.
-- **Sidebar toggle**: collapse/expand the left navigation area.
-- **Panels**: the Transcription page is made of movable panels (Setup, Progress, Hardware, Batch queue). Drag a panel by its title bar to move, tab, or float it; drag the visible divider bars between panels (they highlight when you hover) to resize them, even with **Lock layout** on; use the title-bar buttons to float or close. **View > Panels** re-opens closed panels, **Lock layout** stops accidental moves, and **Reset layout** restores the default. Your layout and panel sizes are saved shortly after you change them and when you close the app. In a narrow Setup panel, a scroll bar appears instead of cutting controls off.
+- The rail on the left has **Projects**, **Transcribe**, **Live**, **Templates** and **Settings**. The small button in its header collapses it; the choice is remembered.
+- **New Project** (bottom of the rail) clears the selected file, transcript and progress (asks first if there is a transcript; blocked while a job runs). Settings and the batch queue are kept.
+- While a job runs, a status bar appears at the top of every page: stage, elapsed time, progress, **Details** and **Cancel**.
+  - **Details** opens the **Job details** drawer: one row per stage (Load model, Transcribe, Speakers, Visuals, Save), the event log, and **Force stop** if cancelling stalls. `Ctrl+Shift+J`.
+  - **Show performance** (or `Ctrl+Shift+H`) opens the **Performance** drawer: 60-second CPU, memory, GPU and VRAM traces, coloured by the running stage (GPU rows appear only when a GPU is detected).
+  - Only one drawer is open at a time; `Esc` closes it.
+- HF token status (`configured` / `not configured`) is in the status bar at the bottom of the window.
+
+## Projects Home
+
+- Three cards at the top: **New transcription** (drag and drop or click), **Live capture**, **Import folder**.
+- **Recent projects**: your latest six, with duration, speakers, a waveform cue, status and last activity. **View all** shows every project. The **...** menu on a card: Open, Rename, Show in folder, Delete (the recording itself is never deleted).
+- Projects are saved in `~/.pyscribe/projects` (change it under **Settings > Privacy & storage**).
+
+## Transcript Studio
+
+- **Transcript**: timestamp, speaker badge and name, text. The line being played is highlighted.
+  - Click a line (or select it and press `Enter`) to jump there; `Space` plays or pauses.
+  - Double-click a line (or press `F2`) to edit it; `Enter` saves, `Esc` cancels. Edits are saved automatically.
+- **Search** (`Ctrl+F`): highlights matches and shows the count; `Enter` or the arrows step through them; `Esc` clears.
+- **Playback bar**: play/pause, back/forward 10 seconds, time, waveform (click or drag to seek; Left/Right arrows move 5 seconds), speed 0.75x to 2x. If the recording is no longer available the transcript still works and a note explains.
+- **Inspector** (right, one tab at a time, collapses with the » button):
+  - **Summary** and **Action items**: **Generate...** opens the LLM dialog with the right template; nothing is sent until you run it, and the result is kept with the project.
+  - **Speakers**: name each speaker; turns and speaking time are shown.
+  - **Visuals**: OCR text from slides or chat.
+- **Export**: text, Markdown, SRT, WebVTT or JSON, using your speaker names.
+- **Local only** means transcription ran on this device; AI actions only send text where your connection profile points.
+
+## Transcribe and Live
+
 - **Drop zone**: choose a local media file via drag/drop or **Browse Files**.
-- **Model**: supports built-in model names and custom Hugging Face repo IDs.
-- **File / Live switch** (top of the Setup panel):
-  - `File`: normal file transcription flow.
-  - `Live`: Linux-first microphone/loopback capture flow.
-- **More options** (Setup panel): speaker identification, names/terms, faster GPU decoding, and visual analysis. It starts collapsed and remembers whether you opened it.
-- **Recommended model label**: shows the hardware-based recommendation.
-- **Status**:
-  - Run status messages appear at the top of the Progress panel.
-  - HF token status (`configured` / `not configured`) is in the status bar at the bottom of the window.
-- **Hardware panel**: 60-second traces for CPU, memory, GPU, and VRAM while a job runs (GPU rows appear only when a GPU is detected). Trace colour shows which stage was running. Narrow the panel to switch to compact bars.
-- **Job timeline** (Progress panel): one row per enabled stage with its progress bar and elapsed time.
-  - Load model (while the model loads or downloads)
-  - Transcribe
-  - Speakers (staged determinate progress, when enabled)
-  - Visuals (when enabled)
-  - Save (when a job auto-saves two or more outputs)
-  - Finished stages turn green; a stage that fails turns red.
-- **Details** (Progress panel): click to show the read-only event log for real-time stage updates.
-- **Transcript**: speaker labels are colour-coded, each speaker gets a coloured rule in the left margin, and timestamps are monospace in the muted theme colour.
-- **Responsive cards**:
-  - General/More options cards show in two columns when the Setup panel is wide and collapse to one column when it is narrow.
+- **Model**: supports built-in model names and custom Hugging Face repo IDs; the recommended model for your hardware is shown under it.
+- **More options** (Transcribe): speaker identification, names/terms, faster GPU decoding, and visual analysis. It starts collapsed and remembers whether you opened it.
+- **Batch queue** (collapsible, under the settings): add files or a folder and process them one after another. It opens when you add files.
+- **Live** page: a state chip (Ready, Recording, Paused, Finalizing), source, device, session title and timer first; **More live options** holds output folder, compute (Auto, CPU or GPU), precision and keeping the recording.
+- **Status** line: under the file path.
+- Speaker labels are colour-coded in the transcript.
+- The setup column scrolls sideways on very narrow windows (below about 900 px) instead of cutting controls off; collapse the rail for more room.
 
 ## AI Connections (Tools > LLM Connections)
 
@@ -54,20 +64,29 @@
 - **Temperature**: empty uses the provider's default (some hosted models reject a custom value).
 - The Listener does not offer cloud profiles unless `llm_allow_cloud_in_listener` is set to `true` in `~/.pyscribe_config.json`, because anyone who can open the Listener could otherwise use your key.
 
-## Settings and Start-up Defaults
+## Templates
 
-- **Settings > Start-up defaults** sets what PyScribe starts with:
+- Lists the built-in prompt templates and your own, with a preview of the prompts.
+- **New template...**, **Edit...**, **Delete...** and **Set as default** work on your own templates; built-ins are read-only. **Use on a transcript...** opens the LLM dialog with that template.
+
+## Settings
+
+- **Appearance & accessibility**: theme mode, colour theme and **Edit themes...**, transcript text size (12-28 px), and **Reduce motion** (turns off sliding panels and the busy-bar animation).
+- **Privacy & storage**: the projects folder (**Change...**, **Reset**, **Open**). New projects go to the new folder; older ones stay where they were.
+- **AI connections**: opens the connections dialog.
+- **Start-up defaults** sets what PyScribe starts with:
   - **Model**: leave empty to start with the last model you used, or enter a model name or Hugging Face repo ID to always start with it.
   - **Start in**: File or Live.
-  - **Names / terms** and **Faster GPU decoding**: pre-filled on the Transcription page.
+  - **Names / terms** and **Faster GPU decoding**: pre-filled on the Transcribe page.
   - **Open files from**: the folder file dialogs open in.
-  - **Use current settings as defaults** copies the Transcription page's current model, File/Live choice, names/terms, and decoding option.
-- Remembered automatically: run mode, speaker and visual options (saved when you start a job), live capture source/device/folder/keep-audio/compute choice, colour theme and mode, panel layout, window size, and whether the left sidebar is collapsed.
+  - **Use current settings as defaults** copies the Transcribe page's current model, File/Live choice, names/terms, and decoding option.
+- **Diagnostics**: Performance panel, **Run benchmark...**, Hugging Face token, logs folder.
+- Remembered automatically: run mode, speaker and visual options (saved when you start a job), live capture source/device/folder/keep-audio/compute choice, colour theme and mode, text size, window size, and whether the rail is collapsed.
 
 ## Colour Themes
 
-- **View > Theme** chooses System, Light, or Dark. **View > Colour theme** chooses the colours: Iron-gall, Verdigris, Ochre, Graphite, or one of your own. Every theme has a light and a dark version.
-- **View > Colour theme > Edit themes...** opens the editor:
+- **Settings > Appearance & accessibility** (or **View > Theme** and **View > Colour theme**) chooses System, Light, or Dark and the colours: Graphite Studio (the default), Iron-gall, Verdigris, Ochre, Graphite, or one of your own. Every theme has a light and a dark version.
+- **Edit themes...** (Settings, or **View > Colour theme**) opens the editor:
   - Pick a theme on the left; presets can't be changed, so editing one saves a copy.
   - Click any swatch to change a colour. Changes preview immediately; **Cancel** undoes them, **Save** keeps them.
   - Text colours that would be hard to read are adjusted automatically, and the editor tells you what moved. If a background makes text unreadable, it points that out.

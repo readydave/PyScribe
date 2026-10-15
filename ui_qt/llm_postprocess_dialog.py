@@ -235,6 +235,7 @@ class LLMPostprocessDialog(QDialog):
         current_ocr_text: str,
         is_transcription_running: Callable[[], bool],
         prefer_loaded_transcript: bool = False,
+        initial_template_id: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -258,6 +259,8 @@ class LLMPostprocessDialog(QDialog):
         self._connection_test_state: str = "not_run"
         self._last_payload_preview: str = ""
         self._last_output_text: str = ""
+        self._output_template_id: str = ""
+        self._output_profile_name: str = ""
         self._postprocess_thread: QThread | None = None
         self._postprocess_worker: LLMPostprocessWorker | None = None
         self._run_control: LLMRunControl | None = None
@@ -268,7 +271,9 @@ class LLMPostprocessDialog(QDialog):
 
         self._build_ui()
         self._populate_profiles(default_name=config.llm_default_profile)
-        self._populate_templates(default_template_id=config.llm_default_template_id or self._default_template_id)
+        self._populate_templates(
+            default_template_id=initial_template_id or config.llm_default_template_id or self._default_template_id
+        )
         if self._prefer_loaded_transcript:
             self.use_current_checkbox.setChecked(False)
         self._refresh_source_labels()
@@ -656,6 +661,17 @@ class LLMPostprocessDialog(QDialog):
         self._config.llm_ocr_fallback_for_images_default = self.image_ocr_fallback_checkbox.isChecked()
         self._config.llm_default_template_id = template.id
         return template, request, prepared
+
+    def output_text(self) -> str:
+        """The latest generated (or partial) output, for callers that store it."""
+        return self._last_output_text.strip()
+
+    def output_template_id(self) -> str:
+        """The template the latest output was generated with."""
+        return self._output_template_id
+
+    def output_profile_name(self) -> str:
+        return self._output_profile_name
 
     @Slot()
     def _on_profile_changed(self) -> None:
@@ -1050,6 +1066,8 @@ class LLMPostprocessDialog(QDialog):
 
         self._streamed_output_chunks = []
         self._last_output_text = ""
+        self._output_template_id = template.id
+        self._output_profile_name = str(getattr(profile, "name", "") or "")
         self.output_box.clear()
         self.copy_btn.setEnabled(False)
         self.save_btn.setEnabled(False)

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QPushButton, QWidget
 
 from ui_qt.components._util import set_prop
 
-VARIANTS = ("primary", "secondary", "ghost", "icon")
+VARIANTS = ("primary", "secondary", "ghost", "icon", "round")
 
 
 class AppButton(QPushButton):

@@ -48,12 +48,14 @@ class NavRail(QFrame):
         self.footer = QVBoxLayout()
         layout.addLayout(self.footer)
 
-    def set_current(self, key: str) -> None:
+    def set_current(self, key: str, *, emit: bool = True) -> None:
+        """Select ``key``; with ``emit=False`` only the highlight changes (the caller shows the page itself)."""
         button = self._buttons.get(key)
         if button is None:
             return
         button.setChecked(True)
-        self.selected.emit(key)
+        if emit:
+            self.selected.emit(key)
 
     def current(self) -> str:
         for key, button in self._buttons.items():

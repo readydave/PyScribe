@@ -592,6 +592,22 @@ def _component_qss(p: Palette) -> str:
             padding: 0px;
             font-size: {type_px["heading"]}px;
         }}
+        QPushButton[variant="round"] {{
+            background: {p.accent};
+            color: {p.accent_text};
+            border: 2px solid {p.accent};
+            border-radius: 20px;
+            padding: 0px;
+            font-size: {type_px["heading"]}px;
+        }}
+        QPushButton[variant="round"]:hover {{
+            background: {p.accent_hover};
+            border-color: {p.accent_hover};
+        }}
+        QPushButton[variant="round"]:focus {{
+            border: 2px solid {p.ink};
+            padding: 0px;
+        }}
         QPushButton[variant]:focus {{
             border: 2px solid {p.ink};
             padding: 8px 16px;
@@ -605,7 +621,7 @@ def _component_qss(p: Palette) -> str:
         }}
         QPushButton[tab]:focus {{
             border: 2px solid {p.ink};
-            padding: 6px 10px;
+            padding: 6px 8px;
         }}
         QPushButton[variant]:disabled {{
             background: {p.disabled_bg};
@@ -655,8 +671,8 @@ def _component_qss(p: Palette) -> str:
             border: 2px solid transparent;
             border-bottom: 2px solid {p.rule};
             border-radius: 0px;
-            padding: 6px 10px;
-            font-size: {type_px["body"]}px;
+            padding: 6px 8px;
+            font-size: {type_px["caption"]}px;
             font-weight: 600;
         }}
         QPushButton[tab]:hover {{

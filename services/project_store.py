@@ -27,6 +27,7 @@ SCHEMA_VERSION = 1
 ENV_PROJECTS_DIR = "PYSCRIBE_PROJECTS_DIR"
 DEFAULT_PROJECTS_ROOT = Path.home() / ".pyscribe" / "projects"
 PROJECT_FILE = "project.json"
+PEAKS_FILE = "peaks.json"
 SUMMARY_FILE = "summary.json"  # small card data so listing never reads whole transcripts
 
 KINDS = ("file", "batch", "live")
@@ -37,6 +38,7 @@ MAX_SEGMENTS = 200_000
 MAX_SPEAKER_LABEL = 16
 MAX_SPEAKER_NAME = 40
 MAX_PEAKS = 128
+MAX_FULL_PEAKS = 4000
 MAX_AI_OUTPUTS = 50
 
 _ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$")
@@ -113,10 +115,10 @@ def speaker_labels(segments: list[dict[str, Any]]) -> list[str]:
     return seen
 
 
-def _sanitize_peaks(raw: object) -> list[float]:
+def _sanitize_peaks(raw: object, limit: int = MAX_PEAKS) -> list[float]:
     if not isinstance(raw, list):
         return []
-    return [round(max(0.0, min(1.0, _number(v))), 3) for v in raw[:MAX_PEAKS]]
+    return [round(max(0.0, min(1.0, _number(v))), 3) for v in raw[:limit]]
 
 
 def _sanitize_names(raw: object) -> dict[str, str]:
@@ -382,6 +384,21 @@ class ProjectStore:
         outputs = dict(project.ai_outputs)
         outputs[_clean_text(template_id, 64)] = {"text": text, "created": _now_iso(), "profile": profile}
         return self.update(project_id, ai_outputs=outputs)
+
+    def set_peaks(self, project_id: str, peaks: list[float], preview: list[float]) -> bool:
+        """Cache the full waveform for the Studio and store the small preview used on cards."""
+        if self.load(project_id) is None:
+            return False
+        self._atomic_write(self.project_dir(project_id), PEAKS_FILE, {"peaks": _sanitize_peaks(peaks, MAX_FULL_PEAKS)})
+        self.update(project_id, preview_peaks=preview)
+        return True
+
+    def load_peaks(self, project_id: str) -> list[float]:
+        try:
+            data = json.loads((self.project_dir(project_id) / PEAKS_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return _sanitize_peaks(data.get("peaks") if isinstance(data, dict) else None, MAX_FULL_PEAKS)
 
     def delete(self, project_id: str) -> bool:
         """Remove a project folder (project data only; the source media is never touched)."""

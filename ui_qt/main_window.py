@@ -98,6 +98,8 @@ from ui_qt import theme
 from ui_qt.components import NavRail
 from ui_qt.components import tokens as component_tokens
 from ui_qt.views.projects_home import ProjectsHome
+from ui_qt.views.studio.controller import StudioController
+from ui_qt.views.studio.studio_view import StudioView
 from ui_qt.benchmark_dialog import BenchmarkDialog
 from ui_qt.flow_layout import FlowLayout
 from ui_qt.hw_panel import HardwarePanel
@@ -710,6 +712,7 @@ class MainWindow(QMainWindow):
         self.config: AppConfig = load_config()
         self.project_store = ProjectStore(resolve_projects_root(self.config.projects_dir))
         self._active_project_id: str | None = None
+        self._active_project_kind = ""
         self._docks_sized_on_show = False
         self.media_path: str | None = None
         self.last_open_dir: str = self.config.last_open_dir or os.path.expanduser("~")
@@ -849,6 +852,22 @@ class MainWindow(QMainWindow):
         self.main_stack.addWidget(self._build_transcription_view())
         self.main_stack.addWidget(self._build_llm_workspace_view())  # Templates, until it gets its own view
         self.main_stack.addWidget(self._build_settings_view())
+        self.studio = StudioView()
+        self.studio.back_requested.connect(lambda: self.nav_rail.set_current("projects"))
+        self.studio_controller = StudioController(
+            self.studio,
+            self.project_store,
+            self,
+            get_config=lambda: self.config,
+            ensure_llm_profiles=self._ensure_llm_profiles,
+            is_busy=self._is_transcription_running,
+            get_save_dir=lambda: self.last_save_dir or "",
+            set_save_dir=self._remember_save_dir,
+            save_config=self._save_config,
+        )
+        self.studio_controller.project_changed.connect(self._refresh_projects)
+        self.studio_controller.status.connect(self.status_label.setText)
+        self.main_stack.addWidget(self.studio)
         root_layout.addWidget(self.main_stack, 1)
 
         self._refresh_projects()
@@ -1726,10 +1745,18 @@ class MainWindow(QMainWindow):
             return
         self._save_config(window_geometry=geometry)
 
-    _VIEW_INDEX = {"projects": 0, "transcribe": 1, "live": 1, "templates": 2, "settings": 3}
+    _VIEW_INDEX = {"projects": 0, "transcribe": 1, "live": 1, "templates": 2, "settings": 3, "studio": 4}
+
+    def _remember_save_dir(self, path: str) -> None:
+        if os.path.isdir(path):
+            self.last_save_dir = path
+            self._save_config()
 
     @Slot(str)
     def _on_nav_selected(self, key: str) -> None:
+        if self.main_stack.currentIndex() == self._VIEW_INDEX["studio"]:
+            self.studio.pause()
+            self.studio_controller.flush()
         self.main_stack.setCurrentIndex(self._VIEW_INDEX.get(key, 0))
         if key in ("transcribe", "live"):
             if not self._docks_sized_on_show:
@@ -1800,22 +1827,15 @@ class MainWindow(QMainWindow):
     def _open_project(self, project_id: str) -> None:
         if self._home_blocked():
             return
-        project = self.project_store.load(project_id)
-        if project is None:
+        if not self.studio_controller.open_project(project_id):
             QMessageBox.warning(self, "Project unavailable", "This project could not be read.")
             self._refresh_projects()
             return
-        self.media_path = None
-        self.transcript_text = project.transcript_text
-        self.transcript_only_text = project.transcript_text
-        self.visual_report_text = project.visual_report
-        self.text_area.setPlainText(project.transcript_text or project.visual_report)
-        self.path_label.setText(project.media_path or project.title)
-        has_text = bool(project.transcript_text or project.visual_report)
-        self.save_btn.setEnabled(has_text)
-        self.copy_btn.setEnabled(has_text)
-        self._switch_to_transcription_view()
-        self.status_label.setText(f"Opened project: {project.title}")
+        self._show_studio()
+
+    def _show_studio(self) -> None:
+        self.nav_rail.set_current("projects", emit=False)  # the Studio belongs to Projects in the rail
+        self.main_stack.setCurrentIndex(self._VIEW_INDEX["studio"])
 
     @Slot(str)
     def _rename_project(self, project_id: str) -> None:
@@ -1829,6 +1849,8 @@ class MainWindow(QMainWindow):
             self.project_store.rename(project_id, title)
         except (OSError, ValueError):
             LOGGER.warning("Could not rename project.", exc_info=True)
+        if self.studio.project_id == project_id:
+            self.studio.set_title(title.strip())
         self._refresh_projects()
 
     @Slot(str)
@@ -1853,6 +1875,7 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
+        self.studio_controller.forget(project_id)
         try:
             self.project_store.delete(project_id)
         except (OSError, ValueError):
@@ -1878,30 +1901,46 @@ class MainWindow(QMainWindow):
             self._active_project_id = None
             return
         self._active_project_id = project.id
+        self._active_project_kind = kind
         self._refresh_projects()
 
-    def _finish_project(self, status: str, *, transcript: str = "", visual_report: str = "") -> None:
-        """Store the result on the active project; a failed or cancelled job with nothing to reopen is dropped."""
+    def _live_audio_path(self) -> str:
+        session = self._last_live_session
+        path = str(getattr(getattr(session, "metadata", None), "saved_audio_path", "") or "")
+        return path if path and os.path.isfile(path) else ""
+
+    def _finish_project(self, status: str, *, transcript: str = "", visual_report: str = "") -> str | None:
+        """Store the result on the active project and return its id (``None`` when nothing was kept).
+
+        A failed or cancelled job with nothing to reopen is dropped.
+        """
         project_id, self._active_project_id = self._active_project_id, None
+        kind, self._active_project_kind = self._active_project_kind, ""
         if project_id is None:
-            return
+            return None
         raw_segments = self.worker.last_segments if self.worker is not None else []
         segments = sanitize_segments(raw_segments)
+        kept: str | None = project_id
         try:
             if status != "completed" and not (transcript or visual_report or segments):
                 self.project_store.delete(project_id)
+                kept = None
             else:
-                self.project_store.update(
-                    project_id,
+                changes: dict[str, object] = dict(
                     status=status,
                     transcript_text=transcript,
                     visual_report=visual_report,
                     segments=segments,
                     duration_s=max((seg["end"] for seg in segments), default=0.0),
                 )
+                if kind == "live":
+                    changes["media_path"] = self._live_audio_path()  # the capture is renamed (or removed) when the session ends
+                self.project_store.update(project_id, **changes)
         except (OSError, ValueError):
             LOGGER.warning("Could not save the project result.", exc_info=True)
+            kept = None
         self._refresh_projects()
+        return kept
 
     @Slot()
     def _on_new_project(self) -> None:
@@ -3600,7 +3639,10 @@ class MainWindow(QMainWindow):
             self._append_terminal_log(done)
             self._update_live_mode_ui()
 
-        self._finish_project("cancelled" if cancelled else "completed", transcript=display_text, visual_report=visual_report)
+        finished_project = self._finish_project(
+            "cancelled" if cancelled else "completed", transcript=display_text, visual_report=visual_report
+        )
+        open_in_studio = bool(finished_project) and not cancelled and not self._batch_active
 
         # Batch handling
         if self._batch_active and self._current_batch_index != -1:
@@ -3631,6 +3673,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Diarization", self.diarization_warning)
         self._hide_download_progress_dialog()
         self._cleanup_worker()
+        if open_in_studio and self.studio_controller.open_project(finished_project):
+            self._show_studio()
 
     @Slot(str)
     def _on_worker_failed(self, error_msg: str) -> None:
@@ -3969,6 +4013,7 @@ class MainWindow(QMainWindow):
             self._dock_save_timer.stop()
         self._save_dock_layout()
         self._save_window_geometry()
+        self.studio_controller.close_project()  # saves pending edits, releases the media player
         self._set_window_title_status(None)
         self.stop_hw_monitor()
         # Re-check: the probe may have ended while the saves above ran (then there is nothing left to wait for).
@@ -4556,25 +4601,30 @@ class MainWindow(QMainWindow):
         self._save_config()
         self.status_label.setText("LLM connection profiles saved.")
 
+    def _ensure_llm_profiles(self) -> bool:
+        """True when an enabled LLM profile exists; otherwise offer to open LLM Connections first."""
+        if get_enabled_llm_profiles(self.config.llm_profiles):
+            return True
+        answer = QMessageBox.question(
+            self,
+            "No LLM profiles",
+            (
+                "No enabled LLM profiles are configured.\n\n"
+                "Open LLM Connections now?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self.open_llm_connections_dialog()
+        if get_enabled_llm_profiles(self.config.llm_profiles):
+            return True
+        self.status_label.setText("LLM post-process canceled: no enabled profiles.")
+        return False
+
     def open_llm_postprocess_dialog(self, prefer_loaded_transcript: bool = False) -> None:
-        enabled_profiles = get_enabled_llm_profiles(self.config.llm_profiles)
-        if not enabled_profiles:
-            answer = QMessageBox.question(
-                self,
-                "No LLM profiles",
-                (
-                    "No enabled LLM profiles are configured.\n\n"
-                    "Open LLM Connections now?"
-                ),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if answer == QMessageBox.Yes:
-                self.open_llm_connections_dialog()
-                enabled_profiles = get_enabled_llm_profiles(self.config.llm_profiles)
-            if not enabled_profiles:
-                self.status_label.setText("LLM post-process canceled: no enabled profiles.")
-                return
+        if not self._ensure_llm_profiles():
+            return
 
         current_transcript = ""
         current_ocr = ""

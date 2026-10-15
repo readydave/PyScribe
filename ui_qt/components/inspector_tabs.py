@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QStackedWi
 from ui_qt.components.buttons import IconButton
 
 COLLAPSED_WIDTH = 44
-EXPANDED_MIN_WIDTH = 280
+EXPANDED_MIN_WIDTH = 340
 
 
 class InspectorTabs(QWidget):

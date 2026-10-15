@@ -297,19 +297,87 @@ class MainWindowProjectTests(QtCase):
         win.project_store.update(project.id, status="completed", transcript_text="[S1] Hello", segments=SEGMENTS)
         win._refresh_projects()
         win._open_project(project.id)
-        self.assertEqual(win.text_area.toPlainText(), "[S1] Hello")
-        self.assertEqual(win.nav_rail.current(), "transcribe")
-        self.assertTrue(win.copy_btn.isEnabled())
+        self.assertIs(win.main_stack.currentWidget(), win.studio)
+        self.assertEqual(win.nav_rail.current(), "projects")  # the Studio lives under Projects in the rail
+        self.assertEqual(win.studio.project_id, project.id)
+        self.assertEqual(win.studio.view.segment_model.rowCount(), 2)
         with patch("ui_qt.main_window.QInputDialog.getText", return_value=("Vendor Sync", True)):
             win._rename_project(project.id)
         self.assertEqual(win.project_store.load(project.id).title, "Vendor Sync")
+        self.assertEqual(win.studio.title_label.text(), "Vendor Sync")
         with patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.No):
             win._delete_project(project.id)
         self.assertIsNotNone(win.project_store.load(project.id))
         with patch("ui_qt.main_window.QMessageBox.question", return_value=QMessageBox.Yes):
             win._delete_project(project.id)
         self.assertIsNone(win.project_store.load(project.id))
+        self.assertIsNone(win.studio.project_id)
         self.assertEqual(win.projects_home._summaries, [])
+
+    def test_opening_a_broken_project_warns_and_stays_home(self) -> None:
+        win = self._build_window()
+        with patch("ui_qt.main_window.QMessageBox.warning") as warn:
+            win._open_project("20260101-000000-abcdef12")
+        warn.assert_called_once()
+        self.assertIs(win.main_stack.currentWidget(), win.projects_home)
+
+    def test_studio_back_button_and_nav_leave_the_studio(self) -> None:
+        win = self._build_window()
+        project = win.project_store.create(title="x")
+        win.project_store.update(project.id, status="completed", transcript_text="t", segments=SEGMENTS)
+        win._open_project(project.id)
+        win.studio.back_button.click()
+        self.assertIs(win.main_stack.currentWidget(), win.projects_home)
+        win._open_project(project.id)
+        win.nav_rail.set_current("settings")
+        self.assertEqual(win.main_stack.currentIndex(), 3)
+
+    def test_edits_are_saved_when_leaving_the_studio(self) -> None:
+        win = self._build_window()
+        project = win.project_store.create(title="x")
+        win.project_store.update(project.id, status="completed", transcript_text="t", segments=SEGMENTS)
+        win._open_project(project.id)
+        win.studio.view.segment_model.setData(win.studio.view.segment_model.index(0), "Edited on screen.")
+        win.nav_rail.set_current("projects")
+        self.assertEqual(win.project_store.load(project.id).segments[0]["text"], "Edited on screen.")
+
+    def _finish_job(self, win: MainWindow, *, cancelled: bool = False) -> None:
+        media = self._media("Board Meeting.wav")
+        win.media_path = media
+        win._begin_project(media, "small")
+        win.worker = SimpleNamespace(last_segments=SEGMENTS)
+        with patch("ui_qt.main_window.QMessageBox.warning"):
+            win._on_worker_finished(cancelled, "[S1] Hello.\n[S2] Hi there.", "Hello. Hi there.", "", 1.0, 0.0, 0.0)
+        win.worker = None
+
+    def test_a_finished_job_opens_in_the_studio(self) -> None:
+        win = self._build_window()
+        win.nav_rail.set_current("transcribe")
+        self._finish_job(win)
+        self.assertIs(win.main_stack.currentWidget(), win.studio)
+        self.assertEqual(win.studio.title_label.text(), "Board Meeting")
+        self.assertEqual(win.studio.view.segment_model.rowCount(), 2)
+        self.assertEqual(win.nav_rail.current(), "projects")
+
+    def test_cancelled_and_batch_jobs_do_not_jump_to_the_studio(self) -> None:
+        win = self._build_window()
+        win.nav_rail.set_current("transcribe")
+        self._finish_job(win, cancelled=True)
+        self.assertEqual(win.main_stack.currentIndex(), 1)
+        win._batch_active = True
+        self._finish_job(win)
+        win._batch_active = False
+        self.assertEqual(win.main_stack.currentIndex(), 1)
+
+    def test_closing_the_window_saves_and_releases_the_studio(self) -> None:
+        win = self._build_window()
+        project = win.project_store.create(title="x")
+        win.project_store.update(project.id, status="completed", transcript_text="t", segments=SEGMENTS)
+        win._open_project(project.id)
+        win.studio.view.segment_model.setData(win.studio.view.segment_model.index(1), "Saved on close.")
+        win.close()
+        self.assertEqual(win.project_store.load(project.id).segments[1]["text"], "Saved on close.")
+        self.assertIsNone(win.studio.project_id)
 
     def test_reveal_uses_the_project_folder_only(self) -> None:
         win = self._build_window()

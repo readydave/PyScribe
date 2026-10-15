@@ -26,9 +26,10 @@ class TransportBar(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("TransportBar")
-        self._player = QMediaPlayer(self)
-        self._audio = QAudioOutput(self)
-        self._player.setAudioOutput(self._audio)
+        # The player is created when a recording is first loaded and freed again on unload, so a window that
+        # never plays anything (most of them) holds no audio device or decoder threads.
+        self._player: QMediaPlayer | None = None
+        self._audio: QAudioOutput | None = None
         self._loaded = False
         self._duration_hint_ms = 0
         self._pending_seek_ms: int | None = None
@@ -67,12 +68,33 @@ class TransportBar(QWidget):
         self.notice.setVisible(False)
         outer.addWidget(self.notice)
 
-        self._player.positionChanged.connect(self._on_position)
-        self._player.durationChanged.connect(self._on_duration)
-        self._player.playbackStateChanged.connect(self._on_state)
-        self._player.errorOccurred.connect(self._on_error)
-        self._player.mediaStatusChanged.connect(self._on_media_status)
         self.unload("No recording is available for this project.")
+
+    def _ensure_player(self) -> QMediaPlayer:
+        if self._player is None:
+            player = QMediaPlayer(self)
+            audio = QAudioOutput(self)
+            player.setAudioOutput(audio)
+            player.positionChanged.connect(self._on_position)
+            player.durationChanged.connect(self._on_duration)
+            player.playbackStateChanged.connect(self._on_state)
+            player.errorOccurred.connect(self._on_error)
+            player.mediaStatusChanged.connect(self._on_media_status)
+            player.setPlaybackRate(float(self.speed_combo.currentData() or 1.0))
+            self._player, self._audio = player, audio
+        return self._player
+
+    def _release_player(self) -> None:
+        player, audio = self._player, self._audio
+        self._player = self._audio = None
+        if player is None:
+            return
+        player.stop()
+        player.setSource(QUrl())
+        player.setAudioOutput(None)
+        player.deleteLater()
+        if audio is not None:
+            audio.deleteLater()
 
     # --- loading ---------------------------------------------------------------------------------
 
@@ -85,15 +107,14 @@ class TransportBar(QWidget):
             self._set_enabled(False, "The recording for this project is no longer available. The transcript can still be read and exported.")
             return False
         self._loaded = True
-        self._player.setSource(QUrl.fromLocalFile(media_path))
+        self._ensure_player().setSource(QUrl.fromLocalFile(media_path))
         self._set_enabled(True, "")
         self._update_time()
         return True
 
     def unload(self, message: str = "") -> None:
         """Stop and release the current recording."""
-        self._player.stop()
-        self._player.setSource(QUrl())
+        self._release_player()
         self._loaded = False
         self._pending_seek_ms = None
         self.waveform.set_position_ms(0)
@@ -117,20 +138,21 @@ class TransportBar(QWidget):
         return self._loaded and self.play_button.isEnabled()
 
     def is_playing(self) -> bool:
-        return self._player.playbackState() == QMediaPlayer.PlayingState
+        return self._player is not None and self._player.playbackState() == QMediaPlayer.PlayingState
 
     def position_ms(self) -> int:
-        return int(self._player.position())
+        return int(self._player.position()) if self._player is not None else 0
 
     def duration_ms(self) -> int:
-        return int(self._player.duration()) or self._duration_hint_ms
+        return (int(self._player.duration()) if self._player is not None else 0) or self._duration_hint_ms
 
     def play(self) -> None:
-        if self.is_available():
+        if self.is_available() and self._player is not None:
             self._player.play()
 
     def pause(self) -> None:
-        self._player.pause()
+        if self._player is not None:
+            self._player.pause()
 
     def toggle(self) -> None:
         if self.is_playing():
@@ -139,7 +161,7 @@ class TransportBar(QWidget):
             self.play()
 
     def seek_ms(self, position_ms: int) -> None:
-        if not self.is_available():
+        if not self.is_available() or self._player is None:
             return
         duration = self.duration_ms()
         target = max(0, min(int(position_ms), duration if duration else int(position_ms)))
@@ -160,7 +182,8 @@ class TransportBar(QWidget):
             self._player.setPosition(target)
 
     def _on_speed_changed(self) -> None:
-        self._player.setPlaybackRate(float(self.speed_combo.currentData() or 1.0))
+        if self._player is not None:
+            self._player.setPlaybackRate(float(self.speed_combo.currentData() or 1.0))
 
     def _on_position(self, position_ms: int) -> None:
         self.waveform.set_position_ms(position_ms)

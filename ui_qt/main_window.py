@@ -19,6 +19,7 @@ from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QDragEnterEvent, Q
 from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
 from PySide6.QtWidgets import (
     QSizePolicy,
+    QSpinBox,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -92,12 +93,14 @@ from services import (
     transcribe_media_file,
 )
 from services.logging_service import configure_logging, get_log_path
-from services.project_store import ProjectStore, resolve_projects_root, sanitize_segments
+from services.project_store import ENV_PROJECTS_DIR, ProjectStore, resolve_projects_root, sanitize_segments
 from services.ui_themes import all_themes
 from ui_qt import theme
-from ui_qt.components import NavRail
+from ui_qt.components import AppButton, Drawer, NavRail, SegmentedControl
+from ui_qt.job_status import ACTIVE_PHRASES, JobStatusBar
 from ui_qt.components import tokens as component_tokens
 from ui_qt.views.projects_home import ProjectsHome
+from ui_qt.views.templates_view import TemplatesView
 from ui_qt.views.studio.controller import StudioController
 from ui_qt.views.studio.studio_view import StudioView
 from ui_qt.benchmark_dialog import BenchmarkDialog
@@ -690,8 +693,6 @@ class DiarBackendProbeWorker(QObject):
             self.finished.emit([], str(exc))
 
 
-DOCK_LAYOUT_VERSION = 1
-NARROW_WINDOW_WIDTH = 1500
 TRANSCRIPT_MIN_WIDTH = 300
 DIAR_PROBE_CLOSE_TIMEOUT_MS = 15000
 
@@ -713,7 +714,6 @@ class MainWindow(QMainWindow):
         self.project_store = ProjectStore(resolve_projects_root(self.config.projects_dir))
         self._active_project_id: str | None = None
         self._active_project_kind = ""
-        self._docks_sized_on_show = False
         self.media_path: str | None = None
         self.last_open_dir: str = self.config.last_open_dir or os.path.expanduser("~")
         self.last_save_dir: str | None = self.config.last_save_dir
@@ -770,12 +770,11 @@ class MainWindow(QMainWindow):
         self._batch_active: bool = False
         self._current_batch_index: int = -1
 
-        self._fit_to_available_screen()  # first, so the default dock layout sees the real window width
+        self._fit_to_available_screen()
         self._build_ui()
         self._build_menus()
         self._restore_window_geometry()
         self._apply_tab_order()
-        self._restore_dock_layout()
         self._apply_theme()
         QApplication.styleHints().colorSchemeChanged.connect(self._on_system_scheme_changed)
         self.hw_metrics.connect(self.hw_metrics_label.setText)
@@ -787,7 +786,6 @@ class MainWindow(QMainWindow):
         self._refresh_live_device_choices()
         self._update_live_mode_ui()
         self._apply_startup_defaults()
-        QTimer.singleShot(0, self._apply_responsive_layout_state)
         self._ui_ready = True
         LOGGER.info("Qt MainWindow initialized runtime=%s compute=%s", self.runtime.device, self.runtime.compute_type)
 
@@ -850,7 +848,10 @@ class MainWindow(QMainWindow):
         self.projects_home.delete_project_requested.connect(self._delete_project)
         self.main_stack.addWidget(self.projects_home)
         self.main_stack.addWidget(self._build_transcription_view())
-        self.main_stack.addWidget(self._build_llm_workspace_view())  # Templates, until it gets its own view
+        self.templates_view = TemplatesView()
+        self.templates_view.use_requested.connect(self._use_template)
+        self.templates_view.connections_requested.connect(self.open_llm_connections_dialog)
+        self.main_stack.addWidget(self.templates_view)
         self.main_stack.addWidget(self._build_settings_view())
         self.studio = StudioView()
         self.studio.back_requested.connect(lambda: self.nav_rail.set_current("projects"))
@@ -866,9 +867,39 @@ class MainWindow(QMainWindow):
             save_config=self._save_config,
         )
         self.studio_controller.project_changed.connect(self._refresh_projects)
-        self.studio_controller.status.connect(self.status_label.setText)
+        self.studio_controller.status.connect(self._on_studio_status)
         self.main_stack.addWidget(self.studio)
-        root_layout.addWidget(self.main_stack, 1)
+
+        self.details_drawer = Drawer("Job details", width=460)
+        self.details_drawer.body.addWidget(self.job_timeline, 1)
+        self.job_timeline.details_toggle.setChecked(True)  # the pipeline log is the point of this panel
+        details_actions = QHBoxLayout()
+        details_actions.addWidget(self.force_stop_btn)
+        self.performance_button = AppButton("Show performance", "secondary")
+        details_actions.addWidget(self.performance_button)
+        details_actions.addStretch(1)
+        self.details_drawer.body.addLayout(details_actions)
+        self.performance_drawer = Drawer("Performance", width=380)
+        self.performance_drawer.body.addWidget(self.hw_metrics_label)
+        self.performance_drawer.body.addWidget(self.hw_panel)
+        self.performance_drawer.body.addStretch(1)
+        self.details_drawer.visibility_changed.connect(lambda shown: shown and self.performance_drawer.close_drawer())
+        self.performance_drawer.visibility_changed.connect(lambda shown: shown and self.details_drawer.close_drawer())
+        self.job_status.details_requested.connect(self.details_drawer.toggle)
+        self.performance_button.clicked.connect(lambda: self._set_drawer(self.performance_drawer, True))
+
+        content_row = QHBoxLayout()
+        content_row.setContentsMargins(0, 0, 0, 0)
+        content_row.setSpacing(0)
+        content_row.addWidget(self.main_stack, 1)
+        content_row.addWidget(self.details_drawer)
+        content_row.addWidget(self.performance_drawer)
+        content_column = QVBoxLayout()
+        content_column.setContentsMargins(0, 0, 0, 0)
+        content_column.setSpacing(0)
+        content_column.addWidget(self.job_status)
+        content_column.addLayout(content_row, 1)
+        root_layout.addLayout(content_column, 1)
 
         self._refresh_projects()
         self.nav_rail.set_current("projects")
@@ -890,17 +921,10 @@ class MainWindow(QMainWindow):
         title_row = QHBoxLayout()
         title_col = QVBoxLayout()
 
-        title = QLabel("New Transcription")
-        title.setObjectName("PageTitle")
-        title_font = QFont(self.font())
-        title_font.setPointSize(22)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        subtitle = QLabel("Configure settings, drop media, and process.")
-        subtitle.setObjectName("PageSubtitle")
-        subtitle_font = QFont(self.font())
-        subtitle_font.setPointSize(10)
-        subtitle.setFont(subtitle_font)
+        title = QLabel("New transcription")
+        title.setProperty("type", "title")
+        subtitle = QLabel("Choose a recording, pick a model and process it.")
+        subtitle.setProperty("type", "caption")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
         title_row.addLayout(title_col, 1)
@@ -1003,10 +1027,8 @@ class MainWindow(QMainWindow):
         setup_layout.addWidget(live_card)
         self.live_card = live_card
 
-        settings_grid = QGridLayout()
-        settings_grid.setHorizontalSpacing(12)
-        settings_grid.setVerticalSpacing(12)
-        self.settings_grid = settings_grid
+        settings_column = QVBoxLayout()
+        settings_column.setSpacing(12)
 
         general_card = QFrame()
         general_card.setObjectName("Card")
@@ -1175,26 +1197,29 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.visual_options_widget)
         advanced_layout.addStretch(1)
 
-        self._update_transcription_card_columns()
-        setup_layout.addWidget(self._wrap_layout(settings_grid))
+        settings_column.addWidget(general_card)
+        settings_column.addWidget(advanced_card)
+        setup_layout.addWidget(self._wrap_layout(settings_column))
         setup_layout.addStretch(1)
 
         actions = FlowLayout()
         self.transcribe_btn = QPushButton("Process File")
-        self.transcribe_btn.setProperty("role", "primary")
+        self.transcribe_btn.setProperty("variant", "primary")
         self.transcribe_btn.clicked.connect(self.start_transcription)
         self.stop_live_btn = QPushButton("Stop")
         self.stop_live_btn.setEnabled(False)
         self.stop_live_btn.setVisible(False)
         self.stop_live_btn.clicked.connect(self.stop_live_capture)
         self.pause_live_btn = QPushButton("Pause")
+        self.pause_live_btn.setProperty("variant", "secondary")
         self.pause_live_btn.setEnabled(False)
         self.pause_live_btn.setVisible(False)
         self.pause_live_btn.clicked.connect(self.toggle_live_pause)
-        self.cancel_btn = QPushButton("Cancel")
+        self.job_status = JobStatusBar()
+        self.cancel_btn = self.job_status.cancel_button  # shown with the job status while work is active
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_transcription)
-        self.force_stop_btn = QPushButton("Force Stop")
+        self.force_stop_btn = AppButton("Force stop", "ghost")  # lives in the Details drawer
         self.force_stop_btn.setEnabled(False)
         self.force_stop_btn.clicked.connect(self.force_stop_transcription)
         self.save_btn = QToolButton()
@@ -1219,8 +1244,10 @@ class MainWindow(QMainWindow):
         self.rename_with_title_btn.clicked.connect(self._on_rename_with_title_clicked)
 
         self.open_btn = QPushButton("Open Folder")
+        self.open_btn.setProperty("variant", "secondary")
         self.open_btn.clicked.connect(self.open_transcriptions_folder)
         self.copy_btn = QPushButton("Copy")
+        self.copy_btn.setProperty("variant", "secondary")
         self.copy_btn.setEnabled(False)
         self.copy_btn.clicked.connect(self.copy_transcript)
         # Two rows keep the buttons readable when the transcript area is narrow:
@@ -1228,8 +1255,6 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.transcribe_btn)
         actions.addWidget(self.stop_live_btn)
         actions.addWidget(self.pause_live_btn)
-        actions.addWidget(self.cancel_btn)
-        actions.addWidget(self.force_stop_btn)
         output_actions = FlowLayout()
         output_actions.addWidget(self.save_btn)
         output_actions.addWidget(self.rename_with_title_btn)
@@ -1258,12 +1283,7 @@ class MainWindow(QMainWindow):
         self.terminal_log = self.job_timeline.log
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("StatusLine")
-        progress_box = QWidget()
-        progress_layout = QVBoxLayout(progress_box)
-        progress_layout.setContentsMargins(8, 8, 8, 8)
-        progress_layout.setSpacing(8)
-        progress_layout.addWidget(self.status_label)
-        progress_layout.addWidget(self.job_timeline)
+        main_layout.insertWidget(2, self.status_label)  # right under the file path, above the job buttons
 
         transcript_card = QFrame()
         transcript_card.setObjectName("Card")
@@ -1340,11 +1360,17 @@ class MainWindow(QMainWindow):
         self.queue_status_summary.setObjectName("metricsLabel")
         queue_layout.addWidget(self.queue_status_summary)
 
-        queue_box = QWidget()
-        queue_box_layout = QVBoxLayout(queue_box)
-        queue_box_layout.setContentsMargins(8, 8, 8, 8)
-        queue_box_layout.addWidget(queue_card)
-        queue_box_layout.addStretch(1)
+        self.queue_card = queue_card
+        self.queue_toggle = QToolButton()
+        self.queue_toggle.setObjectName("detailsToggle")
+        self.queue_toggle.setCheckable(True)
+        self.queue_toggle.setText("Batch queue")
+        self.queue_toggle.setToolTip("Transcribe several files one after another")
+        self.queue_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.queue_toggle.toggled.connect(self._on_queue_toggled)
+        setup_layout.insertWidget(setup_layout.count() - 1, self.queue_toggle, 0, Qt.AlignLeft)
+        setup_layout.insertWidget(setup_layout.count() - 1, queue_card)
+        self._on_queue_toggled(False)
 
         self.transcription_scroll = QScrollArea()
         self.transcription_scroll.setWidgetResizable(True)
@@ -1352,18 +1378,17 @@ class MainWindow(QMainWindow):
         self.transcription_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.transcription_scroll.setWidget(setup_content)
 
-        self.dock_host = QMainWindow()
-        self.dock_host.setObjectName("TranscriptionDocks")
-        self.dock_host.setWindowFlags(Qt.Widget)
-        self.dock_host.setDockNestingEnabled(True)
-        self.dock_host.setCentralWidget(main_surface)
-        self.setup_dock = self._make_dock("Setup", "dock_setup", self.transcription_scroll)
-        self.progress_dock = self._make_dock("Progress", "dock_progress", progress_box)
-        self.hardware_dock = self._make_dock("Hardware", "dock_hardware", self.hw_panel)
-        self.queue_dock = self._make_dock("Batch queue", "dock_queue", queue_box)
-        self.docks: list[QDockWidget] = [self.setup_dock, self.progress_dock, self.hardware_dock, self.queue_dock]
-        self._arrange_default_docks()
-        page_layout.addWidget(self.dock_host, 1)
+        self.transcription_scroll.setMinimumWidth(340)
+        self.main_surface = main_surface
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self.transcription_scroll)
+        splitter.addWidget(main_surface)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([430, 640])
+        self.transcribe_splitter = splitter
+        page_layout.addWidget(splitter, 1)
         return page
 
     @staticmethod
@@ -1409,70 +1434,13 @@ class MainWindow(QMainWindow):
     def _on_advanced_toggled(self, expanded: bool) -> None:
         self.advanced_body.setVisible(expanded)
         self.advanced_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
-        if hasattr(self, "dock_host"):
+        if getattr(self, "_ui_ready", False):
             self._save_config(setup_advanced_expanded=expanded)
 
-    def _make_dock(self, title: str, object_name: str, widget: QWidget) -> QDockWidget:
-        dock = QDockWidget(title, self.dock_host)
-        dock.setObjectName(object_name)
-        dock.setWidget(widget)
-        dock.setFeatures(self._dock_features())
-        dock.installEventFilter(self)
-        dock.topLevelChanged.connect(lambda _floating: self._update_transcription_card_columns())
-        dock.dockLocationChanged.connect(lambda _area: self._update_transcription_card_columns())
-        return dock
-
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        """Persist the dock layout shortly after the user drags a separator or resizes a dock."""
-        if event.type() == QEvent.Resize and watched in getattr(self, "docks", ()):
-            self._schedule_dock_layout_save()
-        return super().eventFilter(watched, event)
-
-    def _schedule_dock_layout_save(self) -> None:
-        if not getattr(self, "_ui_ready", False):
-            return
-        timer = getattr(self, "_dock_save_timer", None)
-        if timer is None:
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.setInterval(600)
-            timer.timeout.connect(self._save_dock_layout)
-            self._dock_save_timer = timer
-        timer.start()
-
-    def _dock_features(self) -> QDockWidget.DockWidgetFeature:
-        if getattr(self, "_docks_locked", False):
-            return QDockWidget.NoDockWidgetFeatures
-        return QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable
-
-    def _arrange_default_docks(self) -> None:
-        host = self.dock_host
-        for dock in self.docks:
-            host.removeDockWidget(dock)
-            dock.setFloating(False)
-        host.addDockWidget(Qt.LeftDockWidgetArea, self.setup_dock)
-        host.addDockWidget(Qt.TopDockWidgetArea, self.progress_dock)
-        # On narrow windows the Hardware panel joins the left tabs so the transcript keeps its width.
-        narrow = self.width() < NARROW_WINDOW_WIDTH
-        host.addDockWidget(Qt.LeftDockWidgetArea if narrow else Qt.RightDockWidgetArea, self.hardware_dock)
-        host.addDockWidget(Qt.LeftDockWidgetArea, self.queue_dock)
-        host.tabifyDockWidget(self.setup_dock, self.queue_dock)
-        if narrow:
-            host.tabifyDockWidget(self.queue_dock, self.hardware_dock)
-        for dock in self.docks:
-            dock.show()
-        self.setup_dock.raise_()
-        self._apply_default_dock_sizes()
-        QTimer.singleShot(0, self._apply_default_dock_sizes)
-
-    def _apply_default_dock_sizes(self) -> None:
-        if getattr(self, "_dock_sizes_restored", False):
-            return  # a saved layout's sizes win over the deferred defaults queued while building
-        if self.hardware_dock.isVisible() and self.dock_host.dockWidgetArea(self.hardware_dock) == Qt.RightDockWidgetArea:
-            self.dock_host.resizeDocks([self.setup_dock, self.hardware_dock], [400, 340], Qt.Horizontal)
-        else:
-            self.dock_host.resizeDocks([self.setup_dock], [380], Qt.Horizontal)
-        self.dock_host.resizeDocks([self.progress_dock], [160], Qt.Vertical)
+    @Slot(bool)
+    def _on_queue_toggled(self, expanded: bool) -> None:
+        self.queue_card.setVisible(expanded)
+        self.queue_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
 
     def _apply_tab_order(self) -> None:
         """Tab through the window in reading order: sidebar, setup, actions, transcript, progress, queue."""
@@ -1529,78 +1497,15 @@ class MainWindow(QMainWindow):
             QWidget.setTabOrder(current, following)
 
     @Slot()
-    def _reset_dock_layout(self) -> None:
-        self._dock_sizes_restored = False
-        self._arrange_default_docks()
-        self.lock_layout_action.setChecked(False)
-        self._save_dock_layout()
-
-    @Slot(bool)
-    def _set_docks_locked(self, locked: bool) -> None:
-        self._docks_locked = bool(locked)
-        for dock in self.docks:
-            if locked and dock.isFloating():
-                dock.setFloating(False)
-            dock.setFeatures(self._dock_features())
-
-    def _restore_dock_layout(self) -> None:
-        raw = getattr(self.config, "dock_layout", None)
-        if raw:
-            state = QByteArray.fromBase64(raw.encode("ascii", errors="ignore"))
-            if not self.dock_host.restoreState(state, DOCK_LAYOUT_VERSION):
-                LOGGER.info("Saved dock layout was not compatible; using the default layout.")
-                self._arrange_default_docks()
-            else:
-                self._dock_sizes_restored = True
-        locked = bool(getattr(self.config, "dock_locked", False))
-        self.lock_layout_action.setChecked(locked)
-        self._set_docks_locked(locked)
-
-    def _save_dock_layout(self) -> None:
-        try:
-            state = bytes(self.dock_host.saveState(DOCK_LAYOUT_VERSION).toBase64().data()).decode("ascii")
-        except Exception:
-            LOGGER.warning("Could not serialize dock layout.", exc_info=True)
-            return
-        self._save_config(dock_layout=state, dock_locked=bool(getattr(self, "_docks_locked", False)))
-
-    def _build_llm_workspace_view(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-        title = QLabel("LLM Workspace")
-        title.setObjectName("PageTitle")
-        subtitle = QLabel("Open post-processing and connection management tools.")
-        subtitle.setObjectName("PageSubtitle")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-
-        card = QFrame()
-        card.setObjectName("Card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(14, 14, 14, 14)
-        card_layout.setSpacing(10)
-        card_layout.addWidget(QLabel("Post-Processing"))
-        open_workspace_btn = QPushButton("Open LLM Post-Process")
-        open_workspace_btn.clicked.connect(lambda _checked=False: self.open_llm_postprocess_dialog())
-        manage_connections_btn = QPushButton("Open LLM Connections")
-        manage_connections_btn.clicked.connect(self.open_llm_connections_dialog)
-        card_layout.addWidget(open_workspace_btn)
-        card_layout.addWidget(manage_connections_btn)
-        layout.addWidget(card)
-        layout.addStretch(1)
-        return page
-
     def _build_settings_view(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        title = QLabel("Settings & Connections")
-        title.setObjectName("PageTitle")
-        subtitle = QLabel("Manage API keys and defaults.")
+        title = QLabel("Settings")
+        title.setProperty("type", "title")
+        subtitle = QLabel("Appearance, privacy, AI connections, defaults and diagnostics. Set once, then forget.")
         subtitle.setObjectName("PageSubtitle")
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -1622,7 +1527,9 @@ class MainWindow(QMainWindow):
         api_layout.setContentsMargins(14, 14, 14, 14)
         api_layout.setHorizontalSpacing(8)
         api_layout.setVerticalSpacing(8)
-        api_layout.addWidget(QLabel("AI connections"), 0, 0, 1, 2)
+        api_heading = QLabel("AI connections")
+        api_heading.setProperty("type", "heading")
+        api_layout.addWidget(api_heading, 0, 0, 1, 2)
         ai_hint = QLabel(
             "Models for summaries and action items: local (Ollama, LM Studio), on your network, or hosted "
             "(Claude, OpenAI, Gemini, OpenRouter). API keys are set per connection and are never saved in "
@@ -1642,7 +1549,9 @@ class MainWindow(QMainWindow):
         defaults_layout.setContentsMargins(14, 14, 14, 14)
         defaults_layout.setHorizontalSpacing(8)
         defaults_layout.setVerticalSpacing(8)
-        defaults_layout.addWidget(QLabel("Start-up defaults"), 0, 0, 1, 2)
+        defaults_heading = QLabel("Start-up defaults")
+        defaults_heading.setProperty("type", "heading")
+        defaults_layout.addWidget(defaults_heading, 0, 0, 1, 2)
         defaults_layout.addWidget(QLabel("Model"), 1, 0)
         self.default_model_input = QLineEdit(self.config.default_model or "")
         self.default_model_input.setPlaceholderText("Leave empty to start with the last model you used")
@@ -1678,10 +1587,184 @@ class MainWindow(QMainWindow):
         remember_hint.setWordWrap(True)
         defaults_layout.addWidget(remember_hint, 7, 0, 1, 2)
 
+        content_layout.addWidget(self._build_appearance_card())
+        content_layout.addWidget(self._build_privacy_card())
         content_layout.addWidget(api_card)
         content_layout.addWidget(defaults_card)
+        content_layout.addWidget(self._build_diagnostics_card())
         content_layout.addStretch(1)
         return page
+
+    @staticmethod
+    def _settings_card(title: str) -> tuple[QFrame, QGridLayout]:
+        card = QFrame()
+        card.setObjectName("Card")
+        grid = QGridLayout(card)
+        grid.setContentsMargins(14, 14, 14, 14)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        heading = QLabel(title)
+        heading.setProperty("type", "heading")
+        grid.addWidget(heading, 0, 0, 1, 3)
+        grid.setColumnStretch(1, 1)
+        return card, grid
+
+    def _build_appearance_card(self) -> QFrame:
+        card, grid = self._settings_card("Appearance & accessibility")
+        grid.addWidget(QLabel("Theme"), 1, 0)
+        self.theme_segment = SegmentedControl([("system", "System"), ("light", "Light"), ("dark", "Dark")])
+        self.theme_segment.set_current(self.theme_mode)
+        self.theme_segment.changed.connect(self._set_theme_mode)
+        grid.addWidget(self.theme_segment, 1, 1, alignment=Qt.AlignLeft)
+        grid.addWidget(QLabel("Colours"), 2, 0)
+        self.colour_theme_combo = QComboBox()
+        self.colour_theme_combo.setAccessibleName("Colour theme")
+        self.colour_theme_combo.activated.connect(
+            lambda index: self._set_theme_id(str(self.colour_theme_combo.itemData(index) or ""))
+        )
+        grid.addWidget(self.colour_theme_combo, 2, 1)
+        edit_themes_btn = AppButton("Edit themes…", "secondary")
+        edit_themes_btn.clicked.connect(self.open_theme_editor)
+        grid.addWidget(edit_themes_btn, 2, 2)
+        grid.addWidget(QLabel("Transcript text size"), 3, 0)
+        self.transcript_size_spin = QSpinBox()
+        self.transcript_size_spin.setRange(component_tokens.TRANSCRIPT_PX_MIN, component_tokens.TRANSCRIPT_PX_MAX)
+        self.transcript_size_spin.setSuffix(" px")
+        self.transcript_size_spin.setValue(self.config.transcript_font_px)
+        self.transcript_size_spin.setAccessibleName("Transcript text size")
+        self.transcript_size_spin.valueChanged.connect(self._on_transcript_px_changed)
+        grid.addWidget(self.transcript_size_spin, 3, 1, alignment=Qt.AlignLeft)
+        grid.addWidget(QLabel("Reduce motion"), 4, 0)
+        self.reduced_motion_combo = QComboBox()
+        for label, value in (("Automatic", "auto"), ("On", "on"), ("Off", "off")):
+            self.reduced_motion_combo.addItem(label, value)
+        self.reduced_motion_combo.setCurrentIndex(max(self.reduced_motion_combo.findData(self.config.reduced_motion), 0))
+        self.reduced_motion_combo.setAccessibleName("Reduce motion")
+        self.reduced_motion_combo.setToolTip("Turns off sliding panels and busy-bar animation. Automatic follows PYSCRIBE_REDUCED_MOTION.")
+        self.reduced_motion_combo.currentIndexChanged.connect(self._on_reduced_motion_changed)
+        grid.addWidget(self.reduced_motion_combo, 4, 1, alignment=Qt.AlignLeft)
+        return card
+
+    def _build_privacy_card(self) -> QFrame:
+        card, grid = self._settings_card("Privacy & storage")
+        note = QLabel("All processing is local by default. Projects (transcripts, edits and AI outputs) are saved on this device only.")
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        grid.addWidget(note, 1, 0, 1, 3)
+        grid.addWidget(QLabel("Projects folder"), 2, 0)
+        self.projects_dir_input = QLineEdit(str(self.project_store.root))
+        self.projects_dir_input.setReadOnly(True)
+        self.projects_dir_input.setAccessibleName("Projects folder")
+        grid.addWidget(self.projects_dir_input, 2, 1)
+        buttons = QHBoxLayout()
+        self.projects_dir_browse_btn = AppButton("Change…", "secondary")
+        self.projects_dir_browse_btn.clicked.connect(self._choose_projects_dir)
+        self.projects_dir_reset_btn = AppButton("Reset", "ghost")
+        self.projects_dir_reset_btn.clicked.connect(lambda: self._set_projects_dir(None))
+        open_btn = AppButton("Open", "ghost")
+        open_btn.clicked.connect(lambda: self._reveal_folder(str(self.project_store.root)))
+        for button in (self.projects_dir_browse_btn, self.projects_dir_reset_btn, open_btn):
+            buttons.addWidget(button)
+        grid.addLayout(buttons, 2, 2)
+        if os.environ.get(ENV_PROJECTS_DIR, "").strip():
+            for widget in (self.projects_dir_browse_btn, self.projects_dir_reset_btn):
+                widget.setEnabled(False)
+            self.projects_dir_input.setToolTip(f"Set by the {ENV_PROJECTS_DIR} environment variable.")
+        return card
+
+    def _build_diagnostics_card(self) -> QFrame:
+        card, grid = self._settings_card("Diagnostics")
+        hint = QLabel("Speed, memory use and logs for troubleshooting. None of this is needed for everyday transcription.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        grid.addWidget(hint, 1, 0, 1, 3)
+        row = QHBoxLayout()
+        for text, handler in (
+            ("Performance panel", lambda: self._set_drawer(self.performance_drawer, True)),
+            ("Run benchmark…", lambda: self.open_benchmark_dialog()),
+            ("Hugging Face token…", lambda: self.configure_hf_token()),
+            ("Open logs folder", lambda: self.open_logs_folder()),
+        ):
+            button = AppButton(text, "secondary")
+            button.clicked.connect(lambda _checked=False, h=handler: h())
+            row.addWidget(button)
+        row.addStretch(1)
+        grid.addLayout(row, 2, 0, 1, 3)
+        return card
+
+    # --- job status, drawers, studio status ---------------------------------------------------------
+
+    def _refresh_job_status(self) -> None:
+        """Show the compact status while work is active (stage, elapsed, cancel); hide it when idle."""
+        if not hasattr(self, "job_status"):
+            return
+        if not self._is_transcription_running():
+            self.job_status.hide_job()
+            return
+        if self._live_capture_active:
+            self.job_status.show_job("Recording (paused)" if self._live_paused else "Recording", None)
+            return
+        active = next((stage for stage in STAGE_ORDER if self.job_tracker.info(stage).state == "active"), None)
+        if active is None:
+            self.job_status.show_job("Starting…", None)
+            return
+        known = active in (Stage.TRANSCRIBE, Stage.SPEAKERS, Stage.VISUALS) and self.job_timeline.bar(active).maximum() > 0
+        self.job_status.show_job(ACTIVE_PHRASES[active.value], self.job_tracker.info(active).percent if known else None)
+
+    def _set_drawer(self, drawer: Drawer, shown: bool) -> None:
+        drawer.open_drawer() if shown else drawer.close_drawer()
+
+    @Slot(str)
+    def _on_studio_status(self, text: str) -> None:
+        self.status_label.setText(text)
+        self.statusBar().showMessage(text, 6000)
+
+    @Slot(str)
+    def _use_template(self, template_id: str) -> None:
+        """Run a template from the Templates page on whatever transcript is loaded (or let the user load one)."""
+        has_transcript = bool(self.transcript_only_text or self.transcript_text)
+        self.open_llm_postprocess_dialog(prefer_loaded_transcript=not has_transcript, initial_template_id=template_id)
+
+    # --- settings handlers ----------------------------------------------------------------------
+
+    @Slot(int)
+    def _on_transcript_px_changed(self, value: int) -> None:
+        self._save_config(transcript_font_px=int(value))
+        self._apply_theme()
+        self.studio.refresh_text_size()
+
+    @Slot(int)
+    def _on_reduced_motion_changed(self, _index: int) -> None:
+        value = str(self.reduced_motion_combo.currentData() or "auto")
+        self._save_config(reduced_motion=value)
+        component_tokens.configure_motion(value)
+
+    def _reveal_folder(self, folder: str) -> None:
+        try:
+            os.makedirs(folder, exist_ok=True)
+            open_folder(folder)
+        except OSError:
+            LOGGER.warning("Could not open folder.", exc_info=True)
+
+    @Slot()
+    def _choose_projects_dir(self) -> None:
+        start = str(self.project_store.root) if self.project_store.root.is_dir() else os.path.expanduser("~")
+        folder = QFileDialog.getExistingDirectory(self, "Choose projects folder", start)
+        if folder:
+            self._set_projects_dir(folder)
+
+    def _set_projects_dir(self, folder: str | None) -> None:
+        """Save new projects in ``folder`` (``None`` restores the default). Existing projects stay where they are."""
+        if self._is_transcription_running():
+            QMessageBox.information(self, "Job running", "Wait for the current job to finish before changing the projects folder.")
+            return
+        self.studio_controller.close_project()
+        self._save_config(projects_dir=folder)
+        self.project_store = ProjectStore(resolve_projects_root(self.config.projects_dir))
+        self.studio_controller.set_store(self.project_store)
+        self.projects_dir_input.setText(str(self.project_store.root))
+        self._refresh_projects()
+        self.status_label.setText("Projects folder changed. Projects saved earlier stay in the previous folder.")
 
     @Slot()
     def _on_default_model_edited(self) -> None:
@@ -1759,10 +1842,6 @@ class MainWindow(QMainWindow):
             self.studio_controller.flush()
         self.main_stack.setCurrentIndex(self._VIEW_INDEX.get(key, 0))
         if key in ("transcribe", "live"):
-            if not self._docks_sized_on_show:
-                # The dock defaults were queued while this page was still hidden, so size them once it is showing.
-                self._docks_sized_on_show = True
-                QTimer.singleShot(0, self._apply_default_dock_sizes)
             self._set_input_mode("live" if key == "live" else "file")
         elif key == "projects":
             self._refresh_projects()
@@ -1996,7 +2075,6 @@ class MainWindow(QMainWindow):
         self.exit_btn.setVisible(not collapsed)
         self.sidebar_toggle_btn.setText("▶" if collapsed else "◀")
         self.sidebar_toggle_btn.setToolTip("Show left panel" if collapsed else "Hide left panel")
-        self._update_transcription_card_columns()
 
     def _append_terminal_log(self, text: str) -> None:
         if not hasattr(self, "terminal_log"):
@@ -2006,33 +2084,6 @@ class MainWindow(QMainWindow):
             return
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.terminal_log.appendPlainText(f"[{timestamp}] {cleaned}")
-
-    def _update_transcription_card_columns(self) -> None:
-        if not hasattr(self, "settings_grid"):
-            return
-        while self.settings_grid.count():
-            self.settings_grid.takeAt(0)
-
-        available_width = self.width()
-        if hasattr(self, "transcription_scroll"):
-            available_width = int(self.transcription_scroll.viewport().width() or available_width)
-        two_columns = available_width >= 900
-        if two_columns:
-            self.settings_grid.addWidget(self.general_settings_card, 0, 0)
-            self.settings_grid.addWidget(self.advanced_options_card, 0, 1)
-            self.settings_grid.setColumnStretch(0, 1)
-            self.settings_grid.setColumnStretch(1, 1)
-            return
-        self.settings_grid.addWidget(self.general_settings_card, 0, 0)
-        self.settings_grid.addWidget(self.advanced_options_card, 1, 0)
-        self.settings_grid.setColumnStretch(0, 1)
-
-    def _apply_responsive_layout_state(self) -> None:
-        self._update_transcription_card_columns()
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        self._apply_responsive_layout_state()
 
     def _build_menus(self) -> None:
         tools_menu = self.menuBar().addMenu("&Tools")
@@ -2065,17 +2116,18 @@ class MainWindow(QMainWindow):
         )
         tools_menu.addAction(process_existing_action)
 
-        panels_menu = view_menu.addMenu("Panels")
-        for dock in self.docks:
-            panels_menu.addAction(dock.toggleViewAction())
-        panels_menu.addSeparator()
-        self.lock_layout_action = QAction("Lock layout", self)
-        self.lock_layout_action.setCheckable(True)
-        self.lock_layout_action.toggled.connect(self._set_docks_locked)
-        panels_menu.addAction(self.lock_layout_action)
-        reset_layout_action = QAction("Reset layout", self)
-        reset_layout_action.triggered.connect(self._reset_dock_layout)
-        panels_menu.addAction(reset_layout_action)
+        self.job_details_action = QAction("Job details", self)
+        self.job_details_action.setShortcut(QKeySequence("Ctrl+Shift+J"))
+        self.job_details_action.setCheckable(True)
+        self.job_details_action.triggered.connect(lambda checked: self._set_drawer(self.details_drawer, checked))
+        view_menu.addAction(self.job_details_action)
+        self.performance_action = QAction("Performance", self)
+        self.performance_action.setShortcut(QKeySequence("Ctrl+Shift+H"))
+        self.performance_action.setCheckable(True)
+        self.performance_action.triggered.connect(lambda checked: self._set_drawer(self.performance_drawer, checked))
+        view_menu.addAction(self.performance_action)
+        self.details_drawer.visibility_changed.connect(self.job_details_action.setChecked)
+        self.performance_drawer.visibility_changed.connect(self.performance_action.setChecked)
         view_menu.addSeparator()
 
         theme_menu = view_menu.addMenu("Theme")
@@ -2129,6 +2181,13 @@ class MainWindow(QMainWindow):
         edit_action = QAction("Edit themes...", self)
         edit_action.triggered.connect(self.open_theme_editor)
         self.colour_theme_menu.addAction(edit_action)
+        if hasattr(self, "colour_theme_combo"):
+            self.colour_theme_combo.blockSignals(True)
+            self.colour_theme_combo.clear()
+            for item in all_themes(self.config.custom_themes):
+                self.colour_theme_combo.addItem(item.name, item.id)
+            self.colour_theme_combo.setCurrentIndex(max(self.colour_theme_combo.findData(self.config.theme_id), 0))
+            self.colour_theme_combo.blockSignals(False)
 
     @Slot()
     def open_theme_editor(self) -> None:
@@ -2172,6 +2231,8 @@ class MainWindow(QMainWindow):
         self.theme_mode = self._sanitize_theme_mode(mode)
         if hasattr(self, "theme_actions") and self.theme_mode in self.theme_actions:
             self.theme_actions[self.theme_mode].setChecked(True)
+        if hasattr(self, "theme_segment"):
+            self.theme_segment.set_current(self.theme_mode)
         self._save_config(theme_mode=self.theme_mode)
         self._apply_theme()
         self._update_diar_ui_state(self.diar_checkbox.isChecked())
@@ -2415,6 +2476,9 @@ class MainWindow(QMainWindow):
 
     def _update_queue_summary(self) -> None:
         count = self.batch_queue_model.rowCount()
+        self.queue_toggle.setText(f"Batch queue ({count})" if count else "Batch queue")
+        if count and not self.queue_toggle.isChecked():
+            self.queue_toggle.setChecked(True)
         if count == 0:
             self.queue_status_summary.setText("Queue: Empty")
         else:
@@ -2612,6 +2676,7 @@ class MainWindow(QMainWindow):
         self.live_timer_label.setText(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
 
     def _update_live_mode_ui(self) -> None:
+        self._refresh_job_status()
         live_mode = self._is_live_mode()
         self.drop_card.setVisible(not live_mode)
         self.live_card.setVisible(live_mode)
@@ -3761,6 +3826,7 @@ class MainWindow(QMainWindow):
             None,
         )
         self.hw_panel.set_stage(active.value if active else None)
+        self._refresh_job_status()
 
     @Slot(bool)
     def _update_diar_ui_state(self, enabled: bool) -> None:
@@ -4009,9 +4075,6 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         probe_running = bool(self._diar_probe_thread and self._diar_probe_thread.isRunning())
-        if getattr(self, "_dock_save_timer", None) is not None:
-            self._dock_save_timer.stop()
-        self._save_dock_layout()
         self._save_window_geometry()
         self.studio_controller.close_project()  # saves pending edits, releases the media player
         self._set_window_title_status(None)
@@ -4034,9 +4097,6 @@ class MainWindow(QMainWindow):
         self._close_timer.setSingleShot(True)
         self._close_timer.timeout.connect(self._on_deferred_close_timeout)
         self._close_timer.start(DIAR_PROBE_CLOSE_TIMEOUT_MS)
-        for dock in self.docks:
-            if dock.isFloating():
-                dock.hide()
         self.hide()
 
     @Slot()
@@ -4622,7 +4682,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("LLM post-process canceled: no enabled profiles.")
         return False
 
-    def open_llm_postprocess_dialog(self, prefer_loaded_transcript: bool = False) -> None:
+    def open_llm_postprocess_dialog(self, prefer_loaded_transcript: bool = False, initial_template_id: str | None = None) -> None:
         if not self._ensure_llm_profiles():
             return
 
@@ -4638,6 +4698,7 @@ class MainWindow(QMainWindow):
             current_ocr_text=current_ocr,
             is_transcription_running=self._is_transcription_running,
             prefer_loaded_transcript=prefer_loaded_transcript,
+            initial_template_id=initial_template_id,
             parent=self,
         )
         dlg.exec()
@@ -4684,6 +4745,7 @@ class MainWindow(QMainWindow):
         live_compute_type: str | object = _UNSET,
         reduced_motion: str | object = _UNSET,
         transcript_font_px: int | object = _UNSET,
+        projects_dir: str | None | object = _UNSET,
     ) -> None:
         try:
             if last_model is not _UNSET:
@@ -4748,6 +4810,8 @@ class MainWindow(QMainWindow):
                 self.config.reduced_motion = str(reduced_motion)
             if transcript_font_px is not _UNSET:
                 self.config.transcript_font_px = int(transcript_font_px)
+            if projects_dir is not _UNSET:
+                self.config.projects_dir = str(projects_dir).strip() or None if projects_dir else None
             self.config.confirmed_visual_backends = sorted(self._confirmed_visual_backend_downloads)
             self.config.last_open_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
             self.config.last_save_dir = self.last_save_dir if self.last_save_dir and os.path.isdir(self.last_save_dir) else self.config.last_save_dir

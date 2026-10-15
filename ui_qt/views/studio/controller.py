@@ -65,6 +65,10 @@ class StudioController(QObject):
         view.copy_requested.connect(self.copy_transcript)
         view.generate_requested.connect(self.generate)
 
+    def set_store(self, store: ProjectStore) -> None:
+        """Use a different projects folder (the caller closes the open project first)."""
+        self._store = store
+
     # --- loading ---------------------------------------------------------------------------------
 
     @property

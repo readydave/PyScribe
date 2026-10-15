@@ -433,24 +433,6 @@ def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = No
             font-weight: 600;
             font-size: 11pt;
         }}
-        QMainWindow::separator {{
-            background: {p.rule};
-            width: 8px;
-            height: 8px;
-            margin: 0;
-        }}
-        QMainWindow::separator:hover, QMainWindow::separator:pressed {{
-            background: {p.accent};
-        }}
-        QDockWidget {{
-            font-weight: 600;
-        }}
-        QDockWidget::title {{
-            background: {p.surface};
-            border: 1px solid {p.rule};
-            padding: 6px 10px;
-            text-align: left;
-        }}
         QTabBar::tab {{
             background: {p.surface};
             color: {p.muted};
@@ -704,6 +686,29 @@ def _component_qss(p: Palette) -> str:
         QFrame[studioCard="true"][primaryAction="true"][selected="true"] {{
             border: 2px solid {p.accent};
             background: {p.surface};
+        }}
+        QListWidget {{
+            border: none;
+            background: {p.surface};
+            outline: none;
+        }}
+        QListWidget::item {{
+            padding: 9px 12px;
+            border-radius: 6px;
+            margin: 1px 4px;
+        }}
+        #JobStatusBar {{
+            background: {p.surface};
+            border: none;
+            border-bottom: 1px solid {p.rule};
+            border-radius: 0px;
+        }}
+        QSplitter::handle:horizontal {{
+            background: {p.page};
+            width: 6px;
+        }}
+        QSplitter::handle:horizontal:hover, QSplitter::handle:horizontal:pressed {{
+            background: {p.accent};
         }}
         #Drawer {{
             background: {p.surface};

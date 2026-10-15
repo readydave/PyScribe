@@ -59,15 +59,12 @@ class CloseDuringProbeTests(unittest.TestCase):
 
     def test_close_returns_quickly_and_hides_while_probe_runs(self) -> None:
         win, _gate = self._build_window()
-        win.setup_dock.setFloating(True)
-        win.setup_dock.show()
         started = time.monotonic()
         closed = win.close()
         elapsed = time.monotonic() - started
         self.assertFalse(closed)
         self.assertLess(elapsed, 0.5)
         self.assertFalse(win.isVisible())
-        self.assertFalse(win.setup_dock.isVisible())
         self.assertTrue(win._diar_probe_running())
         self.assertFalse(win.close())  # a second close while pending is a no-op
         self.assertTrue(win._close_pending)

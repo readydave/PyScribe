@@ -57,7 +57,7 @@ class JobTimeline(QFrame):
             bar.setMinimumHeight(24)
             detail = QLabel("--")
             detail.setObjectName("StageDetail")
-            detail.setMinimumWidth(190)
+            detail.setMinimumWidth(96)
             detail.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             grid.addWidget(name, row, 0)
             grid.addWidget(bar, row, 1)

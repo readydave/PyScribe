@@ -1,7 +1,7 @@
 """UI tokens shared by the Qt app and the Gradio listener (no Qt imports).
 
 Colours now come from ``services.ui_themes``; this module keeps the font constants and the default
-(Iron-gall) palettes under the names the UIs already import.
+palettes under the names the UIs already import.
 """
 
 from __future__ import annotations

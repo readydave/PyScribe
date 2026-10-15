@@ -52,6 +52,8 @@ class AppConfig:
     default_batched: bool = False
     sidebar_collapsed: bool = False
     window_geometry: str | None = None
+    reduced_motion: str = "auto"
+    transcript_font_px: int = 16
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".pyscribe_config.json"
@@ -109,6 +111,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         default_batched=_as_bool(data.get("default_batched"), default=False),
         sidebar_collapsed=_as_bool(data.get("sidebar_collapsed"), default=False),
         window_geometry=_as_optional_str(data.get("window_geometry")),
+        reduced_motion=_as_choice(data.get("reduced_motion"), ("auto", "on", "off")),
+        transcript_font_px=_as_clamped_int(data.get("transcript_font_px"), 16, 12, 28),
     )
 
 
@@ -226,6 +230,17 @@ def _as_choice(value: object, allowed: tuple[str, ...]) -> str:
     """Normalized member of ``allowed``; the first entry (``auto``) for anything else."""
     normalized = str(value or "").strip().lower()
     return normalized if normalized in allowed else allowed[0]
+
+
+def _as_clamped_int(value: object, default: int, low: int, high: int) -> int:
+    """An int within ``low``..``high``; ``default`` when ``value`` is not a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return default
+    try:
+        number = int(float(value))
+    except (ValueError, OverflowError):
+        return default
+    return max(low, min(high, number))
 
 
 def _as_backend_list(value: object) -> list[str]:

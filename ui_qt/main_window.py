@@ -94,6 +94,7 @@ from services import (
 from services.logging_service import configure_logging, get_log_path
 from services.ui_themes import all_themes
 from ui_qt import theme
+from ui_qt.components import tokens as component_tokens
 from ui_qt.benchmark_dialog import BenchmarkDialog
 from ui_qt.flow_layout import FlowLayout
 from ui_qt.hw_panel import HardwarePanel
@@ -1943,6 +1944,8 @@ class MainWindow(QMainWindow):
         self._apply_theme()
 
     def _apply_theme(self) -> None:
+        component_tokens.configure_motion(self.config.reduced_motion)
+        component_tokens.set_transcript_px(self.config.transcript_font_px)
         theme.apply_theme(
             QApplication.instance(),
             self.theme_mode,
@@ -4449,6 +4452,10 @@ class MainWindow(QMainWindow):
         default_batched: bool | object = _UNSET,
         sidebar_collapsed: bool | object = _UNSET,
         window_geometry: str | None | object = _UNSET,
+        live_device_mode: str | object = _UNSET,
+        live_compute_type: str | object = _UNSET,
+        reduced_motion: str | object = _UNSET,
+        transcript_font_px: int | object = _UNSET,
     ) -> None:
         try:
             if last_model is not _UNSET:
@@ -4505,6 +4512,14 @@ class MainWindow(QMainWindow):
                 self.config.sidebar_collapsed = bool(sidebar_collapsed)
             if window_geometry is not _UNSET:
                 self.config.window_geometry = window_geometry
+            if live_device_mode is not _UNSET:
+                self.config.live_device_mode = str(live_device_mode)
+            if live_compute_type is not _UNSET:
+                self.config.live_compute_type = str(live_compute_type)
+            if reduced_motion is not _UNSET:
+                self.config.reduced_motion = str(reduced_motion)
+            if transcript_font_px is not _UNSET:
+                self.config.transcript_font_px = int(transcript_font_px)
             self.config.confirmed_visual_backends = sorted(self._confirmed_visual_backend_downloads)
             self.config.last_open_dir = self.last_open_dir if os.path.isdir(self.last_open_dir) else self.config.last_open_dir
             self.config.last_save_dir = self.last_save_dir if self.last_save_dir and os.path.isdir(self.last_save_dir) else self.config.last_save_dir

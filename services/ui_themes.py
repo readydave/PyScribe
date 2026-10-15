@@ -15,7 +15,7 @@ from dataclasses import dataclass, fields
 AA = 4.5
 MAX_CUSTOM_THEMES = 20
 MAX_NAME_LENGTH = 40
-DEFAULT_THEME_ID = "iron-gall"
+DEFAULT_THEME_ID = "graphite-studio"
 SPEAKER_SLOTS = 8
 
 _HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
@@ -97,6 +97,15 @@ def _colors(*values: str) -> ThemeColors:
 
 
 PRESETS: tuple[Theme, ...] = (
+    Theme(
+        id="graphite-studio",
+        name="Graphite Studio",
+        builtin=True,
+        light=_colors("#F4F5F8", "#FFFFFF", "#1B1E27", "#586074", "#DADDE5", "#4750D8", "#C2412D", "#0F766E",
+                      "#4750D8", "#7A5BA8", "#A8741F"),
+        dark=_colors("#14161B", "#1D2027", "#E6E8EE", "#9AA1B2", "#2B2F3A", "#5B63F0", "#CC4535", "#2DD4BF",
+                     "#7E86F7", "#B39AE0", "#E0B15A"),
+    ),
     Theme(
         id="iron-gall",
         name="Iron-gall",
@@ -313,7 +322,7 @@ def resolve_theme(theme: Theme, mode: str) -> ResolvedTheme:
 
 
 def resolve(theme_id: str | None, custom_themes: Iterable[dict] | None, mode: str) -> ResolvedTheme:
-    """Resolve ``theme_id`` (preset or custom) for ``mode``; unknown ids fall back to Iron-gall."""
+    """Resolve ``theme_id`` (preset or custom) for ``mode``; unknown ids fall back to the default theme."""
     for raw in custom_themes or ():
         theme = theme_from_dict(raw)
         if theme is not None and theme.id == theme_id:

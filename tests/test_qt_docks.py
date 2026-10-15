@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QDockWidget
 
 from services.config_service import AppConfig
 from services.model_service import RuntimeInfo
+from services.ui_themes import DEFAULT_THEME_ID
 from ui_qt import theme
 from ui_qt.main_window import MainWindow
 from qt_close import close_and_drain
@@ -106,7 +107,7 @@ class DockLayoutTests(unittest.TestCase):
         win, saved = self._build_window()
         self.addCleanup(theme.apply_theme, self._app, "system")
         labels = [action.text() for action in win.colour_theme_group.actions()]
-        self.assertEqual(labels, ["Iron-gall", "Verdigris", "Ochre", "Graphite"])
+        self.assertEqual(labels, ["Graphite Studio", "Iron-gall", "Verdigris", "Ochre", "Graphite"])
         before = theme.active_palette().page
         ochre = next(a for a in win.colour_theme_group.actions() if a.text() == "Ochre")
         ochre.trigger()
@@ -141,7 +142,7 @@ class DockLayoutTests(unittest.TestCase):
         FakeDialog.result_code = QDialog.Rejected
         with patch("ui_qt.main_window.ThemeEditorDialog", FakeDialog):
             win.open_theme_editor()
-        self.assertEqual(theme.active_theme().id, "iron-gall")  # preview undone
+        self.assertEqual(theme.active_theme().id, DEFAULT_THEME_ID)  # preview undone
         self.assertFalse(saved)
 
         FakeDialog.result_code = QDialog.Accepted

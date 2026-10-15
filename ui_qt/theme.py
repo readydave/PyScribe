@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from services.ui_themes import DEFAULT_THEME_ID, Palette, ResolvedTheme, resolve
 from services.ui_tokens import FONT_DIR, FONT_FAMILY, PALETTES
+from ui_qt.components import tokens
 
 LOGGER = logging.getLogger(__name__)
 
@@ -545,5 +546,187 @@ def build_qss(mode: str, family: str = FONT_FAMILY, palette: Palette | None = No
             border: 1px solid {p.rule};
             font-family: "Consolas", "DejaVu Sans Mono", "Courier New", monospace;
             padding: 10px;
+        }}
+    """ + _component_qss(p)
+
+
+def _component_qss(p: Palette) -> str:
+    """Selectors for ``ui_qt.components`` (``[variant]``, ``[nav]``, ``[tab]``, ``[chip]``, ``[studioCard]``, ...).
+
+    Appended after the base rules so the studio components override the legacy button look.
+    Buttons keep a constant 2px border (transparent until focused) so focus never shifts the layout.
+    """
+    transcript_px = tokens.transcript_px()
+    type_px = tokens.TYPE_PX
+    return f"""
+        QPushButton[variant] {{
+            border: 2px solid transparent;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: {type_px["label"]}px;
+            font-weight: 600;
+        }}
+        QPushButton[variant="primary"] {{
+            background: {p.accent};
+            color: {p.accent_text};
+            border-color: {p.accent};
+        }}
+        QPushButton[variant="primary"]:hover {{
+            background: {p.accent_hover};
+            border-color: {p.accent_hover};
+        }}
+        QPushButton[variant="secondary"] {{
+            background: {p.card};
+            color: {p.ink};
+            border-color: {p.rule};
+        }}
+        QPushButton[variant="secondary"]:hover {{
+            background: {p.surface};
+            border-color: {p.muted};
+        }}
+        QPushButton[variant="ghost"], QPushButton[variant="icon"] {{
+            background: transparent;
+            color: {p.muted};
+            border-color: transparent;
+        }}
+        QPushButton[variant="ghost"]:hover, QPushButton[variant="icon"]:hover {{
+            background: {p.surface};
+            color: {p.ink};
+            border-color: transparent;
+        }}
+        QPushButton[variant="icon"] {{
+            padding: 0px;
+            font-size: {type_px["heading"]}px;
+        }}
+        QPushButton[variant]:focus {{
+            border: 2px solid {p.ink};
+            padding: 8px 16px;
+        }}
+        QPushButton[variant="icon"]:focus {{
+            padding: 0px;
+        }}
+        QPushButton[nav]:focus {{
+            border: 2px solid {p.ink};
+            padding: 9px 12px;
+        }}
+        QPushButton[tab]:focus {{
+            border: 2px solid {p.ink};
+            padding: 6px 10px;
+        }}
+        QPushButton[variant]:disabled {{
+            background: {p.disabled_bg};
+            color: {p.disabled_text};
+            border-color: {p.disabled_bg};
+        }}
+        #NavRail {{
+            background: {p.sidebar};
+            border-right: 1px solid {p.rule};
+        }}
+        QPushButton[nav] {{
+            background: transparent;
+            color: {p.muted};
+            border: 2px solid transparent;
+            border-left: 3px solid transparent;
+            border-radius: 8px;
+            padding: 9px 12px;
+            text-align: left;
+            font-size: {type_px["label"]}px;
+            font-weight: 600;
+        }}
+        QPushButton[nav]:hover {{
+            background: {p.surface};
+            color: {p.ink};
+        }}
+        QPushButton[nav]:checked {{
+            background: {p.card};
+            color: {p.ink};
+            border-left: 3px solid {p.accent};
+        }}
+        QPushButton[tab] {{
+            background: transparent;
+            color: {p.muted};
+            border: 2px solid transparent;
+            border-bottom: 2px solid {p.rule};
+            border-radius: 0px;
+            padding: 6px 10px;
+            font-size: {type_px["body"]}px;
+            font-weight: 600;
+        }}
+        QPushButton[tab]:hover {{
+            color: {p.ink};
+            background: transparent;
+        }}
+        QPushButton[tab]:checked {{
+            color: {p.ink};
+            border-bottom: 2px solid {p.accent};
+        }}
+        QFrame[studioCard="true"] {{
+            background: {p.card};
+            border: 1px solid {p.rule};
+            border-radius: 12px;
+            padding: 0px;
+        }}
+        QFrame[studioCard="true"][interactive="true"]:hover {{
+            border-color: {p.muted};
+        }}
+        QFrame[studioCard="true"][interactive="true"]:focus {{
+            border: 2px solid {p.ink};
+        }}
+        QFrame[studioCard="true"][selected="true"] {{
+            border: 2px solid {p.accent};
+        }}
+        #Drawer {{
+            background: {p.surface};
+            border-left: 1px solid {p.rule};
+            border-radius: 0px;
+        }}
+        QLabel[type="title"] {{
+            font-size: {type_px["title"]}px;
+            font-weight: 700;
+        }}
+        QLabel[type="heading"] {{
+            font-size: {type_px["heading"]}px;
+            font-weight: 600;
+        }}
+        QLabel[type="label"] {{
+            font-size: {type_px["label"]}px;
+            font-weight: 600;
+        }}
+        QLabel[type="body"] {{
+            font-size: {type_px["body"]}px;
+        }}
+        QLabel[type="caption"] {{
+            font-size: {type_px["caption"]}px;
+            color: {p.muted};
+        }}
+        QLabel[chip] {{
+            border-radius: 10px;
+            padding: 2px 10px;
+            font-size: {type_px["caption"]}px;
+            font-weight: 600;
+        }}
+        QLabel[chip="neutral"] {{
+            background: {p.surface};
+            color: {p.muted};
+            border: 1px solid {p.rule};
+        }}
+        QLabel[chip="accent"] {{
+            background: {p.accent};
+            color: {p.accent_text};
+        }}
+        QLabel[chip="success"] {{
+            background: {p.done};
+            color: {p.done_text};
+        }}
+        QLabel[chip="danger"] {{
+            background: {p.rubric};
+            color: {p.rubric_text};
+        }}
+        QPlainTextEdit#TranscriptEditor, QTextEdit#TranscriptEditor {{
+            font-size: {transcript_px}px;
+            padding: 16px 20px;
+            border: none;
+            border-radius: 0px;
+            background: {p.page};
         }}
     """

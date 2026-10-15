@@ -10,6 +10,7 @@ from services import config_service
 from services.ui_themes import (
     AA,
     CORE_FIELDS,
+    DEFAULT_THEME_ID,
     DEFAULT_SPEAKERS,
     MAX_CUSTOM_THEMES,
     PRESETS,
@@ -56,9 +57,9 @@ class PresetTests(unittest.TestCase):
                     for bg in (resolved.palette.input_bg, resolved.palette.card):
                         self.assertGreaterEqual(contrast(color, bg), AA, f"{theme.id} {mode} {color}")
 
-    def test_unknown_theme_falls_back_to_iron_gall(self) -> None:
-        self.assertEqual(resolve("nope", None, "light").id, "iron-gall")
-        self.assertEqual(resolve(None, None, "dark").id, "iron-gall")
+    def test_unknown_theme_falls_back_to_default(self) -> None:
+        self.assertEqual(resolve("nope", None, "light").id, DEFAULT_THEME_ID)
+        self.assertEqual(resolve(None, None, "dark").id, DEFAULT_THEME_ID)
 
     def test_presets_have_distinct_looks(self) -> None:
         pages = {resolve(t.id, None, "light").palette.page for t in PRESETS}
@@ -148,9 +149,9 @@ class ConfigTests(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             return config_service.load_config(path)
 
-    def test_old_config_loads_as_iron_gall(self) -> None:
+    def test_old_config_loads_as_default_theme(self) -> None:
         cfg = self._load({"theme_mode": "dark"})
-        self.assertEqual(cfg.theme_id, "iron-gall")
+        self.assertEqual(cfg.theme_id, DEFAULT_THEME_ID)
         self.assertEqual(cfg.custom_themes, [])
 
     def test_custom_theme_selected_by_id_survives_loading(self) -> None:
@@ -161,7 +162,7 @@ class ConfigTests(unittest.TestCase):
     def test_unknown_or_dropped_theme_id_falls_back(self) -> None:
         bad = custom("Mine", light={"ink": "red"})
         cfg = self._load({"theme_id": "mine", "custom_themes": [bad]})
-        self.assertEqual(cfg.theme_id, "iron-gall")
+        self.assertEqual(cfg.theme_id, DEFAULT_THEME_ID)
         self.assertEqual(cfg.custom_themes, [])
 
     def test_save_sanitizes_custom_themes(self) -> None:

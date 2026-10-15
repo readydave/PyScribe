@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from services.ui_themes import PRESETS, contrast
+from services.ui_themes import DEFAULT_THEME_ID, PRESETS, contrast
 from ui_qt import theme
 from ui_qt.theme_dialog import ThemeEditorDialog
 
@@ -76,7 +76,7 @@ class ThemeEditorDialogTests(unittest.TestCase):
         with patch("ui_qt.theme_dialog.QMessageBox.question", return_value=QMessageBox.Yes):
             dialog._delete()
         self.assertEqual(dialog.custom_themes, [])
-        self.assertEqual(dialog.selected_theme_id, "iron-gall")
+        self.assertEqual(dialog.selected_theme_id, DEFAULT_THEME_ID)
 
     def test_export_then_import_round_trips(self) -> None:
         dialog = self._dialog()

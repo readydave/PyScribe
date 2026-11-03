@@ -3365,6 +3365,11 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def start_transcription(self) -> None:
+        if self.studio_controller.is_rediarizing:
+            QMessageBox.information(
+                self, "Busy", "Speakers are being re-identified in the Studio. Wait for it to finish, then try again."
+            )
+            return
         if self._is_live_mode():
             self._start_live_transcription()
             return

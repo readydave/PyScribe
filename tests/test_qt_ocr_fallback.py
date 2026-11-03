@@ -73,6 +73,17 @@ class OcrFallbackControlTests(unittest.TestCase):
                 win.start_transcription()
         self.assertEqual(saved_at_launch, ["rapidocr"])
 
+    def test_new_transcription_is_blocked_while_speakers_are_reidentified(self) -> None:
+        win, _ = self._build_window(AppConfig())
+        win.media_path = "/tmp/talk.mp4"
+        with (
+            patch.object(type(win.studio_controller), "is_rediarizing", new=True),
+            patch.object(win, "_launch_transcription_worker", side_effect=AssertionError("must not launch")),
+            patch("ui_qt.main_window.QMessageBox.information") as info,
+        ):
+            win.start_transcription()
+        self.assertIn("re-identified", info.call_args.args[2])
+
 
 if __name__ == "__main__":
     unittest.main()

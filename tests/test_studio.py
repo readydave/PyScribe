@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 from PySide6.QtCore import QModelIndex, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 from services.config_service import AppConfig
 from services.project_store import Project, ProjectStore, sanitize_segments
@@ -409,6 +409,16 @@ class StudioViewTests(QtCase):
         self.assertFalse(studio.export_button.isEnabled())
         self.assertEqual(studio.inspector.tabs.current(), "visuals")
 
+    def test_reidentify_menu_action_emits_request(self) -> None:
+        studio = self._studio()
+        media = Path(self._tmp.name) / "tone.wav"
+        write_wav(media)
+        studio.load_project(make_project(self.store, media=str(media)))
+        fired: list[int] = []
+        studio.rediarize_requested.connect(lambda: fired.append(1))
+        studio.rediarize_action.trigger()
+        self.assertEqual(fired, [1])
+
     def test_search_label_and_shortcut(self) -> None:
         studio = self._studio()
         studio.load_project(make_project(self.store))
@@ -543,10 +553,15 @@ class StudioControllerTests(QtCase):
         with (
             patch("ui_qt.views.studio.controller.QInputDialog.getInt", return_value=(1, True)) as ask,
             patch("ui_qt.views.studio.controller.QMessageBox.question", return_value=QMessageBox.Yes),
+            patch("ui_qt.views.studio.controller.QMessageBox.information") as done,
             patch("services.transcription_service.rediarize_segments", return_value=relabelled) as run,
         ):
             self.controller.rediarize()
+            self.assertIsNotNone(self.controller._busy_dialog, "a busy dialog shows while it runs")
             self.assertTrue(pump(self._app, lambda: not self.controller.is_rediarizing))
+        self.assertIsNone(self.controller._busy_dialog)
+        self.assertIn("Found 1 speaker.", done.call_args.args[2])
+        self.assertIn("lines changed speaker", done.call_args.args[2])
         self.assertEqual(ask.call_args.args[3], 2, "default is the current speaker count")
         self.assertEqual(run.call_args.kwargs["num_speakers"], 1)
         saved = self.store.load(project.id)
@@ -555,6 +570,25 @@ class StudioControllerTests(QtCase):
         self.assertEqual(saved.speaker_names, {})
         self.assertIn("Found 1 speaker.", self.statuses)
         self.assertTrue(self.changed)
+
+    def test_reidentify_cancel_stops_and_reenables(self) -> None:
+        media = Path(self._tmp.name) / "tone.wav"
+        write_wav(media)
+        project = make_project(self.store, media=str(media))
+        self.controller.open_project(project.id)
+        with (
+            patch("ui_qt.views.studio.controller.QInputDialog.getInt", return_value=(3, True)),
+            patch("services.transcription_service.rediarize_segments", side_effect=lambda *a, **k: k["cancel_event"].wait(5) and []),
+        ):
+            self.controller.rediarize()
+            dialog = self.controller._busy_dialog
+            assert dialog is not None
+            dialog.findChild(QPushButton).click()
+            self.assertFalse(self.controller.is_rediarizing)
+            self.assertIsNone(self.controller._busy_dialog)
+            self.assertTrue(self.view.rediarize_action.isEnabled())
+            self.assertIn("Re-identify speakers cancelled.", self.statuses)
+        self.assertEqual(self.store.load(project.id).segments, SEGMENTS)  # type: ignore[union-attr]
 
     def test_reidentify_failure_leaves_project_unchanged(self) -> None:
         media = Path(self._tmp.name) / "tone.wav"
@@ -569,6 +603,7 @@ class StudioControllerTests(QtCase):
             self.controller.rediarize()
             self.assertTrue(pump(self._app, lambda: warn.called))
         self.assertFalse(self.controller.is_rediarizing)
+        self.assertIsNone(self.controller._busy_dialog)
         self.assertTrue(self.view.rediarize_action.isEnabled())
         self.assertEqual(self.store.load(project.id).segments, SEGMENTS)  # type: ignore[union-attr]
 

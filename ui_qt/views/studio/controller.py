@@ -7,8 +7,8 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox, QWidget
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox, QProgressDialog, QWidget
 
 from services import export_service
 from services.config_service import AppConfig
@@ -66,6 +66,7 @@ class StudioController(QObject):
         view.generate_requested.connect(self.generate)
         view.rediarize_requested.connect(self.rediarize)
         self._rediarize_handle: keyring_worker.TaskHandle | None = None
+        self._busy_dialog: QProgressDialog | None = None
 
     @property
     def is_rediarizing(self) -> bool:
@@ -236,20 +237,52 @@ class StudioController(QObject):
 
         self._view.set_rediarize_enabled(False)
         self.status.emit(f"Re-identifying speakers ({count})…")
+        self._show_busy_dialog(count)
         self._rediarize_handle = keyring_worker.start_task(
             work,
-            on_done=lambda result: self._on_rediarized(project_id, result),
+            on_done=lambda result: self._on_rediarized(project_id, segments, result),
             on_error=self._on_rediarize_failed,
             cancel_event_arg=True,
         )
 
+    def _show_busy_dialog(self, count: int) -> None:
+        dialog = QProgressDialog(
+            f"Re-identifying speakers ({count})…\nThis can take a few minutes for a long recording.",
+            "Cancel",
+            0,
+            0,
+            self._window,
+        )
+        dialog.setWindowTitle("Re-identify speakers")
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.canceled.connect(self._on_rediarize_canceled)
+        self._busy_dialog = dialog
+        dialog.show()
+
+    def _close_busy_dialog(self) -> None:
+        dialog, self._busy_dialog = self._busy_dialog, None
+        if dialog is not None:
+            dialog.canceled.disconnect()  # closing a QProgressDialog emits canceled
+            dialog.hide()
+            dialog.deleteLater()
+
+    def _on_rediarize_canceled(self) -> None:
+        self._cancel_rediarize()
+        self._view.set_rediarize_enabled(True)
+        self.status.emit("Re-identify speakers cancelled.")
+
     def _cancel_rediarize(self) -> None:
+        self._close_busy_dialog()
         if self._rediarize_handle is not None:
             self._rediarize_handle.cancel()
             self._rediarize_handle = None
 
-    def _on_rediarized(self, project_id: str, segments: object) -> None:
+    def _on_rediarized(self, project_id: str, before: list[dict], segments: object) -> None:
         self._rediarize_handle = None
+        self._close_busy_dialog()
         try:
             updated = self._store.set_speaker_segments(project_id, segments if isinstance(segments, list) else [])
         except (OSError, ValueError):
@@ -261,10 +294,18 @@ class StudioController(QObject):
             self._view.load_project(updated, self._store.load_peaks(project_id))
         self.project_changed.emit()
         count = updated.speaker_count if updated is not None else 0
-        self.status.emit(f"Found {count} speaker{'s' if count != 1 else ''}.")
+        found = f"Found {count} speaker{'s' if count != 1 else ''}."
+        self.status.emit(found)
+        after = updated.segments if updated is not None else []
+        detail = ""
+        if after and len(after) == len(before):
+            changed = sum(1 for old, new in zip(before, after) if old.get("speaker") != new.get("speaker"))
+            detail = f"\n{changed} of {len(after)} lines changed speaker."
+        QMessageBox.information(self._window, "Speakers re-identified", found + detail)
 
     def _on_rediarize_failed(self, message: str) -> None:
         self._rediarize_handle = None
+        self._close_busy_dialog()
         self._view.set_rediarize_enabled(True)
         self.status.emit("Re-identifying speakers failed.")
         QMessageBox.warning(self._window, "Re-identify speakers", f"Speaker detection failed.\n\n{message}")

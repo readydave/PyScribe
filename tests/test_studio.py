@@ -419,6 +419,18 @@ class StudioViewTests(QtCase):
         studio.rediarize_action.trigger()
         self.assertEqual(fired, [1])
 
+    def test_more_menu_actions_emit_their_requests(self) -> None:
+        studio = self._studio()
+        studio.load_project(make_project(self.store))
+        fired: list[str] = []
+        studio.rename_requested.connect(lambda: fired.append("rename"))
+        studio.copy_requested.connect(lambda: fired.append("copy"))
+        studio.reveal_requested.connect(lambda: fired.append("reveal"))
+        for action in studio.more_button.menu().actions():
+            if action.text() in {"Rename project…", "Copy transcript", "Show project folder"}:
+                action.trigger()
+        self.assertEqual(sorted(fired), ["copy", "rename", "reveal"])
+
     def test_search_label_and_shortcut(self) -> None:
         studio = self._studio()
         studio.load_project(make_project(self.store))

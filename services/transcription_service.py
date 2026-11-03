@@ -278,6 +278,122 @@ def _run_diarization_backend(
     )
 
 
+def _diarize_with_cpu_fallback(
+    *,
+    audio_path: str,
+    backend: str,
+    device: str,
+    max_speakers: int | None,
+    cancel_event: Event | None,
+    progress_cb: ProgressCallback | None,
+    status_cb: StatusCallback | None,
+    on_retry: Callable[[], None] | None = None,
+) -> list[dict]:
+    """Run diarization; if the CUDA runtime is unusable, retry once on CPU so speakers are kept."""
+    try:
+        return _run_diarization_backend(
+            audio_path=audio_path,
+            backend=backend,
+            device=device,
+            max_speakers=max_speakers,
+            cancel_event=cancel_event,
+            progress_cb=progress_cb,
+            status_cb=status_cb,
+        )
+    except Exception as diar_exc:
+        if not _should_retry_diarization_on_cpu(diar_exc, backend=backend, device=device):
+            raise
+        LOGGER.warning(
+            "Diarization on CUDA failed for backend=%s; retrying on CPU. reason=%s diagnostics=%s",
+            backend,
+            diar_exc,
+            _collect_cuda_diagnostics(),
+            exc_info=True,
+        )
+        if status_cb:
+            status_cb("Diarization CUDA runtime unavailable. Retrying diarization on CPU (slower, keeps speakers)...")
+        if on_retry:
+            on_retry()
+        try:
+            result = _run_diarization_backend(
+                audio_path=audio_path,
+                backend=backend,
+                device="cpu",
+                max_speakers=max_speakers,
+                cancel_event=cancel_event,
+                progress_cb=progress_cb,
+                status_cb=status_cb,
+            )
+            LOGGER.info("Diarization CPU retry succeeded backend=%s requested_device=%s", backend, device)
+            return result
+        except Exception:
+            LOGGER.error(
+                "Diarization CPU retry failed backend=%s requested_device=%s diagnostics=%s",
+                backend,
+                device,
+                _collect_cuda_diagnostics(),
+                exc_info=True,
+            )
+            raise
+
+
+def rediarize_segments(
+    media_path: str,
+    segments: list[dict],
+    *,
+    num_speakers: int,
+    backend: str = "accurate",
+    device: str = "cpu",
+    cancel_event: Event | None = None,
+    on_status: StatusCallback | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> list[dict]:
+    """Re-run speaker detection on saved audio with an exact speaker count and relabel ``segments``.
+
+    Transcript text and timings are kept; only each segment's ``speaker`` changes. Raises if the audio
+    cannot be prepared or diarization yields no speaker turns, so callers never lose existing labels.
+    """
+    if num_speakers < 1:
+        raise ValueError("Speaker count must be at least 1.")
+    ffmpeg_cmd = get_ffmpeg_cmd(tool="ffmpeg")
+    if not ffmpeg_cmd:
+        raise FileNotFoundError("ffmpeg not found.")
+    backend = _LEGACY_DIAR_BACKENDS.get(backend, backend)
+
+    def _progress(value: float) -> None:
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("Cancelled during diarization.")
+        if on_progress:
+            on_progress(max(0.0, min(100.0, float(value))))
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        if on_status:
+            on_status("Preparing audio...")
+        wav_path = convert_to_16k_mono(media_path, temp_dir, ffmpeg_cmd)
+        if on_status:
+            on_status(f"Running diarization ({backend}) on {device.upper()} for {num_speakers} speakers...")
+        diar_segments = _diarize_with_cpu_fallback(
+            audio_path=wav_path,
+            backend=backend,
+            device=device,
+            max_speakers=num_speakers,
+            cancel_event=cancel_event,
+            progress_cb=_progress,
+            status_cb=on_status,
+        )
+    if not diar_segments:
+        raise RuntimeError("Diarization found no speakers in this audio.")
+    if on_status:
+        on_status("Assigning speakers to transcript...")
+
+    from services.speaker_assignment import assign_speakers
+
+    relabelled = assign_speakers([dict(seg) for seg in segments], diar_segments)
+    if on_progress:
+        on_progress(100.0)
+    return relabelled
+
+
 def _collect_cuda_diagnostics() -> str:
     """Collect lightweight CUDA runtime diagnostics for fallback logging."""
     parts: list[str] = [f"env.LD_LIBRARY_PATH={_short_env('LD_LIBRARY_PATH', max_len=280)}"]
@@ -521,56 +637,16 @@ def transcribe_prepared_audio(
                     scaled = 35.0 + (max(0.0, min(100.0, float(value))) * 0.55)
                     on_diar_progress(min(90.0, scaled))
 
-            try:
-                diar_segments = _run_diarization_backend(
-                    audio_path=wav_path,
-                    backend=diar_backend,
-                    device=device,
-                    max_speakers=max_speakers,
-                    cancel_event=cancel_event,
-                    progress_cb=_diar_progress,
-                    status_cb=on_status,
-                )
-            except Exception as diar_exc:
-                if not _should_retry_diarization_on_cpu(diar_exc, backend=diar_backend, device=device):
-                    raise
-                LOGGER.warning(
-                    "Diarization on CUDA failed for backend=%s; retrying on CPU. reason=%s diagnostics=%s",
-                    diar_backend,
-                    diar_exc,
-                    _collect_cuda_diagnostics(),
-                    exc_info=True,
-                )
-                if on_status:
-                    on_status(
-                        "Diarization CUDA runtime unavailable. Retrying diarization on CPU (slower, keeps speakers)..."
-                    )
-                if on_diar_progress:
-                    on_diar_progress(35)
-                try:
-                    diar_segments = _run_diarization_backend(
-                        audio_path=wav_path,
-                        backend=diar_backend,
-                        device="cpu",
-                        max_speakers=max_speakers,
-                        cancel_event=cancel_event,
-                        progress_cb=_diar_progress,
-                        status_cb=on_status,
-                    )
-                    LOGGER.info(
-                        "Diarization CPU retry succeeded backend=%s requested_device=%s",
-                        diar_backend,
-                        device,
-                    )
-                except Exception:
-                    LOGGER.error(
-                        "Diarization CPU retry failed backend=%s requested_device=%s diagnostics=%s",
-                        diar_backend,
-                        device,
-                        _collect_cuda_diagnostics(),
-                        exc_info=True,
-                    )
-                    raise
+            diar_segments = _diarize_with_cpu_fallback(
+                audio_path=wav_path,
+                backend=diar_backend,
+                device=device,
+                max_speakers=max_speakers,
+                cancel_event=cancel_event,
+                progress_cb=_diar_progress,
+                status_cb=on_status,
+                on_retry=lambda: on_diar_progress(35) if on_diar_progress else None,
+            )
 
             diarization_seconds = time.perf_counter() - diarization_started
             if not diar_segments:

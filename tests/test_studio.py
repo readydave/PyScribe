@@ -526,6 +526,52 @@ class StudioControllerTests(QtCase):
     def test_open_missing_project_is_refused(self) -> None:
         self.assertFalse(self.controller.open_project("20260101-000000-abcdef12"))
 
+    def test_reidentify_action_needs_saved_audio(self) -> None:
+        self.controller.open_project(make_project(self.store, media="/nonexistent/a.wav").id)
+        self.assertFalse(self.view.rediarize_action.isEnabled())
+        media = Path(self._tmp.name) / "tone.wav"
+        write_wav(media)
+        self.controller.open_project(make_project(self.store, media=str(media)).id)
+        self.assertTrue(self.view.rediarize_action.isEnabled())
+
+    def test_reidentify_relabels_in_place_and_resets_names(self) -> None:
+        media = Path(self._tmp.name) / "tone.wav"
+        write_wav(media)
+        project = make_project(self.store, media=str(media), speaker_names={"S1": "Sarah"})
+        self.controller.open_project(project.id)
+        relabelled = [dict(seg, speaker="S1") for seg in SEGMENTS]
+        with (
+            patch("ui_qt.views.studio.controller.QInputDialog.getInt", return_value=(1, True)) as ask,
+            patch("ui_qt.views.studio.controller.QMessageBox.question", return_value=QMessageBox.Yes),
+            patch("services.transcription_service.rediarize_segments", return_value=relabelled) as run,
+        ):
+            self.controller.rediarize()
+            self.assertTrue(pump(self._app, lambda: not self.controller.is_rediarizing))
+        self.assertEqual(ask.call_args.args[3], 2, "default is the current speaker count")
+        self.assertEqual(run.call_args.kwargs["num_speakers"], 1)
+        saved = self.store.load(project.id)
+        assert saved is not None
+        self.assertEqual(saved.speaker_count, 1)
+        self.assertEqual(saved.speaker_names, {})
+        self.assertIn("Found 1 speaker.", self.statuses)
+        self.assertTrue(self.changed)
+
+    def test_reidentify_failure_leaves_project_unchanged(self) -> None:
+        media = Path(self._tmp.name) / "tone.wav"
+        write_wav(media)
+        project = make_project(self.store, media=str(media))
+        self.controller.open_project(project.id)
+        with (
+            patch("ui_qt.views.studio.controller.QInputDialog.getInt", return_value=(3, True)),
+            patch("ui_qt.views.studio.controller.QMessageBox.warning") as warn,
+            patch("services.transcription_service.rediarize_segments", side_effect=RuntimeError("no speakers")),
+        ):
+            self.controller.rediarize()
+            self.assertTrue(pump(self._app, lambda: warn.called))
+        self.assertFalse(self.controller.is_rediarizing)
+        self.assertTrue(self.view.rediarize_action.isEnabled())
+        self.assertEqual(self.store.load(project.id).segments, SEGMENTS)  # type: ignore[union-attr]
+
     def test_open_computes_and_caches_the_waveform_once(self) -> None:
         media = Path(self._tmp.name) / "tone.wav"
         write_wav(media)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -50,6 +51,7 @@ class StudioView(QWidget):
     copy_requested = Signal()
     generate_requested = Signal(str)
     speaker_renamed = Signal(str, str)
+    rediarize_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -98,6 +100,8 @@ class StudioView(QWidget):
         more = QMenu(self.more_button)
         more.addAction("Rename project…", self.rename_requested)
         more.addAction("Copy transcript", self.copy_requested)
+        self.rediarize_action = more.addAction("Re-identify speakers…", self.rediarize_requested)
+        self.rediarize_action.setEnabled(False)
         more.addAction("Show project folder", self.reveal_requested)
         self.more_button.setMenu(more)
         header.addWidget(self.more_button)
@@ -153,6 +157,12 @@ class StudioView(QWidget):
         self.transport.load(project.media_path, int(project.duration_s * 1000))
         self.transport.set_peaks(peaks or [])
         self.export_button.setEnabled(bool(project.segments))
+        has_audio = bool(project.media_path) and os.path.isfile(project.media_path)
+        self.rediarize_action.setEnabled(has_audio and bool(project.segments))
+        self.rediarize_action.setToolTip("" if has_audio else "No saved audio for this project")
+
+    def set_rediarize_enabled(self, enabled: bool) -> None:
+        self.rediarize_action.setEnabled(enabled)
 
     def clear(self) -> None:
         self.project_id = None

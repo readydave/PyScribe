@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog.
 
 ## [Unreleased]
 
+### Added
+
+- Transcript Studio: **⋮ > Re-identify speakers…** re-runs speaker detection on a project's saved audio with a speaker count you choose, then relabels the existing transcript in place (text and edits are kept; custom speaker names are reset). Works for any project whose audio file still exists; live sessions need "Keep recorded audio after completion" on. Speaker turns can only change at existing segment boundaries (`rediarize_segments` in `services/transcription_service.py`, `ProjectStore.set_speaker_segments`).
+
 ### Changed
 
 - Qt UI redesign (all six phases of the redesign specification; see `docs/ui_redesign_2026-10.md`): a navigation rail (Projects, Transcribe, Live, Templates, Settings) replaces the sidebar list, and the app opens on **Projects Home** (New transcription card with drag and drop, Live capture and Import folder cards, recent-project cards with duration, speakers, waveform cue and status, an empty state, and a local-processing footer). The four movable dock panels are removed; old `dock_layout` and `dock_locked` settings are kept in the config file but ignored.

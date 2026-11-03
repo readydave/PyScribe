@@ -359,6 +359,12 @@ class ProjectStore:
         text = "\n".join(_format_line(s) for s in clean)
         return self.update(project_id, segments=clean, transcript_text=text)
 
+    def set_speaker_segments(self, project_id: str, segments: list[dict[str, Any]]) -> Project | None:
+        """Replace segments after re-identifying speakers; old speaker names no longer apply, so they reset."""
+        clean = sanitize_segments(segments)
+        text = "\n".join(_format_line(s) for s in clean)
+        return self.update(project_id, segments=clean, transcript_text=text, speaker_names={})
+
     def rename(self, project_id: str, title: str) -> Project | None:
         title = _clean_text(title, MAX_TITLE)
         if not title:

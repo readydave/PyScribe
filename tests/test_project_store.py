@@ -175,5 +175,27 @@ class ProjectsRootTests(unittest.TestCase):
             self.assertEqual(project_store.resolve_projects_root(None), project_store.DEFAULT_PROJECTS_ROOT)
 
 
+class SetSpeakerSegmentsTests(unittest.TestCase):
+    def test_replaces_segments_resets_names_and_rebuilds_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProjectStore(Path(tmp) / "projects")
+            project = store.create(title="Call")
+            store.update(project.id, segments=sanitize_segments(SEGMENTS), speaker_names={"S1": "Sarah"})
+            relabelled = [
+                {"start": 0.0, "end": 4.2, "speaker": "S1", "text": "Hello everyone."},
+                {"start": 4.2, "end": 9.0, "speaker": "S3", "text": "Thanks for joining."},
+            ]
+            updated = store.set_speaker_segments(project.id, relabelled)
+            assert updated is not None
+            self.assertEqual(updated.speaker_names, {})
+            self.assertEqual(updated.speaker_count, 2)
+            self.assertEqual(updated.transcript_text, "[S1] Hello everyone.\n[S3] Thanks for joining.")
+
+    def test_unknown_project_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProjectStore(Path(tmp) / "projects")
+            self.assertIsNone(store.set_speaker_segments("20260101-000000-abcdef12", []))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -64,6 +64,12 @@ class StudioController(QObject):
         view.reveal_requested.connect(self.reveal)
         view.copy_requested.connect(self.copy_transcript)
         view.generate_requested.connect(self.generate)
+        view.rediarize_requested.connect(self.rediarize)
+        self._rediarize_handle: keyring_worker.TaskHandle | None = None
+
+    @property
+    def is_rediarizing(self) -> bool:
+        return self._rediarize_handle is not None
 
     def set_store(self, store: ProjectStore) -> None:
         """Use a different projects folder (the caller closes the open project first)."""
@@ -93,6 +99,7 @@ class StudioController(QObject):
     def close_project(self) -> None:
         self.flush()
         self._cancel_peaks()
+        self._cancel_rediarize()
         self._view.clear()
 
     def forget(self, project_id: str) -> None:
@@ -100,6 +107,7 @@ class StudioController(QObject):
         if self.project_id == project_id:
             self._save_timer.stop()
             self._cancel_peaks()
+            self._cancel_rediarize()
             self._view.clear()
 
     # --- waveform --------------------------------------------------------------------------------
@@ -178,6 +186,88 @@ class StudioController(QObject):
             return
         self._view.set_title(title.strip())
         self.project_changed.emit()
+
+    # --- re-identify speakers --------------------------------------------------------------------
+
+    def rediarize(self) -> None:
+        """Re-run speaker detection on the saved audio with a user-chosen speaker count, keeping the text."""
+        if self._rediarize_handle is not None:
+            return
+        self.flush()
+        project = self._project()
+        if project is None or not project.segments:
+            return
+        if not project.media_path or not os.path.isfile(project.media_path):
+            QMessageBox.information(self._window, "No audio", "This project has no saved audio to re-process.")
+            return
+        if self._is_busy():
+            QMessageBox.information(self._window, "Busy", "A job is running. Try again when it has finished.")
+            return
+        count, accepted = QInputDialog.getInt(
+            self._window, "Re-identify speakers", "Number of speakers:", project.speaker_count or 2, 1, 20
+        )
+        if not accepted:
+            return
+        if project.speaker_names:
+            answer = QMessageBox.question(
+                self._window,
+                "Re-identify speakers",
+                "Speaker names you set for this project will be reset. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        backend = (self._get_config().diar_backend or "accurate").strip().lower()
+        project_id, media, segments = project.id, project.media_path, list(project.segments)
+
+        def work(cancel_event: object) -> list[dict]:
+            from services.model_service import detect_runtime
+            from services.transcription_service import rediarize_segments
+
+            return rediarize_segments(
+                media,
+                segments,
+                num_speakers=count,
+                backend=backend,
+                device=detect_runtime().device,
+                cancel_event=cancel_event,  # type: ignore[arg-type]
+            )
+
+        self._view.set_rediarize_enabled(False)
+        self.status.emit(f"Re-identifying speakers ({count})…")
+        self._rediarize_handle = keyring_worker.start_task(
+            work,
+            on_done=lambda result: self._on_rediarized(project_id, result),
+            on_error=self._on_rediarize_failed,
+            cancel_event_arg=True,
+        )
+
+    def _cancel_rediarize(self) -> None:
+        if self._rediarize_handle is not None:
+            self._rediarize_handle.cancel()
+            self._rediarize_handle = None
+
+    def _on_rediarized(self, project_id: str, segments: object) -> None:
+        self._rediarize_handle = None
+        try:
+            updated = self._store.set_speaker_segments(project_id, segments if isinstance(segments, list) else [])
+        except (OSError, ValueError):
+            LOGGER.warning("Could not save the re-identified speakers.", exc_info=True)
+            self.status.emit("Could not save the new speaker labels.")
+            self._view.set_rediarize_enabled(True)
+            return
+        if updated is not None and self.project_id == project_id:
+            self._view.load_project(updated, self._store.load_peaks(project_id))
+        self.project_changed.emit()
+        count = updated.speaker_count if updated is not None else 0
+        self.status.emit(f"Found {count} speaker{'s' if count != 1 else ''}.")
+
+    def _on_rediarize_failed(self, message: str) -> None:
+        self._rediarize_handle = None
+        self._view.set_rediarize_enabled(True)
+        self.status.emit("Re-identifying speakers failed.")
+        QMessageBox.warning(self._window, "Re-identify speakers", f"Speaker detection failed.\n\n{message}")
 
     # --- export / copy / reveal ------------------------------------------------------------------
 
